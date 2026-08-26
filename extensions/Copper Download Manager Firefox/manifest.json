@@ -1,0 +1,34 @@
+{
+  "manifest_version": 2,
+  "name": "Copper Download Manager",
+  "version": "1.0.2",
+  "description": "Intercept downloads and send them to Copper Download Manager",
+  "permissions": ["downloads", "storage","notifications", "http://localhost:24680/*"],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "128": "icons/icon128.png"
+    }
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "copper-download-manager@copper",
+      "strict_min_version": "59.0",
+      "data_collection_permissions": {
+            "required": ["none"],
+            "optional": ["browsingActivity"]
+    }
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "64": "icons/icon64.png",
+    "128": "icons/icon128.png"
+  }
+}

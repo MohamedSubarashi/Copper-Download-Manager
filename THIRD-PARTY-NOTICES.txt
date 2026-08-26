@@ -1,0 +1,93 @@
+COPPER DOWNLOAD MANAGER v0.1.5
+Third-Party Software Notices
+
+This product includes software developed by third parties.
+
+--------------------------------------------------
+Qt 6.9.3
+--------------------------------------------------
+
+License: GNU Lesser General Public License v3.0 (LGPLv3)
+Copyright (C) The Qt Company Ltd.
+
+Qt is used under the LGPLv3 open-source license. Copper Download Manager
+dynamically links to Qt libraries. The Qt source code is available from:
+https://www.qt.io/download-open-source
+
+Qt Modules used:
+  - Qt6Core
+  - Qt6Gui
+  - Qt6Widgets
+  - Qt6Network
+  - Qt6Sql
+  - Qt6Svg
+
+--------------------------------------------------
+aria2 1.37.0
+--------------------------------------------------
+
+License: GNU General Public License v2.0 (GPLv2)
+Copyright (C) Tatsuhiro Tsujikawa
+
+aria2 is a download utility licensed under GPLv2. Copper Download Manager
+downloads aria2 separately when requested by the user and launches it as
+a separate process. Copper does not link to aria2 libraries.
+
+Source code: https://github.com/aria2/aria2
+License text: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+--------------------------------------------------
+FFmpeg (BtbN Builds)
+--------------------------------------------------
+
+License: GNU General Public License v2.0 (GPLv2) or later
+         (depending on build configuration)
+Copyright (C) FFmpeg developers
+
+FFmpeg is a free and open source project licensed under LGPL v2.1 or later,
+or GPL v2 or later depending on the build configuration. The BtbN builds
+used by Copper are GPL-licensed builds. Copper Download Manager downloads
+FFmpeg separately when requested by the user and launches it as a separate
+process. Copper does not link to FFmpeg libraries.
+
+Source code: https://github.com/FFmpeg/FFmpeg
+Build source: https://github.com/BtbN/FFmpeg-Builds
+License info: https://www.ffmpeg.org/legal.html
+
+--------------------------------------------------
+yt-dlp
+--------------------------------------------------
+
+License: Unlicense
+Copyright (C) yt-dlp contributors
+
+yt-dlp is released under the Unlicense, a public domain equivalent license.
+Copper Download Manager downloads yt-dlp separately when requested by the
+user and launches it as a separate process.
+
+Source code: https://github.com/yt-dlp/yt-dlp
+License: https://github.com/yt-dlp/yt-dlp/blob/master/LICENSE
+
+--------------------------------------------------
+SQLite
+--------------------------------------------------
+
+License: Public Domain
+Copyright (C) 2000-2025 Dwayne Richard Hipp
+
+SQLite is in the public domain. No license is required. SQLite is used
+through the Qt SQL plugin (QSQLite driver) for Copper's download database.
+
+Source code: https://www.sqlite.org/download.html
+
+--------------------------------------------------
+CMake
+--------------------------------------------------
+
+License: BSD 3-Clause License
+Copyright (C) 2000-2024 Kitware, Inc., Contributors
+
+CMake is a build system distributed under the BSD 3-Clause license. It is
+used only during compilation and is not distributed with the final application.
+
+Source code: https://gitlab.kitware.com/cmake/cmake

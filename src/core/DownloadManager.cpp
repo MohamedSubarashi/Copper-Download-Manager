@@ -1,0 +1,788 @@
+#include "core/DownloadManager.h"
+#include "core/ChunkedDownloader.h"
+#include "utils/Logger.h"
+#include "utils/TrackNumber.h"
+#include "utils/Aria2cManager.h"
+#include "utils/YtDlpManager.h"
+#include "utils/UrlDetector.h"
+#include "db/DatabaseManager.h"
+#include <QFileInfo>
+#include <QUrl>
+#include <QStandardPaths>
+#include <QDateTime>
+#include <QDir>
+#include <QProcess>
+#include <QRegularExpression>
+
+DownloadManager::DownloadManager() : nextId(1), maxConcurrent(5), speedLimit(0), speedLimitAccumulator(0) {
+    speedLimitTimer = new QTimer(this);
+    connect(speedLimitTimer, &QTimer::timeout, this, &DownloadManager::processSpeedLimit);
+    speedLimitTimer->start(100);
+
+    int maxId = DatabaseManager::instance().getMaxDownloadId();
+    if (maxId >= nextId) {
+        nextId = maxId + 1;
+    }
+    DatabaseManager::instance().resetStaleDownloads();
+
+    connect(&YtDlpManager::instance(), &YtDlpManager::downloadProgress, this, &DownloadManager::onYtDlpProgress);
+    connect(&YtDlpManager::instance(), &YtDlpManager::downloadFinished, this, &DownloadManager::onYtDlpFinished);
+    connect(&YtDlpManager::instance(), &YtDlpManager::downloadFailed, this, &DownloadManager::onYtDlpFailed);
+}
+
+DownloadManager::~DownloadManager() {}
+
+DownloadManager& DownloadManager::instance() {
+    static DownloadManager instance;
+    return instance;
+}
+
+int DownloadManager::addDownload(const QString& url, const QString& path, const QString& type, int chunks) {
+    Logger::instance().info("Adding download: " + url + " Type: " + type);
+
+    DownloadItem item;
+    item.id = nextId++;
+    item.url = url;
+    item.type = type;
+    item.totalSize = 0;
+    item.downloadedSize = 0;
+    item.status = "Queued";
+    item.isFolder = false;
+    item.progress = 0;
+    item.chunks = chunks;
+    item.addedAt = QDateTime::currentDateTime();
+    item.speed = 0;
+
+    QString fileName;
+    if (type == "Torrent") {
+        fileName = url.startsWith("magnet:") ? "Magnet Download" : QFileInfo(url).fileName();
+    } else {
+        QUrl qurl(url);
+        fileName = qurl.fileName();
+        if (fileName.isEmpty()) {
+            QStringList pathParts = qurl.path().split('/', Qt::SkipEmptyParts);
+            if (!pathParts.isEmpty()) fileName = pathParts.last();
+        }
+    }
+    if (fileName.isEmpty()) fileName = "download_" + QString::number(item.id);
+    item.fileName = fileName;
+
+    if (type == "Torrent") {
+        item.filePath = path.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) : path;
+    } else {
+        if (path.isEmpty()) {
+            item.filePath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) + "/" + fileName;
+        } else if (QDir(path).exists() || path.endsWith('/') || path.endsWith('\\')) {
+            item.filePath = path + "/" + fileName;
+        } else {
+            item.filePath = path;
+        }
+    }
+
+    QDir().mkpath(QFileInfo(item.filePath).absolutePath());
+
+    int id = item.id;
+    downloads[id] = item;
+
+    DatabaseManager::instance().addDownload(item);
+    emit downloadAdded(id, item.filePath, type, false);
+
+    int activeCount = 0;
+    for (const DownloadItem& d : downloads) {
+        if (d.status == "Downloading") activeCount++;
+    }
+
+    if (activeCount < maxConcurrent) {
+        if (type == "HTTP" || type == "HTTPS" || type == "FTP") {
+            ChunkedDownloader* downloader = new ChunkedDownloader(this);
+
+            connect(downloader, &ChunkedDownloader::downloadProgress, this, &DownloadManager::onChunkProgress);
+            connect(downloader, &ChunkedDownloader::downloadFinished, this, &DownloadManager::onChunkFinished);
+            connect(downloader, &ChunkedDownloader::downloadFailed, this, &DownloadManager::onChunkFailed);
+            connect(downloader, &ChunkedDownloader::speedUpdated, this, [this, id](qint64 spd) {
+                onChunkSpeed(id, spd);
+            });
+            connect(downloader, &ChunkedDownloader::filePathChanged, this, [this](int id, const QString& newPath) {
+                if (downloads.contains(id)) {
+                    downloads[id].filePath = newPath;
+                    downloads[id].fileName = QFileInfo(newPath).fileName();
+                    Logger::instance().info("Download path updated: id=" + QString::number(id) + " -> " + newPath);
+                }
+            });
+
+            activeChunkedDownloaders[id] = downloader;
+            downloads[id].status = "Downloading";
+            downloader->startDownload(url, item.filePath, chunks, id);
+            emit statusChanged(id, "Downloading");
+        } else if (type == "YtDlp") {
+            downloads[id].status = "Downloading";
+            YtDlpManager::instance().startDownload(url, item.filePath, id);
+            emit statusChanged(id, "Downloading");
+        } else if (type == "Torrent") {
+            downloads[id].status = "Downloading";
+            int ariaId = Aria2cManager::instance().addTorrent(url, item.filePath);
+
+            if (ariaId > 0) {
+                connect(&Aria2cManager::instance(), &Aria2cManager::downloadProgress, this, [this, id, ariaId](int aId, qint64 downloaded, qint64 total, qint64 spd) {
+                    if (aId != ariaId || !downloads.contains(id)) return;
+                    downloads[id].downloadedSize = downloaded;
+                    downloads[id].totalSize = total;
+                    downloads[id].progress = total > 0 ? (double)downloaded / total * 100.0 : 0;
+                    downloads[id].speed = spd;
+                    emit downloadProgress(id, downloaded, total);
+                });
+
+                connect(&Aria2cManager::instance(), &Aria2cManager::downloadFinished, this, [this, id, ariaId](int aId) {
+                    if (aId != ariaId || !downloads.contains(id)) return;
+                    downloads[id].status = "Completed";
+                    downloads[id].progress = 100.0;
+                    downloads[id].completedAt = QDateTime::currentDateTime();
+                    DatabaseManager::instance().updateDownload(downloads[id]);
+                    emit downloadFinished(id);
+                    emit statusChanged(id, "Completed");
+                    startNextQueued();
+                });
+
+                connect(&Aria2cManager::instance(), &Aria2cManager::downloadFailed, this, [this, id, ariaId](int aId, const QString& error) {
+                    if (aId != ariaId || !downloads.contains(id)) return;
+                    downloads[id].status = "Failed";
+                    downloads[id].error = error;
+                    DatabaseManager::instance().updateDownload(downloads[id]);
+                    emit downloadFailed(id, error);
+                    emit statusChanged(id, "Failed");
+                    startNextQueued();
+                });
+            } else {
+                downloads[id].status = "Failed";
+                downloads[id].error = "aria2c not installed";
+                emit downloadFailed(id, "aria2c not installed");
+                emit statusChanged(id, "Failed");
+            }
+        }
+    } else {
+        Logger::instance().info("Download queued (max concurrent reached): " + QString::number(id));
+    }
+
+    return id;
+}
+
+void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries, const QString& path, const QString& type, bool useTrackNumbers, const QString& audioFormat, const QString& torrentSourceUrl, const QString& folderName) {
+    Logger::instance().info("Adding playlist download: " + QString::number(entries.size()) + " files, type: " + type + ", tracks: " + (useTrackNumbers ? "yes" : "no") + ", format: " + audioFormat);
+
+    if (type == "Torrent" && !torrentSourceUrl.isEmpty()) {
+        QVector<int> selectedIndices;
+        for (const PlaylistEntry& entry : entries) {
+            if (entry.selected) {
+                selectedIndices.append(entry.index);
+            }
+        }
+
+        QString parentName = folderName.isEmpty() ? QFileInfo(path).fileName() : folderName;
+
+        DownloadItem parentItem;
+        parentItem.id = nextId++;
+        parentItem.url = torrentSourceUrl;
+        parentItem.filePath = path;
+        parentItem.fileName = parentName;
+        parentItem.type = "Torrent";
+        parentItem.status = "Downloading";
+        parentItem.isFolder = true;
+        parentItem.progress = 0;
+        parentItem.addedAt = QDateTime::currentDateTime();
+        parentItem.torrentSourceUrl = torrentSourceUrl;
+        parentItem.selectedIndices = selectedIndices;
+        downloads[parentItem.id] = parentItem;
+
+        DatabaseManager::instance().addDownload(parentItem);
+        emit downloadAdded(parentItem.id, path, "Torrent", true);
+
+        for (const PlaylistEntry& entry : entries) {
+            if (!entry.selected) continue;
+            QString childPath = path + "/" + entry.title;
+            addChildDownload(parentItem.id, torrentSourceUrl, childPath, "Torrent", audioFormat);
+            if (downloads.contains(parentItem.id) && !downloads[parentItem.id].childIds.isEmpty()) {
+                int lastChildId = downloads[parentItem.id].childIds.last();
+                if (downloads.contains(lastChildId)) {
+                    downloads[lastChildId].status = "Downloading";
+                    emit statusChanged(lastChildId, "Downloading");
+                }
+            }
+        }
+
+        int ariaId = Aria2cManager::instance().addTorrentWithSelection(torrentSourceUrl, path, selectedIndices);
+        if (ariaId > 0) {
+            downloads[parentItem.id].aria2cId = ariaId;
+            connect(&Aria2cManager::instance(), &Aria2cManager::downloadProgress, this, [this, id = parentItem.id, ariaId](int aId, qint64 downloaded, qint64 total, qint64 spd) {
+                if (aId != ariaId || !downloads.contains(id)) return;
+                downloads[id].downloadedSize = downloaded;
+                downloads[id].totalSize = total;
+                downloads[id].progress = total > 0 ? (double)downloaded / total * 100.0 : 0;
+                downloads[id].speed = spd;
+                downloads[id].connectedPeers = Aria2cManager::instance().getConnectedPeers(ariaId);
+                downloads[id].seeds = Aria2cManager::instance().getSeeds(ariaId);
+                for (int cid : downloads[id].childIds) {
+                    if (downloads.contains(cid)) {
+                        downloads[cid].downloadedSize = downloaded;
+                        downloads[cid].totalSize = total;
+                        downloads[cid].progress = downloads[id].progress;
+                        downloads[cid].speed = spd;
+                    }
+                }
+                emit downloadProgress(id, downloaded, total);
+                emit downloadSpeed(id, spd);
+            });
+            connect(&Aria2cManager::instance(), &Aria2cManager::downloadFinished, this, [this, id = parentItem.id, ariaId](int aId) {
+                if (aId != ariaId || !downloads.contains(id)) return;
+                downloads[id].status = "Completed";
+                downloads[id].progress = 100.0;
+                downloads[id].completedAt = QDateTime::currentDateTime();
+                for (int cid : downloads[id].childIds) {
+                    if (downloads.contains(cid)) {
+                        downloads[cid].status = "Completed";
+                        downloads[cid].progress = 100.0;
+                        downloads[cid].completedAt = QDateTime::currentDateTime();
+                    }
+                }
+                DatabaseManager::instance().updateDownload(downloads[id]);
+                emit downloadFinished(id);
+                emit statusChanged(id, "Completed");
+                startNextQueued();
+            });
+            connect(&Aria2cManager::instance(), &Aria2cManager::downloadFailed, this, [this, id = parentItem.id, ariaId](int aId, const QString& error) {
+                if (aId != ariaId || !downloads.contains(id)) return;
+                downloads[id].status = "Failed";
+                downloads[id].error = error;
+                for (int cid : downloads[id].childIds) {
+                    if (downloads.contains(cid)) {
+                        downloads[cid].status = "Failed";
+                        downloads[cid].error = error;
+                    }
+                }
+                DatabaseManager::instance().updateDownload(downloads[id]);
+                emit downloadFailed(id, error);
+                emit statusChanged(id, "Failed");
+                startNextQueued();
+            });
+            Logger::instance().info("Torrent download started, aria2c id=" + QString::number(ariaId) + ", parent=" + parentName + ", files=" + QString::number(selectedIndices.size()));
+        } else {
+            downloads[parentItem.id].status = "Failed";
+            downloads[parentItem.id].error = "Failed to start aria2c";
+            DatabaseManager::instance().updateDownload(downloads[parentItem.id]);
+            emit downloadFailed(parentItem.id, "Failed to start aria2c");
+            emit statusChanged(parentItem.id, "Failed");
+        }
+        return;
+    }
+
+    DownloadItem playlistItem;
+    playlistItem.id = nextId++;
+    playlistItem.url = entries.isEmpty() ? "" : entries[0].url;
+
+    QString playlistFolderPath;
+    if (type == "YtDlp" && !folderName.isEmpty()) {
+        playlistFolderPath = path + "/" + folderName;
+    } else if (type == "YtDlp" && entries.size() > 1) {
+        QString cleanName = entries[0].title;
+        QRegularExpression re("[\\\\/:*?\"<>|]");
+        cleanName.replace(re, "_");
+        if (cleanName.length() > 60) cleanName = cleanName.left(57) + "...";
+        playlistFolderPath = path + "/" + cleanName;
+    } else {
+        playlistFolderPath = path;
+    }
+    QDir().mkpath(playlistFolderPath);
+
+    playlistItem.filePath = playlistFolderPath;
+    playlistItem.fileName = folderName.isEmpty() ? QFileInfo(playlistFolderPath).fileName() : folderName;
+    playlistItem.type = type;
+    playlistItem.status = "Downloading";
+    playlistItem.isFolder = true;
+    playlistItem.progress = 0;
+    playlistItem.addedAt = QDateTime::currentDateTime();
+    downloads[playlistItem.id] = playlistItem;
+
+    DatabaseManager::instance().addDownload(playlistItem);
+    emit downloadAdded(playlistItem.id, playlistFolderPath, type, true);
+
+    int total = entries.size();
+    for (int i = 0; i < entries.size(); i++) {
+        const PlaylistEntry& entry = entries[i];
+        if (!entry.selected) continue;
+
+        QString childFileName;
+        if (useTrackNumbers) {
+            QString trackPrefix = TrackNumber::formatTrack(i + 1, total);
+            QString ext = entry.extension.isEmpty() ? "mp4" : entry.extension;
+            childFileName = trackPrefix + "." + entry.title + "." + ext;
+        } else {
+            QString ext = entry.extension.isEmpty() ? "mp4" : entry.extension;
+            childFileName = entry.title + "." + ext;
+        }
+        QString childPath = playlistFolderPath + "/" + childFileName;
+
+        addChildDownload(playlistItem.id, entry.url, childPath, type, audioFormat);
+    }
+}
+
+void DownloadManager::addChildDownload(int parentId, const QString& url, const QString& path, const QString& type, const QString& audioFormat) {
+    DownloadItem child;
+    child.id = nextId++;
+    child.url = url;
+    child.filePath = path;
+    child.fileName = QFileInfo(path).fileName();
+    child.type = type;
+    child.status = "Queued";
+    child.isFolder = false;
+    child.parentId = parentId;
+    child.progress = 0;
+    child.addedAt = QDateTime::currentDateTime();
+    child.chunks = 16;
+    child.audioFormat = audioFormat;
+    downloads[child.id] = child;
+
+    if (downloads.contains(parentId)) {
+        downloads[parentId].childIds.append(child.id);
+    }
+
+    DatabaseManager::instance().addDownload(child);
+    emit downloadAdded(child.id, path, type, false);
+
+    int activeCount = 0;
+    for (const DownloadItem& d : downloads) {
+        if (d.status == "Downloading") activeCount++;
+    }
+
+    if (activeCount < maxConcurrent) {
+        if (type == "HTTP" || type == "HTTPS" || type == "FTP") {
+            ChunkedDownloader* downloader = new ChunkedDownloader(this);
+            connect(downloader, &ChunkedDownloader::downloadProgress, this, &DownloadManager::onChunkProgress);
+            connect(downloader, &ChunkedDownloader::downloadFinished, this, &DownloadManager::onChunkFinished);
+            connect(downloader, &ChunkedDownloader::downloadFailed, this, &DownloadManager::onChunkFailed);
+            connect(downloader, &ChunkedDownloader::speedUpdated, this, [this, id = child.id](qint64 spd) {
+                onChunkSpeed(id, spd);
+            });
+            connect(downloader, &ChunkedDownloader::filePathChanged, this, [this](int id, const QString& newPath) {
+                if (downloads.contains(id)) {
+                    downloads[id].filePath = newPath;
+                    downloads[id].fileName = QFileInfo(newPath).fileName();
+                    Logger::instance().info("Download path updated: id=" + QString::number(id) + " -> " + newPath);
+                }
+            });
+
+            activeChunkedDownloaders[child.id] = downloader;
+            downloads[child.id].status = "Downloading";
+            downloader->startDownload(url, path, child.chunks, child.id);
+            emit statusChanged(child.id, "Downloading");
+        } else if (type == "YtDlp") {
+            downloads[child.id].status = "Downloading";
+            YtDlpManager::instance().startDownload(url, path, child.id, audioFormat);
+            emit statusChanged(child.id, "Downloading");
+        }
+    }
+}
+
+void DownloadManager::pauseDownload(int id) {
+    if (!downloads.contains(id)) return;
+    DownloadItem& item = downloads[id];
+
+    if (item.status != "Downloading" && item.status != "Queued") return;
+
+    item.status = "Paused";
+    Logger::instance().info("Download paused: " + QString::number(id));
+
+    if (activeChunkedDownloaders.contains(id)) {
+        activeChunkedDownloaders[id]->pause();
+    }
+
+    DatabaseManager::instance().updateDownload(item);
+    emit downloadPaused(id);
+    emit statusChanged(id, "Paused");
+}
+
+void DownloadManager::resumeDownload(int id) {
+    if (!downloads.contains(id)) return;
+    DownloadItem& item = downloads[id];
+
+    if (item.status != "Paused" && item.status != "Failed" && item.status != "Queued") return;
+
+    item.status = "Downloading";
+    Logger::instance().info("Download resumed: " + QString::number(id));
+
+    if (activeChunkedDownloaders.contains(id)) {
+        activeChunkedDownloaders[id]->resume();
+    } else if (item.type == "HTTP" || item.type == "HTTPS" || item.type == "FTP") {
+        ChunkedDownloader* downloader = new ChunkedDownloader(this);
+        connect(downloader, &ChunkedDownloader::downloadProgress, this, &DownloadManager::onChunkProgress);
+        connect(downloader, &ChunkedDownloader::downloadFinished, this, &DownloadManager::onChunkFinished);
+        connect(downloader, &ChunkedDownloader::downloadFailed, this, &DownloadManager::onChunkFailed);
+        connect(downloader, &ChunkedDownloader::speedUpdated, this, [this, id](qint64 spd) {
+            onChunkSpeed(id, spd);
+        });
+        connect(downloader, &ChunkedDownloader::filePathChanged, this, [this](int id, const QString& newPath) {
+            if (downloads.contains(id)) {
+                downloads[id].filePath = newPath;
+                downloads[id].fileName = QFileInfo(newPath).fileName();
+                Logger::instance().info("Download path updated: id=" + QString::number(id) + " -> " + newPath);
+            }
+        });
+        activeChunkedDownloaders[id] = downloader;
+        downloader->startDownload(item.url, item.filePath, item.chunks, id);
+    } else if (item.type == "YtDlp") {
+        YtDlpManager::instance().startDownload(item.url, item.filePath, id, item.audioFormat);
+    } else if (item.type == "Torrent") {
+        QString sourceUrl = item.torrentSourceUrl.isEmpty() ? item.url : item.torrentSourceUrl;
+        int ariaId;
+        if (!item.selectedIndices.isEmpty()) {
+            ariaId = Aria2cManager::instance().addTorrentWithSelection(sourceUrl, QFileInfo(item.filePath).absolutePath(), item.selectedIndices);
+        } else {
+            ariaId = Aria2cManager::instance().addTorrent(sourceUrl, QFileInfo(item.filePath).absolutePath());
+        }
+        if (ariaId > 0) {
+            downloads[id].aria2cId = ariaId;
+            for (int cid : downloads[id].childIds) {
+                if (downloads.contains(cid)) downloads[cid].status = "Downloading";
+            }
+            connect(&Aria2cManager::instance(), &Aria2cManager::downloadProgress, this, [this, id, ariaId](int aId, qint64 downloaded, qint64 total, qint64 spd) {
+                if (aId != ariaId || !downloads.contains(id)) return;
+                downloads[id].downloadedSize = downloaded;
+                downloads[id].totalSize = total;
+                downloads[id].progress = total > 0 ? (double)downloaded / total * 100.0 : 0;
+                downloads[id].speed = spd;
+                downloads[id].connectedPeers = Aria2cManager::instance().getConnectedPeers(ariaId);
+                downloads[id].seeds = Aria2cManager::instance().getSeeds(ariaId);
+                for (int cid : downloads[id].childIds) {
+                    if (downloads.contains(cid)) {
+                        downloads[cid].downloadedSize = downloaded;
+                        downloads[cid].totalSize = total;
+                        downloads[cid].progress = downloads[id].progress;
+                        downloads[cid].speed = spd;
+                    }
+                }
+                emit downloadProgress(id, downloaded, total);
+                emit downloadSpeed(id, spd);
+            });
+            connect(&Aria2cManager::instance(), &Aria2cManager::downloadFinished, this, [this, id, ariaId](int aId) {
+                if (aId != ariaId || !downloads.contains(id)) return;
+                downloads[id].status = "Completed";
+                downloads[id].progress = 100.0;
+                downloads[id].completedAt = QDateTime::currentDateTime();
+                for (int cid : downloads[id].childIds) {
+                    if (downloads.contains(cid)) {
+                        downloads[cid].status = "Completed";
+                        downloads[cid].progress = 100.0;
+                        downloads[cid].completedAt = QDateTime::currentDateTime();
+                    }
+                }
+                DatabaseManager::instance().updateDownload(downloads[id]);
+                emit downloadFinished(id);
+                emit statusChanged(id, "Completed");
+                startNextQueued();
+            });
+            connect(&Aria2cManager::instance(), &Aria2cManager::downloadFailed, this, [this, id, ariaId](int aId, const QString& error) {
+                if (aId != ariaId || !downloads.contains(id)) return;
+                downloads[id].status = "Failed";
+                downloads[id].error = error;
+                for (int cid : downloads[id].childIds) {
+                    if (downloads.contains(cid)) {
+                        downloads[cid].status = "Failed";
+                        downloads[cid].error = error;
+                    }
+                }
+                DatabaseManager::instance().updateDownload(downloads[id]);
+                emit downloadFailed(id, error);
+                emit statusChanged(id, "Failed");
+                startNextQueued();
+            });
+        }
+    }
+
+    DatabaseManager::instance().updateDownload(item);
+    emit downloadResumed(id);
+    emit statusChanged(id, "Downloading");
+}
+
+void DownloadManager::cancelDownload(int id) {
+    if (!downloads.contains(id)) return;
+    DownloadItem& item = downloads[id];
+
+    item.status = "Cancelled";
+    Logger::instance().info("Download cancelled: " + QString::number(id));
+
+    if (activeChunkedDownloaders.contains(id)) {
+        activeChunkedDownloaders[id]->cancel();
+        activeChunkedDownloaders[id]->deleteLater();
+        activeChunkedDownloaders.remove(id);
+    }
+
+    DatabaseManager::instance().updateDownload(item);
+    emit statusChanged(id, "Cancelled");
+}
+
+void DownloadManager::removeDownload(int id) {
+    if (!downloads.contains(id)) return;
+
+    cancelDownload(id);
+
+    DatabaseManager::instance().removeDownload(id);
+    downloads.remove(id);
+
+    emit downloadRemoved(id);
+}
+
+void DownloadManager::pauseAll() {
+    for (int id : downloads.keys()) {
+        if (downloads[id].status == "Downloading") {
+            pauseDownload(id);
+        }
+    }
+}
+
+void DownloadManager::resumeAll() {
+    for (int id : downloads.keys()) {
+        if (downloads[id].status == "Paused") {
+            resumeDownload(id);
+        }
+    }
+}
+
+void DownloadManager::clearCompleted() {
+    QVector<int> toRemove;
+    for (int id : downloads.keys()) {
+        if (downloads[id].status == "Completed" || downloads[id].status == "Cancelled") {
+            toRemove.append(id);
+        }
+    }
+    for (int id : toRemove) {
+        removeDownload(id);
+    }
+    DatabaseManager::instance().clearCompleted();
+}
+
+void DownloadManager::updateMaxConcurrent(int max) {
+    maxConcurrent = max;
+    startNextQueued();
+}
+
+void DownloadManager::setSpeedLimit(qint64 bytesPerSecond) {
+    speedLimit = bytesPerSecond;
+}
+
+qint64 DownloadManager::getSpeedLimit() const {
+    return speedLimit;
+}
+
+void DownloadManager::startNextQueued() {
+    int activeCount = 0;
+    for (const DownloadItem& d : downloads) {
+        if (d.status == "Downloading") activeCount++;
+    }
+
+    for (int id : downloads.keys()) {
+        if (activeCount >= maxConcurrent) break;
+        if (downloads[id].status == "Queued") {
+            resumeDownload(id);
+            activeCount++;
+        }
+    }
+}
+
+void DownloadManager::updateAggregateProgress(int parentId) {
+    if (!downloads.contains(parentId)) return;
+    DownloadItem& parent = downloads[parentId];
+    if (!parent.isFolder) return;
+
+    if (parent.childIds.isEmpty()) return;
+
+    double totalProgress = 0;
+    qint64 totalDownloaded = 0;
+    qint64 totalSize = 0;
+    int completedCount = 0;
+
+    for (int childId : parent.childIds) {
+        if (downloads.contains(childId)) {
+            const DownloadItem& child = downloads[childId];
+            totalProgress += child.progress;
+            totalDownloaded += child.downloadedSize;
+            totalSize += child.totalSize;
+            if (child.status == "Completed") completedCount++;
+        }
+    }
+
+    parent.progress = totalProgress / parent.childIds.size();
+    parent.downloadedSize = totalDownloaded;
+    parent.totalSize = totalSize;
+
+    if (completedCount == parent.childIds.size()) {
+        parent.status = "Completed";
+        parent.completedAt = QDateTime::currentDateTime();
+        DatabaseManager::instance().updateDownload(parent);
+        emit downloadFinished(parentId);
+        emit statusChanged(parentId, "Completed");
+    }
+}
+
+void DownloadManager::onChunkProgress(int id, qint64 downloaded, qint64 total) {
+    if (!downloads.contains(id)) return;
+    downloads[id].downloadedSize = downloaded;
+    downloads[id].totalSize = total;
+    downloads[id].progress = total > 0 ? (double)downloaded / total * 100.0 : 0;
+
+    DatabaseManager::instance().updateDownloadProgress(id, downloaded, total, downloads[id].progress);
+    emit downloadProgress(id, downloaded, total);
+
+    if (downloads[id].parentId > 0) {
+        updateAggregateProgress(downloads[id].parentId);
+    }
+}
+
+void DownloadManager::onChunkFinished(int id) {
+    if (!downloads.contains(id)) return;
+    DownloadItem& item = downloads[id];
+
+    item.status = "Completed";
+    item.progress = 100.0;
+    item.completedAt = QDateTime::currentDateTime();
+    item.speed = 0;
+
+    if (activeChunkedDownloaders.contains(id)) {
+        activeChunkedDownloaders[id]->deleteLater();
+        activeChunkedDownloaders.remove(id);
+    }
+
+    DatabaseManager::instance().updateDownload(item);
+    Logger::instance().info("Download completed: " + QString::number(id));
+    emit downloadFinished(id);
+    emit statusChanged(id, "Completed");
+
+    if (item.parentId > 0) {
+        updateAggregateProgress(item.parentId);
+    }
+
+    startNextQueued();
+}
+
+void DownloadManager::onChunkFailed(int id, const QString& error) {
+    if (!downloads.contains(id)) return;
+    DownloadItem& item = downloads[id];
+
+    item.status = "Failed";
+    item.error = error;
+    item.speed = 0;
+
+    if (activeChunkedDownloaders.contains(id)) {
+        activeChunkedDownloaders[id]->deleteLater();
+        activeChunkedDownloaders.remove(id);
+    }
+
+    DatabaseManager::instance().updateDownload(item);
+    Logger::instance().error("Download failed: " + QString::number(id) + " - " + error);
+    emit downloadFailed(id, error);
+    emit statusChanged(id, "Failed");
+
+    if (item.parentId > 0) {
+        updateAggregateProgress(item.parentId);
+    }
+
+    startNextQueued();
+}
+
+void DownloadManager::onChunkSpeed(int id, qint64 spd) {
+    if (!downloads.contains(id)) return;
+    downloads[id].speed = spd;
+    emit downloadSpeed(id, spd);
+}
+
+void DownloadManager::onYtDlpProgress(int id, qint64 downloaded, qint64 total) {
+    if (!downloads.contains(id)) return;
+    downloads[id].downloadedSize = downloaded;
+    downloads[id].totalSize = total;
+    downloads[id].progress = total > 0 ? (double)downloaded / total * 100.0 : 0;
+
+    emit downloadProgress(id, downloaded, total);
+
+    if (downloads[id].parentId > 0) {
+        updateAggregateProgress(downloads[id].parentId);
+    }
+}
+
+void DownloadManager::onYtDlpFinished(int id) {
+    if (!downloads.contains(id)) return;
+    DownloadItem& item = downloads[id];
+
+    item.status = "Completed";
+    item.progress = 100.0;
+    item.completedAt = QDateTime::currentDateTime();
+    item.speed = 0;
+
+    DatabaseManager::instance().updateDownload(item);
+    Logger::instance().info("yt-dlp download completed: " + QString::number(id));
+    emit downloadFinished(id);
+    emit statusChanged(id, "Completed");
+
+    if (item.parentId > 0) {
+        updateAggregateProgress(item.parentId);
+    }
+
+    startNextQueued();
+}
+
+void DownloadManager::onYtDlpFailed(int id, const QString& error) {
+    if (!downloads.contains(id)) return;
+    DownloadItem& item = downloads[id];
+
+    item.status = "Failed";
+    item.error = error;
+    item.speed = 0;
+
+    DatabaseManager::instance().updateDownload(item);
+    Logger::instance().error("yt-dlp download failed: " + QString::number(id) + " - " + error);
+    emit downloadFailed(id, error);
+    emit statusChanged(id, "Failed");
+
+    if (item.parentId > 0) {
+        updateAggregateProgress(item.parentId);
+    }
+
+    startNextQueued();
+}
+
+void DownloadManager::processSpeedLimit() {
+    if (speedLimit <= 0) return;
+
+    qint64 totalCurrentSpeed = 0;
+    for (const DownloadItem& item : downloads) {
+        if (item.status == "Downloading") {
+            totalCurrentSpeed += item.speed;
+        }
+    }
+
+    if (totalCurrentSpeed > speedLimit) {
+        double ratio = (double)speedLimit / totalCurrentSpeed;
+        for (int id : downloads.keys()) {
+            if (downloads[id].status == "Downloading" && activeChunkedDownloaders.contains(id)) {
+                activeChunkedDownloaders[id]->setSpeedLimit((qint64)(downloads[id].speed * ratio));
+            }
+        }
+    }
+}
+
+QVector<DownloadItem> DownloadManager::getDownloads() const {
+    return downloads.values();
+}
+
+QVector<DownloadItem> DownloadManager::getDownloadsByStatus(const QString& status) {
+    QVector<DownloadItem> result;
+    for (const DownloadItem& item : downloads) {
+        if (item.status == status) {
+            result.append(item);
+        }
+    }
+    return result;
+}
+
+DownloadItem DownloadManager::getDownload(int id) const {
+    if (downloads.contains(id)) {
+        return downloads[id];
+    }
+    return DownloadItem();
+}

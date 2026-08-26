@@ -1,0 +1,36 @@
+#include <winver.h>
+
+1 ICON "Assets\\app.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,1,5,0
+ PRODUCTVERSION 0,1,5,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Copper"
+            VALUE "FileDescription", "Copper Download Manager"
+            VALUE "FileVersion", "0.1.5"
+            VALUE "InternalName", "CopperDownloadManager"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Mohamed Subarashi"
+            VALUE "OriginalFilename", "CopperDownloadManager.exe"
+            VALUE "ProductName", "Copper Download Manager"
+            VALUE "ProductVersion", "0.1.5"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

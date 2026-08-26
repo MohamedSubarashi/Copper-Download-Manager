@@ -1,0 +1,20 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="icons/About.png">Assets/About.png</file>
+        <file alias="icons/AddUrl.png">Assets/AddUrl.png</file>
+        <file alias="icons/app.ico">Assets/app.ico</file>
+        <file alias="icons/app.png">Assets/app.png</file>
+        <file alias="icons/CurrentDownload.png">Assets/CurrentDownload.png</file>
+        <file alias="icons/DarkMode.png">Assets/DarkMode.png</file>
+        <file alias="icons/Delete.png">Assets/Delete.png</file>
+        <file alias="icons/DownloadComplete.png">Assets/DownloadComplete.png</file>
+        <file alias="icons/Failed.png">Assets/Failed.png</file>
+        <file alias="icons/FollowSystem.png">Assets/FollowSystem.png</file>
+        <file alias="icons/LightMode.png">Assets/LightMode.png</file>
+        <file alias="icons/Pause.png">Assets/Pause.png</file>
+        <file alias="icons/Resume.png">Assets/Resume.png</file>
+        <file alias="icons/Settings.png">Assets/Settings.png</file>
+        <file alias="icons/Start.png">Assets/Start.png</file>
+        <file alias="icons/Stop.png">Assets/Stop.png</file>
+    </qresource>
+</RCC>
