@@ -1,59 +1,290 @@
-const COPPER_API = "http://localhost:24680";
+const DEFAULT_PORT = 24680;
 let interceptionEnabled = true;
+let copperConnected = false;
+let interceptedCount = 0;
+let history = [];
+
+function getApiUrl(port) {
+  return `http://localhost:${port || DEFAULT_PORT}`;
+}
+
+async function getPort() {
+  const s = await browser.storage.local.get(["port"]);
+  return s.port || DEFAULT_PORT;
+}
+
+async function sendToCopper(url, filename, filePath) {
+  const port = await getPort();
+  const apiUrl = getApiUrl(port);
+  try {
+    const resp = await fetch(`${apiUrl}/api/download`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, filename: filename || "", path: filePath || "" })
+    });
+    if (resp.ok) {
+      interceptedCount++;
+      await browser.storage.local.set({ interceptedCount });
+      browser.browserAction.setBadgeText({ text: String(interceptedCount) });
+      browser.browserAction.setBadgeBackgroundColor({ color: "#e8a838" });
+      addToHistory(url, filename || url.split("/").pop() || "unknown");
+      return true;
+    }
+  } catch (e) {
+    console.log("Copper API not reachable:", e.message);
+  }
+  return false;
+}
+
+function addToHistory(url, filename) {
+  const entry = { url, filename, time: Date.now() };
+  history.unshift(entry);
+  if (history.length > 50) history = history.slice(0, 50);
+  browser.storage.local.set({ downloadHistory: history });
+}
+
+async function pingCopper() {
+  const port = await getPort();
+  try {
+    const resp = await fetch(`${getApiUrl(port)}/api/ping`, { method: "GET" });
+    copperConnected = resp.ok;
+  } catch {
+    copperConnected = false;
+  }
+  await browser.storage.local.set({ copperConnected });
+  return copperConnected;
+}
+
+async function shouldIntercept(filename, url) {
+  const s = await browser.storage.local.get(["fileFilter", "fileFilterMode", "domainBlacklist", "domainWhitelist", "domainFilterEnabled"]);
+  if (!interceptionEnabled || s.enabled === false) return false;
+
+  if (s.domainFilterEnabled) {
+    try {
+      const domain = new URL(url).hostname;
+      if (s.domainBlacklist && s.domainBlacklist.includes(domain)) return false;
+      if (s.domainWhitelist && s.domainWhitelist.length > 0 && !s.domainWhitelist.includes(domain)) return false;
+    } catch {}
+  }
+
+  if (s.fileFilter && s.fileFilter.length > 0) {
+    const ext = filename ? filename.split(".").pop().toLowerCase() : "";
+    const matches = s.fileFilter.some(f => ext === f.toLowerCase() || filename.toLowerCase().includes(f.toLowerCase()));
+    if (s.fileFilterMode === "exclude" && matches) return false;
+    if (s.fileFilterMode === "include" && !matches) return false;
+  }
+
+  return true;
+}
 
 browser.downloads.onCreated.addListener(async (downloadItem) => {
-  if (!interceptionEnabled) return;
-
-  const settings = await browser.storage.local.get(["enabled", "port"]);
+  const settings = await browser.storage.local.get(["enabled"]);
   if (settings.enabled === false) return;
 
-  const port = settings.port || 24680;
-  const apiUrl = `http://localhost:${port}`;
+  const filename = downloadItem.filename ? downloadItem.filename.split(/[/\\]/).pop() : "";
+  if (!(await shouldIntercept(filename, downloadItem.url))) return;
 
   browser.downloads.pause(downloadItem.id);
   browser.downloads.cancel(downloadItem.id);
+  await sendToCopper(downloadItem.url, filename, downloadItem.savePath || "");
+});
 
-  fetch(`${apiUrl}/api/download`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      url: downloadItem.url,
-      filename: downloadItem.filename || "",
-      path: downloadItem.savePath || ""
-    })
-  }).then(response => {
-    if (response.ok) {
-      browser.notifications.create({
-        type: "basic",
-        iconUrl: "icons/icon128.png",
-        title: "Copper Download Manager",
-        message: "Download intercepted and sent to Copper"
-      });
-    }
-  }).catch(err => {
-    console.log("Copper API not reachable:", err.message);
+browser.runtime.onInstalled.addListener(() => {
+  browser.contextMenus.create({
+    id: "copper-download-link",
+    title: "Download link with Copper",
+    contexts: ["link"]
   });
+  browser.contextMenus.create({
+    id: "copper-download-image",
+    title: "Download image with Copper",
+    contexts: ["image"]
+  });
+  browser.contextMenus.create({
+    id: "copper-download-video",
+    title: "Download video with Copper",
+    contexts: ["video"]
+  });
+  browser.contextMenus.create({
+    id: "copper-download-selection",
+    title: "Download URL with Copper",
+    contexts: ["selection"]
+  });
+  browser.contextMenus.create({
+    id: "copper-download-all-images",
+    title: "Download all images on page with Copper",
+    contexts: ["page"]
+  });
+  browser.contextMenus.create({
+    id: "copper-download-all-links",
+    title: "Download all links on page with Copper",
+    contexts: ["page"]
+  });
+
+  browser.storage.local.get(["downloadHistory", "interceptedCount"]).then(s => {
+    history = s.downloadHistory || [];
+    interceptedCount = s.interceptedCount || 0;
+    if (interceptedCount > 0) {
+      browser.browserAction.setBadgeText({ text: String(interceptedCount) });
+      browser.browserAction.setBadgeBackgroundColor({ color: "#e8a838" });
+    }
+  });
+});
+
+browser.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === "copper-download-link" && info.linkUrl) {
+    const filename = info.linkUrl.split("/").pop().split("?")[0];
+    await sendToCopper(info.linkUrl, filename);
+  }
+  if (info.menuItemId === "copper-download-image" && info.srcUrl) {
+    const filename = info.srcUrl.split("/").pop().split("?")[0];
+    await sendToCopper(info.srcUrl, filename);
+  }
+  if (info.menuItemId === "copper-download-video" && info.srcUrl) {
+    const filename = info.srcUrl.split("/").pop().split("?")[0];
+    await sendToCopper(info.srcUrl, filename);
+  }
+  if (info.menuItemId === "copper-download-selection" && info.selectionText) {
+    const text = info.selectionText.trim();
+    if (text.startsWith("http://") || text.startsWith("https://")) {
+      const filename = text.split("/").pop().split("?")[0] || "download";
+      await sendToCopper(text, filename);
+    }
+  }
+  if (info.menuItemId === "copper-download-all-images" || info.menuItemId === "copper-download-all-links") {
+    try {
+      const results = await browser.tabs.executeScript(tab.id, {
+        code: `(${(type) => {
+          const urls = [];
+          const seen = new Set();
+          if (type === "images") {
+            document.querySelectorAll("img").forEach(img => {
+              if (img.src && img.src.startsWith("http") && !seen.has(img.src)) {
+                seen.add(img.src);
+                urls.push(img.src);
+              }
+            });
+          } else {
+            document.querySelectorAll("a[href]").forEach(a => {
+              const href = a.href;
+              if (href && href.startsWith("http") && !seen.has(href)) {
+                seen.add(href);
+                urls.push(href);
+              }
+            });
+          }
+          return JSON.stringify(urls);
+        }})("${info.menuItemId === "copper-download-all-images" ? "images" : "links"}")`
+      });
+      if (results && results[0]) {
+        const urls = JSON.parse(results[0]);
+        for (const u of urls) {
+          await sendToCopper(u, u.split("/").pop().split("?")[0] || "download");
+        }
+        browser.notifications.create({
+          type: "basic",
+          iconUrl: "icons/icon128.png",
+          title: "Copper Download Manager",
+          message: `Sent ${urls.length} URLs to Copper`
+        });
+      }
+    } catch (e) {
+      console.log("Script injection failed:", e.message);
+    }
+  }
 });
 
 browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "toggle") {
     interceptionEnabled = request.enabled;
     browser.storage.local.set({ enabled: request.enabled });
-    sendResponse({ success: true });
+    return Promise.resolve({ success: true });
   }
 
   if (request.action === "getStatus") {
-    sendResponse({ enabled: interceptionEnabled });
+    return Promise.resolve({ enabled: interceptionEnabled });
+  }
+
+  if (request.action === "ping") {
+    return pingCopper().then(ok => ({ connected: ok }));
   }
 
   if (request.action === "openCopper") {
     browser.tabs.create({ url: "copper://open" });
-    sendResponse({ success: true });
+    return Promise.resolve({ success: true });
   }
 
-  return true;
+  if (request.action === "sendUrl") {
+    return sendToCopper(request.url, request.filename || "").then(ok => ({ success: ok }));
+  }
+
+  if (request.action === "detectMedia") {
+    return browser.tabs.query({ active: true, currentWindow: true }).then(async (tabs) => {
+      if (!tabs[0]) return { media: [] };
+      try {
+        const results = await browser.tabs.executeScript(tabs[0].id, {
+          code: `(${(() => {
+            const media = [];
+            const seen = new Set();
+            document.querySelectorAll("img, video, audio, source, a[href]").forEach(el => {
+              let url = el.src || el.href || el.currentSrc || "";
+              if (!url || url.startsWith("data:") || url.startsWith("blob:")) return;
+              try { url = new URL(url, document.baseURI).href; } catch { return; }
+              if (seen.has(url)) return;
+              seen.add(url);
+              let type = "other";
+              const tag = el.tagName.toLowerCase();
+              if (tag === "img") type = "image";
+              else if (tag === "video" || tag === "source") type = "video";
+              else if (tag === "audio") type = "audio";
+              else if (tag === "a") {
+                const ext = url.split(".").pop().toLowerCase().split("?")[0];
+                if (["jpg","jpeg","png","gif","webp","svg","bmp","ico"].includes(ext)) type = "image";
+                else if (["mp4","webm","mkv","avi","mov","flv"].includes(ext)) type = "video";
+                else if (["mp3","wav","ogg","flac","aac"].includes(ext)) type = "audio";
+                else if (["pdf"].includes(ext)) type = "document";
+                else if (["zip","rar","7z","tar","gz"].includes(ext)) type = "archive";
+                else if (["exe","msi","dmg","app","deb","rpm"].includes(ext)) type = "executable";
+              }
+              const filename = url.split("/").pop().split("?")[0] || "unknown";
+              media.push({ url, filename, type });
+            });
+            return JSON.stringify(media);
+          })})()`
+        });
+        return { media: results && results[0] ? JSON.parse(results[0]) : [] };
+      } catch (e) {
+        return { media: [], error: e.message };
+      }
+    });
+  }
+
+  if (request.action === "getHistory") {
+    return browser.storage.local.get(["downloadHistory"]).then(s => ({ history: s.downloadHistory || [] }));
+  }
+
+  if (request.action === "clearHistory") {
+    history = [];
+    interceptedCount = 0;
+    return browser.storage.local.set({ downloadHistory: [], interceptedCount: 0 }).then(() => {
+      browser.browserAction.setBadgeText({ text: "" });
+      return { success: true };
+    });
+  }
+
+  if (request.action === "updateSettings") {
+    return browser.storage.local.set(request.settings).then(() => ({ success: true }));
+  }
+
+  if (request.action === "getSettings") {
+    const keys = ["fileFilter", "fileFilterMode", "domainBlacklist", "domainWhitelist", "domainFilterEnabled", "port"];
+    return browser.storage.local.get(keys);
+  }
 });
 
-browser.storage.local.get(["enabled"], (result) => {
+setInterval(pingCopper, 15000);
+pingCopper();
+
+browser.storage.local.get(["enabled"]).then(result => {
   interceptionEnabled = result.enabled !== false;
 });

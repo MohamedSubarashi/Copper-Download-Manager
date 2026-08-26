@@ -103,6 +103,14 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         return;
     }
 
+    if (path == "/api/ping" && method == "GET") {
+        QJsonObject json;
+        json["status"] = "ok";
+        json["version"] = QCoreApplication::applicationVersion();
+        sendJsonResponse(socket, 200, json);
+        return;
+    }
+
     if (path == "/api/version" && method == "GET") {
         QJsonObject json;
         json["name"] = "Copper Download Manager";

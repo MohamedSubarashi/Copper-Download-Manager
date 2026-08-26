@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Copper Download Manager",
-  "version": "1.0.2",
-  "description": "Intercept downloads and send them to Copper Download Manager",
-  "permissions": ["downloads", "notifications", "storage"],
-  "host_permissions": ["http://localhost:24680/*"],
+  "version": "2.0.0",
+  "description": "Powerful download interceptor — send downloads, detect media, bulk download, and more with Copper Download Manager",
+  "permissions": ["downloads", "notifications", "storage", "contextMenus", "activeTab", "scripting", "tabs"],
+  "host_permissions": ["http://localhost:*/*"],
   "background": {
     "service_worker": "background.js"
   },

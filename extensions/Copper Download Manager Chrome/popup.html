@@ -2,95 +2,95 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <style>
-    body {
-      width: 320px;
-      padding: 16px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #2d2d30;
-      color: #fff;
-      margin: 0;
-    }
-    .header {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 16px;
-    }
-    .header img {
-      width: 32px;
-      height: 32px;
-    }
-    .header h1 {
-      margin: 0;
-      font-size: 16px;
-      font-weight: 600;
-    }
-    .status {
-      padding: 8px 12px;
-      border-radius: 6px;
-      margin-bottom: 12px;
-      font-size: 13px;
-    }
-    .status.enabled {
-      background: rgba(0, 180, 0, 0.2);
-      border: 1px solid rgba(0, 180, 0, 0.4);
-      color: #4cff4c;
-    }
-    .status.disabled {
-      background: rgba(200, 0, 0, 0.2);
-      border: 1px solid rgba(200, 0, 0, 0.4);
-      color: #ff6b6b;
-    }
-    .toggle-btn {
-      width: 100%;
-      padding: 10px;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 600;
-      margin-bottom: 8px;
-      transition: background 0.2s;
-    }
-    .toggle-btn.enable {
-      background: #28a745;
-      color: white;
-    }
-    .toggle-btn.enable:hover {
-      background: #34c759;
-    }
-    .toggle-btn.disable {
-      background: #dc3545;
-      color: white;
-    }
-    .toggle-btn.disable:hover {
-      background: #e85d6a;
-    }
-    .open-btn {
-      width: 100%;
-      padding: 10px;
-      border: 1px solid #555;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-      background: #3a3a3c;
-      color: white;
-      transition: background 0.2s;
-    }
-    .open-btn:hover {
-      background: #4a4a4c;
-    }
-  </style>
+  <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <div class="header">
     <img src="icons/icon48.png" alt="Copper">
-    <h1>Copper Download Manager</h1>
+    <div class="header-text">
+      <h1>Copper Download Manager</h1>
+      <span class="version">v2.0</span>
+    </div>
+    <div id="connDot" class="conn-dot disconnected" title="Copper status"></div>
   </div>
-  <div id="status" class="status enabled">Interception: Enabled</div>
-  <button id="toggleBtn" class="toggle-btn disable">Disable Interception</button>
-  <button id="openBtn" class="open-btn">Open Copper</button>
+
+  <div id="status" class="status enabled">Interception: ON</div>
+
+  <button id="toggleBtn" class="toggle-btn disable">Disable</button>
+
+  <div class="section">
+    <label class="section-label">Quick Download</label>
+    <div class="url-input-row">
+      <input type="text" id="urlInput" placeholder="Paste URL here..." />
+      <button id="sendBtn" class="send-btn">Send</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="media">Media</button>
+    <button class="tab" data-tab="history">History</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </div>
+
+  <div id="tab-media" class="tab-content active">
+    <div class="media-toolbar">
+      <select id="mediaFilter" class="filter-select">
+        <option value="all">All Types</option>
+        <option value="image">Images</option>
+        <option value="video">Videos</option>
+        <option value="audio">Audio</option>
+        <option value="document">Documents</option>
+        <option value="archive">Archives</option>
+        <option value="executable">Executables</option>
+      </select>
+      <button id="detectBtn" class="small-btn">Scan Page</button>
+      <button id="downloadAllBtn" class="small-btn accent">Download All</button>
+    </div>
+    <div id="mediaList" class="media-list">
+      <div class="empty-state">Click "Scan Page" to detect media</div>
+    </div>
+  </div>
+
+  <div id="tab-history" class="tab-content">
+    <div class="history-toolbar">
+      <span id="historyCount" class="history-count">0 intercepted</span>
+      <button id="clearHistoryBtn" class="small-btn danger">Clear</button>
+    </div>
+    <div id="historyList" class="media-list">
+      <div class="empty-state">No downloads intercepted yet</div>
+    </div>
+  </div>
+
+  <div id="tab-settings" class="tab-content">
+    <label class="section-label">Copper Port</label>
+    <input type="number" id="portInput" value="24680" class="settings-input" />
+
+    <label class="section-label">File Type Filter</label>
+    <div class="settings-row">
+      <select id="filterMode" class="filter-select">
+        <option value="none">Disabled</option>
+        <option value="include">Only these types</option>
+        <option value="exclude">Exclude these types</option>
+      </select>
+    </div>
+    <input type="text" id="fileFilterInput" placeholder="e.g. mp4,zip,exe" class="settings-input" />
+
+    <label class="section-label">Domain Filter</label>
+    <input type="checkbox" id="domainFilterToggle" />
+    <label for="domainFilterToggle" class="checkbox-label">Enable domain filtering</label>
+    <div class="settings-row">
+      <textarea id="domainWhitelist" placeholder="Whitelist (one per line, or empty for all)" class="settings-textarea"></textarea>
+      <textarea id="domainBlacklist" placeholder="Blacklist (one per line)" class="settings-textarea"></textarea>
+    </div>
+
+    <button id="saveSettingsBtn" class="save-btn">Save Settings</button>
+    <div id="settingsSaved" class="saved-msg" style="display:none;">Settings saved!</div>
+  </div>
+
+  <div class="footer">
+    <button id="openBtn" class="open-btn">Open Copper</button>
+  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>
