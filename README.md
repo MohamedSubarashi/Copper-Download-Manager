@@ -35,7 +35,7 @@ cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH=C:\Qt\6.x.x
 cmake --build build --config Release
 ```
 
-The release build is automatically deployed to `releases/<version>/`.
+The release build is automatically deployed to `installer/release/<version>/` and the final package (Setup.exe + portable zip) is placed in `Release/`.
 
 ## External Tools (Downloaded on Demand)
 
