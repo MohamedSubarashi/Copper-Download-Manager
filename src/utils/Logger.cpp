@@ -3,7 +3,6 @@
 #include <QDir>
 #include <QStandardPaths>
 #include <QDateTime>
-#include <QDebug>
 #include <QMutexLocker>
 
 Logger::Logger() : maxLogSize(5 * 1024 * 1024), maxLogFiles(3) {
@@ -49,8 +48,6 @@ void Logger::writeLog(const QString& level, const QString& message) {
 
     QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss.zzz");
     QString line = QString("[%1] %2 - %3").arg(level, timestamp, message);
-
-    qDebug().noquote() << line;
 
     QFile file(logFilePath);
     if (file.open(QIODevice::Append | QIODevice::Text)) {

@@ -81,7 +81,7 @@ static bool sendShowToRunningInstance() {
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("Copper Download Manager");
-    app.setApplicationVersion("0.2.5");
+    app.setApplicationVersion("0.3.0");
     app.setOrganizationName("Copper");
 
     Logger::instance().info("========================================");

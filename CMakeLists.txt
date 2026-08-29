@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(CopperDownloadManager VERSION 0.2.5 LANGUAGES CXX)
+project(CopperDownloadManager VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -91,9 +91,11 @@ endif()
 
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} ws2_32 shell32)
-    if(MSVC)
-        set_target_properties(${PROJECT_NAME} PROPERTIES WIN32_EXECUTABLE TRUE)
-    endif()
+    # Link as a GUI application (subsystem 2) for ALL Windows compilers, not
+    # only MSVC. Without this, MinGW builds the executable as a console app
+    # (subsystem 3), which opens an unwanted log/terminal window on launch
+    # displaying qDebug() output.
+    set_target_properties(${PROJECT_NAME} PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
 
 if(UNIX AND NOT APPLE)
