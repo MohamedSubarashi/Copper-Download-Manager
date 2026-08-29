@@ -3,6 +3,7 @@
 #include <QStandardPaths>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QOperatingSystemVersion>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
@@ -57,24 +58,76 @@ void YtDlpManager::installOrUpdate() {
 
     isDownloading = true;
     Logger::instance().info("Installing/updating yt-dlp...");
-    emit installationProgress("Starting download...");
+    emit installationProgress("Checking latest version...");
 
+    QNetworkRequest request(QUrl("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"));
+    request.setRawHeader("Accept", "application/vnd.github.v3+json");
+    request.setRawHeader("User-Agent", "CopperDownloadManager/1.0");
+
+    QNetworkReply* reply = nam->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+
+        if (reply->error() != QNetworkReply::NoError) {
+            Logger::instance().error("yt-dlp version check failed: " + reply->errorString());
+            emit installationProgress("Version check failed: " + reply->errorString());
+            emit errorOccurred(reply->errorString());
+            isDownloading = false;
+            return;
+        }
+
+        QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+        QJsonObject release = doc.object();
+        QString tagName = release["tag_name"].toString();
+        QJsonArray assets = release["assets"].toArray();
+
+        // If yt-dlp is already installed, only re-download when a newer release exists.
+        if (isInstalled()) {
+            QString installed = getVersion().trimmed();
+            if (installed == tagName || (installed.compare(tagName) >= 0)) {
+                Logger::instance().info("yt-dlp is up to date: " + installed + " == latest " + tagName + " (skipping download)");
+                emit installationProgress("Already up to date: " + installed);
+                isDownloading = false;
+                return;
+            }
+            Logger::instance().info("yt-dlp update available: installed=" + installed + ", latest=" + tagName);
+        }
+
+        QString assetUrl;
+        QString fileName;
 #ifdef PLATFORM_WINDOWS
-    QString url = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.01/yt-dlp.exe";
-    QString fileName = "yt-dlp.exe";
+        QString assetName = "yt-dlp.exe";
 #else
-    QString url = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.01/yt-dlp";
-    QString fileName = "yt-dlp";
+        QString assetName = "yt-dlp";
 #endif
 
-    emit installationProgress("Downloading yt-dlp...");
-    startBinaryDownload(url, fileName);
+        for (const QJsonValue& asset : assets) {
+            QJsonObject a = asset.toObject();
+            if (a["name"].toString() == assetName) {
+                assetUrl = a["browser_download_url"].toString();
+                fileName = a["name"].toString();
+                break;
+            }
+        }
+
+        if (assetUrl.isEmpty()) {
+            Logger::instance().error("yt-dlp asset not found in release " + tagName);
+            emit installationProgress("Asset not found in release");
+            isDownloading = false;
+            return;
+        }
+
+        Logger::instance().info("yt-dlp latest version: " + tagName + ", downloading from: " + assetUrl);
+        emit installationProgress("Downloading yt-dlp " + tagName + "...");
+        startBinaryDownload(assetUrl, fileName);
+    });
 }
 
 void YtDlpManager::startBinaryDownload(const QString& url, const QString& fileName) {
     QNetworkRequest request(url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setRawHeader("User-Agent", "Mozilla/5.0 CopperDownloadManager/1.0");
+    request.setRawHeader("Accept", "application/octet-stream");
 
     activeReply = nam->get(request);
 
@@ -97,14 +150,6 @@ void YtDlpManager::startBinaryDownload(const QString& url, const QString& fileNa
             emit errorOccurred(reply->errorString());
             isDownloading = false;
             reply->deleteLater();
-            return;
-        }
-
-        int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        if (httpStatus >= 300 && httpStatus < 400) {
-            QUrl redirectUrl = reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
-            reply->deleteLater();
-            startBinaryDownload(redirectUrl.toString(), fileName);
             return;
         }
 
@@ -149,7 +194,22 @@ void YtDlpManager::startDownload(const QString& url, const QString& outputPath, 
     activeProcesses[downloadId] = process;
 
     QStringList args;
-    args << "-o" << outputPath;
+
+    // Build a valid yt-dlp output. yt-dlp's -o expects an output template; a bare path
+    // without a file extension and without a %(...) placeholder makes yt-dlp write a file
+    // with no extension (which looks like the download "never happened"). If the caller
+    // gave us a path with no extension and no template, output into its parent directory
+    // using a proper template so the file gets a correct, named, extended filename.
+    QString outputArg = outputPath;
+    if (!outputPath.contains("%(")) {
+        QString ext = QFileInfo(outputPath).suffix();
+        if (ext.isEmpty()) {
+            QString outDir = QFileInfo(outputPath).absolutePath();
+            if (outDir.isEmpty()) outDir = outputPath;
+            outputArg = outDir + "/%(title)s.%(ext)s";
+        }
+    }
+    args << "-o" << outputArg;
     args << "--newline";
     args << "--no-warnings";
     args << "--progress";

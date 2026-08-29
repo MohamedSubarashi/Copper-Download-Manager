@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(CopperDownloadManager VERSION 0.1.5 LANGUAGES CXX)
+project(CopperDownloadManager VERSION 0.2.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -37,15 +37,6 @@ else()
     add_definitions(-DPLATFORM_LINUX)
 endif()
 
-add_definitions(-DLOG_DIR="${CMAKE_SOURCE_DIR}")
-
-include_directories(${CMAKE_SOURCE_DIR}/include)
-include_directories(${CMAKE_SOURCE_DIR}/include/core)
-include_directories(${CMAKE_SOURCE_DIR}/include/ui)
-include_directories(${CMAKE_SOURCE_DIR}/include/utils)
-include_directories(${CMAKE_SOURCE_DIR}/include/torrent)
-include_directories(${CMAKE_SOURCE_DIR}/include/db)
-
 file(GLOB_RECURSE SOURCES "src/*.cpp")
 file(GLOB_RECURSE HEADERS "include/*.h")
 
@@ -75,6 +66,23 @@ else()
     add_executable(${PROJECT_NAME} ${ALL_SOURCES})
 endif()
 
+# Project include dirs and the LOG_DIR define are for C++ sources only.
+# GNU windres re-tokenizes arguments and does not honor quotes, so passing a
+# path containing spaces (as in ".../Copper Download Manager/...") to the
+# resource compiler breaks preprocessing ("fatal error: Manager/include/db").
+# Guard them with $<COMPILE_LANGUAGE:RESOURCE> so the RC step receives none.
+target_include_directories(${PROJECT_NAME} PRIVATE
+    "$<$<NOT:$<COMPILE_LANGUAGE:RC>>:${CMAKE_SOURCE_DIR}/include>"
+    "$<$<NOT:$<COMPILE_LANGUAGE:RC>>:${CMAKE_SOURCE_DIR}/include/core>"
+    "$<$<NOT:$<COMPILE_LANGUAGE:RC>>:${CMAKE_SOURCE_DIR}/include/ui>"
+    "$<$<NOT:$<COMPILE_LANGUAGE:RC>>:${CMAKE_SOURCE_DIR}/include/utils>"
+    "$<$<NOT:$<COMPILE_LANGUAGE:RC>>:${CMAKE_SOURCE_DIR}/include/torrent>"
+    "$<$<NOT:$<COMPILE_LANGUAGE:RC>>:${CMAKE_SOURCE_DIR}/include/db>"
+)
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    "$<$<NOT:$<COMPILE_LANGUAGE:RC>>:LOG_DIR=\"${CMAKE_SOURCE_DIR}\">"
+)
+
 target_link_libraries(${PROJECT_NAME} Qt6::Core Qt6::Widgets Qt6::Network Qt6::Sql Qt6::Gui)
 
 if(LIBTORRENT_FOUND)
@@ -103,13 +111,13 @@ if(WIN32)
         set(WINDEPLOYQT_EXECUTABLE "${CMAKE_PREFIX_PATH}/bin/windeployqt.exe")
     endif()
 
-    set(RELEASE_DIR "${CMAKE_SOURCE_DIR}/releases/${PROJECT_VERSION}")
+    set(RELEASE_DIR "${CMAKE_SOURCE_DIR}/installer/release/${PROJECT_VERSION}")
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${RELEASE_DIR}"
         COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:${PROJECT_NAME}>" "${RELEASE_DIR}/"
         COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/THIRD-PARTY-NOTICES.txt" "${RELEASE_DIR}/"
         COMMAND "${WINDEPLOYQT_EXECUTABLE}" --release --no-translations --no-opengl-sw --dir "${RELEASE_DIR}" "$<TARGET_FILE:${PROJECT_NAME}>"
         COMMAND ${CMAKE_COMMAND} -E remove -f "${RELEASE_DIR}/sqldrivers/qsqlibase.dll" "${RELEASE_DIR}/sqldrivers/qsqlmimer.dll" "${RELEASE_DIR}/sqldrivers/qsqloci.dll" "${RELEASE_DIR}/sqldrivers/qsqlodbc.dll" "${RELEASE_DIR}/sqldrivers/qsqlpsql.dll"
-        COMMENT "Deploying to releases/${PROJECT_VERSION}/"
+        COMMENT "Deploying to installer/release/${PROJECT_VERSION}/"
     )
 endif()

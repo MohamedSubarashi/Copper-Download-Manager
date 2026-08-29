@@ -1,39 +1,32 @@
-const DEFAULT_PORT = 24680;
+// background.js — Copper Download Manager (copper:// scheme injection)
+// IDM/FDM pattern: instead of polling a localhost port, the extension navigates
+// to a copper://download URL which the OS routes to the registered Copper
+// Download Manager application. Works whether or not the app is running at the
+// moment of the click (the OS launches it).
 let interceptionEnabled = true;
-let copperConnected = false;
 let interceptedCount = 0;
 let history = [];
 
-function getApiUrl(port) {
-  return `http://localhost:${port || DEFAULT_PORT}`;
+function buildCopperUrl(url, filename, filePath) {
+  const enc = (v) => (v == null ? "" : encodeURIComponent(String(v)));
+  return `copper://download?url=${enc(url)}&filename=${enc(filename)}&path=${enc(filePath)}`;
 }
 
-async function getPort() {
-  const s = await chrome.storage.local.get(["port"]);
-  return s.port || DEFAULT_PORT;
-}
-
-async function sendToCopper(url, filename, filePath) {
-  const port = await getPort();
-  const apiUrl = getApiUrl(port);
+// Primary trigger: ask the content script on the focused tab to click a hidden
+// copper:// anchor. This keeps the user on the page and asks the OS/browser to
+// open the registered handler.
+async function focusAndTrigger(copperUrl) {
   try {
-    const resp = await fetch(`${apiUrl}/api/download`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, filename: filename || "", path: filePath || "" })
-    });
-    if (resp.ok) {
-      interceptedCount++;
-      chrome.storage.local.set({ interceptedCount });
-      chrome.action.setBadgeText({ text: String(interceptedCount) });
-      chrome.action.setBadgeBackgroundColor({ color: "#e8a838" });
-      addToHistory(url, filename || url.split("/").pop() || "unknown");
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab && tab.id != null) {
+      await chrome.tabs.sendMessage(tab.id, { type: "copper", url: copperUrl });
       return true;
     }
   } catch (e) {
-    console.log("Copper API not reachable:", e.message);
+    // no content script / restricted page — fall through to tab creation
   }
-  return false;
+  await chrome.tabs.create({ url: copperUrl });
+  return true;
 }
 
 function addToHistory(url, filename) {
@@ -43,16 +36,18 @@ function addToHistory(url, filename) {
   chrome.storage.local.set({ downloadHistory: history });
 }
 
-async function pingCopper() {
-  const port = await getPort();
-  try {
-    const resp = await fetch(`${getApiUrl(port)}/api/ping`, { method: "GET" });
-    copperConnected = resp.ok;
-  } catch {
-    copperConnected = false;
-  }
-  chrome.storage.local.set({ copperConnected });
-  return copperConnected;
+function recordIntercept(url, filename) {
+  interceptedCount++;
+  chrome.storage.local.set({ interceptedCount });
+  chrome.action.setBadgeText({ text: String(interceptedCount) });
+  chrome.action.setBadgeBackgroundColor({ color: "#e8a838" });
+  addToHistory(url, filename || url.split("/").pop().split("?")[0] || "unknown");
+}
+
+function dispatch(url, filename, filePath) {
+  focusAndTrigger(buildCopperUrl(url, filename, filePath)).then(() => {
+    recordIntercept(url, filename);
+  });
 }
 
 async function shouldIntercept(filename, url) {
@@ -85,44 +80,27 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   const filename = downloadItem.filename ? downloadItem.filename.split(/[/\\]/).pop() : "";
   if (!(await shouldIntercept(filename, downloadItem.url))) return;
 
-  chrome.downloads.pause(downloadItem.id);
-  chrome.downloads.cancel(downloadItem.id);
-  await sendToCopper(downloadItem.url, filename, downloadItem.savePath || "");
+  try {
+    chrome.downloads.pause(downloadItem.id);
+    chrome.downloads.cancel(downloadItem.id);
+  } catch (e) {}
+  dispatch(downloadItem.url, filename, downloadItem.savePath || "");
 });
 
 // --- Context menus ---
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: "copper-download-link",
-    title: "Download link with Copper",
-    contexts: ["link"]
+function createMenus() {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({ id: "copper-download-link", title: "Download link with Copper", contexts: ["link"] });
+    chrome.contextMenus.create({ id: "copper-download-image", title: "Download image with Copper", contexts: ["image"] });
+    chrome.contextMenus.create({ id: "copper-download-video", title: "Download video with Copper", contexts: ["video"] });
+    chrome.contextMenus.create({ id: "copper-download-selection", title: "Download URL with Copper", contexts: ["selection"] });
+    chrome.contextMenus.create({ id: "copper-download-all-images", title: "Download all images on page with Copper", contexts: ["page"] });
+    chrome.contextMenus.create({ id: "copper-download-all-links", title: "Download all links on page with Copper", contexts: ["page"] });
   });
-  chrome.contextMenus.create({
-    id: "copper-download-image",
-    title: "Download image with Copper",
-    contexts: ["image"]
-  });
-  chrome.contextMenus.create({
-    id: "copper-download-video",
-    title: "Download video with Copper",
-    contexts: ["video"]
-  });
-  chrome.contextMenus.create({
-    id: "copper-download-selection",
-    title: "Download URL with Copper",
-    contexts: ["selection"]
-  });
-  chrome.contextMenus.create({
-    id: "copper-download-all-images",
-    title: "Download all images on page with Copper",
-    contexts: ["page"]
-  });
-  chrome.contextMenus.create({
-    id: "copper-download-all-links",
-    title: "Download all links on page with Copper",
-    contexts: ["page"]
-  });
+}
 
+chrome.runtime.onInstalled.addListener(() => {
+  createMenus();
   chrome.storage.local.get(["downloadHistory", "interceptedCount"], (s) => {
     history = s.downloadHistory || [];
     interceptedCount = s.interceptedCount || 0;
@@ -132,25 +110,22 @@ chrome.runtime.onInstalled.addListener(() => {
     }
   });
 });
+chrome.runtime.onStartup.addListener(() => createMenus());
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "copper-download-link" && info.linkUrl) {
-    const filename = info.linkUrl.split("/").pop().split("?")[0];
-    await sendToCopper(info.linkUrl, filename);
+    dispatch(info.linkUrl, info.linkUrl.split("/").pop().split("?")[0]);
   }
   if (info.menuItemId === "copper-download-image" && info.srcUrl) {
-    const filename = info.srcUrl.split("/").pop().split("?")[0];
-    await sendToCopper(info.srcUrl, filename);
+    dispatch(info.srcUrl, info.srcUrl.split("/").pop().split("?")[0]);
   }
   if (info.menuItemId === "copper-download-video" && info.srcUrl) {
-    const filename = info.srcUrl.split("/").pop().split("?")[0];
-    await sendToCopper(info.srcUrl, filename);
+    dispatch(info.srcUrl, info.srcUrl.split("/").pop().split("?")[0]);
   }
   if (info.menuItemId === "copper-download-selection" && info.selectionText) {
     const text = info.selectionText.trim();
     if (text.startsWith("http://") || text.startsWith("https://")) {
-      const filename = text.split("/").pop().split("?")[0] || "download";
-      await sendToCopper(text, filename);
+      dispatch(text, text.split("/").pop().split("?")[0] || "download");
     }
   }
   if (info.menuItemId === "copper-download-all-images" || info.menuItemId === "copper-download-all-links") {
@@ -175,9 +150,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       });
       if (results && results[0] && results[0].result) {
         const urls = results[0].result;
-        for (const u of urls) {
-          await sendToCopper(u, u.split("/").pop().split("?")[0] || "download");
-        }
+        for (const u of urls) dispatch(u, u.split("/").pop().split("?")[0] || "download");
         chrome.notifications.create({
           type: "basic",
           iconUrl: "icons/icon128.png",
@@ -191,7 +164,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
-// --- Page media detection (injected from popup) ---
+// --- Message handling ---
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "toggle") {
     interceptionEnabled = request.enabled;
@@ -203,21 +176,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ enabled: interceptionEnabled });
   }
 
-  if (request.action === "ping") {
-    pingCopper().then(ok => sendResponse({ connected: ok }));
-    return true;
-  }
-
   if (request.action === "openCopper") {
     chrome.tabs.create({ url: "copper://open" });
     sendResponse({ success: true });
   }
 
   if (request.action === "sendUrl") {
-    sendToCopper(request.url, request.filename || "").then(ok => {
-      sendResponse({ success: ok });
-    });
-    return true;
+    dispatch(request.url, request.filename || "", request.path || "");
+    const filename = request.filename || request.url.split("/").pop().split("?")[0] || "unknown";
+    recordIntercept(request.url, filename);
+    sendResponse({ success: true });
   }
 
   if (request.action === "detectMedia") {
@@ -284,17 +252,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "getSettings") {
-    const keys = ["fileFilter", "fileFilterMode", "domainBlacklist", "domainWhitelist", "domainFilterEnabled", "port"];
+    const keys = ["fileFilter", "fileFilterMode", "domainBlacklist", "domainWhitelist", "domainFilterEnabled"];
     chrome.storage.local.get(keys, (s) => sendResponse(s));
     return true;
   }
 
   return true;
 });
-
-// --- Periodic ping ---
-setInterval(pingCopper, 15000);
-pingCopper();
 
 chrome.storage.local.get(["enabled"], (result) => {
   interceptionEnabled = result.enabled !== false;

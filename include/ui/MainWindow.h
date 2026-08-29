@@ -30,6 +30,7 @@ private slots:
     void onAddUrl();
     void onSettings();
     void onAbout();
+    void onCheckForUpdates();
     void onStartSelected();
     void onPauseSelected();
     void onStopSelected();
@@ -38,6 +39,7 @@ private slots:
     void onOpenFolder();
     void onCopyUrl();
     void onProperties();
+    void onTorrentDetails();
     void onClearCompleted();
     void onPauseAll();
     void onResumeAll();

@@ -60,6 +60,12 @@ void FfmpegManager::installOrUpdate() {
         return;
     }
 
+    if (isInstalled()) {
+        Logger::instance().info("ffmpeg already installed: " + getVersion() + " (skipping download)");
+        emit installationProgress("Already installed: " + getVersion());
+        return;
+    }
+
     isDownloading = true;
     Logger::instance().info("Installing/updating ffmpeg...");
     emit installationProgress("Starting download...");

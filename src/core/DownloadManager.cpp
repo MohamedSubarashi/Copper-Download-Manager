@@ -129,6 +129,11 @@ int DownloadManager::addDownload(const QString& url, const QString& path, const 
                     downloads[id].totalSize = total;
                     downloads[id].progress = total > 0 ? (double)downloaded / total * 100.0 : 0;
                     downloads[id].speed = spd;
+                    downloads[id].connectedPeers = Aria2cManager::instance().getConnectedPeers(ariaId);
+                    downloads[id].leechers = Aria2cManager::instance().getLeechers(ariaId);
+                    downloads[id].seeds = Aria2cManager::instance().getSeeds(ariaId);
+                    downloads[id].uploadSpeed = Aria2cManager::instance().getUploadSpeed(ariaId);
+                    downloads[id].uploadedSize = Aria2cManager::instance().getUploadedBytes(ariaId);
                     emit downloadProgress(id, downloaded, total);
                 });
 
@@ -178,6 +183,8 @@ void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries,
         }
 
         QString parentName = folderName.isEmpty() ? QFileInfo(path).fileName() : folderName;
+        QString torrentFolder = parentName;
+        if (torrentFolder.isEmpty()) torrentFolder = QFileInfo(path).fileName();
 
         DownloadItem parentItem;
         parentItem.id = nextId++;
@@ -198,7 +205,7 @@ void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries,
 
         for (const PlaylistEntry& entry : entries) {
             if (!entry.selected) continue;
-            QString childPath = path + "/" + entry.title;
+            QString childPath = path + "/" + torrentFolder + "/" + entry.title;
             addChildDownload(parentItem.id, torrentSourceUrl, childPath, "Torrent", audioFormat);
             if (downloads.contains(parentItem.id) && !downloads[parentItem.id].childIds.isEmpty()) {
                 int lastChildId = downloads[parentItem.id].childIds.last();
@@ -219,13 +226,23 @@ void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries,
                 downloads[id].progress = total > 0 ? (double)downloaded / total * 100.0 : 0;
                 downloads[id].speed = spd;
                 downloads[id].connectedPeers = Aria2cManager::instance().getConnectedPeers(ariaId);
+                downloads[id].leechers = Aria2cManager::instance().getLeechers(ariaId);
                 downloads[id].seeds = Aria2cManager::instance().getSeeds(ariaId);
+                downloads[id].uploadSpeed = Aria2cManager::instance().getUploadSpeed(ariaId);
+                downloads[id].uploadedSize = Aria2cManager::instance().getUploadedBytes(ariaId);
+                downloads[id].infoHash = Aria2cManager::instance().getInfoHash(ariaId);
+                downloads[id].trackers = Aria2cManager::instance().getTrackerList(ariaId);
                 for (int cid : downloads[id].childIds) {
                     if (downloads.contains(cid)) {
                         downloads[cid].downloadedSize = downloaded;
                         downloads[cid].totalSize = total;
                         downloads[cid].progress = downloads[id].progress;
                         downloads[cid].speed = spd;
+                        downloads[cid].connectedPeers = downloads[id].connectedPeers;
+                        downloads[cid].leechers = downloads[id].leechers;
+                        downloads[cid].seeds = downloads[id].seeds;
+                        downloads[cid].uploadSpeed = downloads[id].uploadSpeed;
+                        downloads[cid].uploadedSize = downloads[id].uploadedSize;
                     }
                 }
                 emit downloadProgress(id, downloaded, total);
@@ -394,6 +411,15 @@ void DownloadManager::pauseDownload(int id) {
         activeChunkedDownloaders[id]->pause();
     }
 
+    if (item.type == "Torrent" && item.aria2cId > 0) {
+        Aria2cManager::instance().pauseDownload(item.aria2cId);
+    }
+    if (item.isFolder && item.type == "Torrent") {
+        for (int cid : item.childIds) {
+            if (downloads.contains(cid)) downloads[cid].status = "Paused";
+        }
+    }
+
     DatabaseManager::instance().updateDownload(item);
     emit downloadPaused(id);
     emit statusChanged(id, "Paused");
@@ -431,17 +457,29 @@ void DownloadManager::resumeDownload(int id) {
         YtDlpManager::instance().startDownload(item.url, item.filePath, id, item.audioFormat);
     } else if (item.type == "Torrent") {
         QString sourceUrl = item.torrentSourceUrl.isEmpty() ? item.url : item.torrentSourceUrl;
-        int ariaId;
-        if (!item.selectedIndices.isEmpty()) {
-            ariaId = Aria2cManager::instance().addTorrentWithSelection(sourceUrl, QFileInfo(item.filePath).absolutePath(), item.selectedIndices);
-        } else {
-            ariaId = Aria2cManager::instance().addTorrent(sourceUrl, QFileInfo(item.filePath).absolutePath());
-        }
-        if (ariaId > 0) {
-            downloads[id].aria2cId = ariaId;
+        int ariaId = -1;
+        if (item.aria2cId > 0 && Aria2cManager::instance().isRunning(item.aria2cId)) {
+            // Torrent still live in the daemon (paused) -> just unpause it.
+            ariaId = item.aria2cId;
+            Aria2cManager::instance().resumeDownload(ariaId);
             for (int cid : downloads[id].childIds) {
                 if (downloads.contains(cid)) downloads[cid].status = "Downloading";
             }
+        } else {
+            if (!item.selectedIndices.isEmpty()) {
+                ariaId = Aria2cManager::instance().addTorrentWithSelection(sourceUrl, QFileInfo(item.filePath).absolutePath(), item.selectedIndices);
+            } else {
+                ariaId = Aria2cManager::instance().addTorrent(sourceUrl, QFileInfo(item.filePath).absolutePath());
+            }
+            if (ariaId > 0) {
+                downloads[id].aria2cId = ariaId;
+                for (int cid : downloads[id].childIds) {
+                    if (downloads.contains(cid)) downloads[cid].status = "Downloading";
+                }
+            }
+        }
+        if (ariaId > 0) {
+            downloads[id].aria2cId = ariaId;
             connect(&Aria2cManager::instance(), &Aria2cManager::downloadProgress, this, [this, id, ariaId](int aId, qint64 downloaded, qint64 total, qint64 spd) {
                 if (aId != ariaId || !downloads.contains(id)) return;
                 downloads[id].downloadedSize = downloaded;
@@ -449,13 +487,23 @@ void DownloadManager::resumeDownload(int id) {
                 downloads[id].progress = total > 0 ? (double)downloaded / total * 100.0 : 0;
                 downloads[id].speed = spd;
                 downloads[id].connectedPeers = Aria2cManager::instance().getConnectedPeers(ariaId);
+                downloads[id].leechers = Aria2cManager::instance().getLeechers(ariaId);
                 downloads[id].seeds = Aria2cManager::instance().getSeeds(ariaId);
+                downloads[id].uploadSpeed = Aria2cManager::instance().getUploadSpeed(ariaId);
+                downloads[id].uploadedSize = Aria2cManager::instance().getUploadedBytes(ariaId);
+                downloads[id].infoHash = Aria2cManager::instance().getInfoHash(ariaId);
+                downloads[id].trackers = Aria2cManager::instance().getTrackerList(ariaId);
                 for (int cid : downloads[id].childIds) {
                     if (downloads.contains(cid)) {
                         downloads[cid].downloadedSize = downloaded;
                         downloads[cid].totalSize = total;
                         downloads[cid].progress = downloads[id].progress;
                         downloads[cid].speed = spd;
+                        downloads[cid].connectedPeers = downloads[id].connectedPeers;
+                        downloads[cid].leechers = downloads[id].leechers;
+                        downloads[cid].seeds = downloads[id].seeds;
+                        downloads[cid].uploadSpeed = downloads[id].uploadSpeed;
+                        downloads[cid].uploadedSize = downloads[id].uploadedSize;
                     }
                 }
                 emit downloadProgress(id, downloaded, total);
@@ -512,6 +560,21 @@ void DownloadManager::cancelDownload(int id) {
         activeChunkedDownloaders[id]->cancel();
         activeChunkedDownloaders[id]->deleteLater();
         activeChunkedDownloaders.remove(id);
+    }
+
+    if (item.type == "Torrent" && item.aria2cId > 0) {
+        Aria2cManager::instance().removeDownload(item.aria2cId);
+        item.aria2cId = -1;
+        item.speed = 0;
+        item.uploadSpeed = 0;
+    }
+    if (item.isFolder) {
+        for (int cid : item.childIds) {
+            if (downloads.contains(cid)) {
+                downloads[cid].status = "Cancelled";
+                DatabaseManager::instance().updateDownload(downloads[cid]);
+            }
+        }
     }
 
     DatabaseManager::instance().updateDownload(item);

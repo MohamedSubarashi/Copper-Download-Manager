@@ -3,10 +3,13 @@
 #include "ui/SettingsDialog.h"
 #include "ui/AboutDialog.h"
 #include "ui/DownloadManagerDialog.h"
+#include "ui/TorrentDetailsDialog.h"
+#include "utils/CopperLink.h"
 #include "core/DownloadManager.h"
 #include "core/LocalServer.h"
 #include "db/DatabaseManager.h"
 #include "utils/Logger.h"
+#include "utils/UpdateManager.h"
 #include <QMenuBar>
 #include <QToolBar>
 #include <QStatusBar>
@@ -40,6 +43,8 @@
 #include <QJsonObject>
 #include <QStandardPaths>
 #include <QSystemTrayIcon>
+#include <QProcess>
+#include <QCoreApplication>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), currentFilter(0) {
     setWindowTitle("Copper Download Manager");
@@ -84,6 +89,36 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), currentFilter(0) 
     connect(&DownloadManager::instance(), &DownloadManager::downloadSpeed, this, &MainWindow::onDownloadSpeed);
 
     connect(&LocalServer::instance(), &LocalServer::argumentForwarded, this, &MainWindow::onArgumentForwarded);
+
+    connect(&UpdateManager::instance(), &UpdateManager::updateAvailable, this, [this](const QString& version) {
+        QString msg = "A new version of Copper Download Manager is available:\n\n"
+                      "Current version: " + QCoreApplication::applicationVersion() + "\n"
+                      "Latest version: " + version;
+        QMessageBox::StandardButton reply = QMessageBox::question(this, "Update Available", msg + "\n\nDo you want to download and install it now?",
+            QMessageBox::Yes | QMessageBox::No);
+        if (reply == QMessageBox::Yes) {
+            UpdateManager::instance().downloadAndInstall();
+        }
+    });
+    connect(&UpdateManager::instance(), &UpdateManager::noUpdateAvailable, this, [this]() {
+        QMessageBox::information(this, "No Updates", "You are running the latest version of Copper Download Manager.");
+    });
+    connect(&UpdateManager::instance(), &UpdateManager::downloadFinished, this, [this]() {
+        QString installerPath = UpdateManager::instance().installerPathOrEmpty();
+        QMessageBox::StandardButton reply = QMessageBox::question(this, "Update Downloaded",
+            "The update has been downloaded. Restart Copper Download Manager to install the update?",
+            QMessageBox::Yes | QMessageBox::No);
+        if (reply == QMessageBox::Yes) {
+            qApp->quit();
+            QProcess::startDetached(installerPath);
+        }
+    });
+    connect(&UpdateManager::instance(), &UpdateManager::downloadFailed, this, [this](const QString& error) {
+        QMessageBox::warning(this, "Update Failed", error);
+    });
+    connect(&UpdateManager::instance(), &UpdateManager::errorOccurred, this, [this](const QString& error) {
+        QMessageBox::warning(this, "Update Error", error);
+    });
 
     refreshTimer = new QTimer(this);
     connect(refreshTimer, &QTimer::timeout, this, &MainWindow::refreshTable);
@@ -199,6 +234,8 @@ void MainWindow::setupMenuBar() {
     connect(clearCompletedAction, &QAction::triggered, this, &MainWindow::onClearCompleted);
 
     QMenu* helpMenu = menuBar->addMenu("&Help");
+    QAction* checkUpdateAction = helpMenu->addAction(QIcon(":/icons/Settings.png"), "&Check for Updates...");
+    connect(checkUpdateAction, &QAction::triggered, this, &MainWindow::onCheckForUpdates);
     QAction* aboutAction = helpMenu->addAction(QIcon(":/icons/About.png"), "&About");
     aboutAction->setShortcut(QKeySequence("F1"));
     connect(aboutAction, &QAction::triggered, this, &MainWindow::onAbout);
@@ -326,6 +363,10 @@ void MainWindow::onAddUrl() {
 void MainWindow::onSettings() {
     SettingsDialog dialog(this);
     dialog.exec();
+}
+
+void MainWindow::onCheckForUpdates() {
+    UpdateManager::instance().checkForUpdates(false);
 }
 
 void MainWindow::onAbout() {
@@ -486,6 +527,24 @@ void MainWindow::onProperties() {
     QMessageBox::information(this, "Download Properties", info);
 }
 
+void MainWindow::onTorrentDetails() {
+    QTableWidgetItem* idItem = table->item(table->currentRow(), 0);
+    if (!idItem) return;
+    int id = idItem->data(Qt::UserRole).toInt();
+    DownloadItem item = DownloadManager::instance().getDownload(id);
+
+    int torrentId = item.aria2cId;
+    if (torrentId <= 0) {
+        QMessageBox::information(this, "Torrent Details", "No live torrent data available for this download.");
+        return;
+    }
+
+    QString title = item.fileName;
+    if (title.isEmpty()) title = item.torrentSourceUrl;
+    TorrentDetailsDialog dialog(torrentId, title, this);
+    dialog.exec();
+}
+
 void MainWindow::onClearCompleted() {
     DownloadManager::instance().clearCompleted();
     refreshTable();
@@ -518,7 +577,7 @@ void MainWindow::onDownloadProgress(int id, qint64 downloaded, qint64 total) {
         for (int row = 0; row < table->rowCount(); row++) {
             QTableWidgetItem* nameItem = table->item(row, 0);
             if (nameItem && nameItem->data(Qt::UserRole).toInt() == id) {
-                QString peersText = QString::number(item.connectedPeers) + "P / " + QString::number(item.seeds) + "S";
+                QString peersText = QString::number(item.connectedPeers) + "P / " + QString::number(item.leechers) + "L / " + QString::number(item.seeds) + "S";
                 QTableWidgetItem* peersItem = table->item(row, 6);
                 if (peersItem) {
                     peersItem->setText(peersText);
@@ -733,7 +792,7 @@ void MainWindow::refreshTable() {
 
                     QString cPeers;
                     if (child.type == "Torrent" && (child.connectedPeers > 0 || child.seeds > 0)) {
-                        cPeers = QString::number(child.connectedPeers) + "P / " + QString::number(child.seeds) + "S";
+                        cPeers = QString::number(child.connectedPeers) + "P / " + QString::number(child.leechers) + "L / " + QString::number(child.seeds) + "S";
                     }
                     QTableWidgetItem* cPeersItem = new QTableWidgetItem(cPeers);
                     cPeersItem->setFlags(nonEditable);
@@ -788,7 +847,7 @@ void MainWindow::refreshTable() {
 
             QString peersText;
             if (item.type == "Torrent" && (item.connectedPeers > 0 || item.seeds > 0)) {
-                peersText = QString::number(item.connectedPeers) + "P / " + QString::number(item.seeds) + "S";
+                peersText = QString::number(item.connectedPeers) + "P / " + QString::number(item.leechers) + "L / " + QString::number(item.seeds) + "S";
             }
             QTableWidgetItem* peersItem = new QTableWidgetItem(peersText);
             peersItem->setFlags(nonEditable);
@@ -853,6 +912,9 @@ void MainWindow::showContextMenu(const QPoint& pos) {
         }
         menu.addSeparator();
         menu.addAction("Copy URL", this, &MainWindow::onCopyUrl);
+        if (dlItem.type == "Torrent" && dlItem.aria2cId > 0) {
+            menu.addAction("Torrent Details...", this, &MainWindow::onTorrentDetails);
+        }
         menu.addAction("Properties", this, &MainWindow::onProperties);
         menu.addSeparator();
         menu.addAction(QIcon(":/icons/Delete.png"), "Remove", this, &MainWindow::onDeleteSelected);
@@ -904,6 +966,11 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
     raise();
     activateWindow();
 
+    if (arg == "show") {
+        refreshTable();
+        return;
+    }
+
     if (arg.startsWith("magnet:")) {
         QString savePath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
         DownloadManagerDialog dialog(SourceTorrent, arg, savePath, this);
@@ -945,7 +1012,45 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
             DownloadManager::instance().addDownload(arg, "", "HTTP");
         }
     } else if (arg.startsWith("copper://")) {
-        Logger::instance().info("Protocol URL ignored: " + arg);
+        QString path = arg.mid(QString("copper://").size());
+        if (path == "open") {
+            Logger::instance().info("copper://open received, showing main window");
+        } else {
+            CopperLink cl = parseCopperLink(arg);
+            if (cl.valid) {
+                Logger::instance().info("Copper download injection: " + cl.url.left(80));
+                if (cl.url.startsWith("magnet:?")) {
+                    QString savePath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+                    DownloadManagerDialog dialog(SourceTorrent, cl.url, savePath, this);
+                    if (dialog.exec() == QDialog::Accepted) {
+                        QVector<PlaylistEntry> selected = dialog.getSelectedEntries();
+                        QString outputPath = dialog.getOutputPath();
+                        bool useTracks = dialog.getUseTrackNumbers();
+                        QString fmt = dialog.getAudioFormat();
+                        QString torrentName = dialog.getTorrentName();
+                        if (!selected.isEmpty()) {
+                            DownloadManager::instance().addPlaylistDownload(selected, outputPath, "Torrent", useTracks, fmt, cl.url, torrentName);
+                        } else {
+                            DownloadManager::instance().addDownload(cl.url, outputPath, "Torrent");
+                        }
+                    }
+                } else {
+                    QString fullSavePath = cl.path;
+                    if (!fullSavePath.isEmpty() && !cl.filename.isEmpty()) {
+                        if (!fullSavePath.endsWith('/') && !fullSavePath.endsWith('\\')) fullSavePath += "/";
+                        fullSavePath += cl.filename;
+                    }
+                    if (cl.url.contains("youtube.com") || cl.url.contains("youtu.be") ||
+                        cl.url.contains("soundcloud.com") || cl.url.contains("vimeo.com")) {
+                        DownloadManager::instance().addDownload(cl.url, "", "YtDlp");
+                    } else {
+                        DownloadManager::instance().addDownload(cl.url, fullSavePath, "HTTP");
+                    }
+                }
+            } else {
+                Logger::instance().warning("Protocol URL ignored: " + arg);
+            }
+        }
     }
 
     refreshTable();

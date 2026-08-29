@@ -12,11 +12,28 @@
 #include <QRegularExpression>
 #include <QDirIterator>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QProcess>
 #include <QEventLoop>
+#include <QRandomGenerator>
+#include <QUrl>
+#include <QRandomGenerator>
+#include <QThread>
+#include <QCoreApplication>
+#include <QSet>
 
-Aria2cManager::Aria2cManager() : nextId(1), maxConcurrent(3), isDownloading(false), nam(new QNetworkAccessManager(this)), activeReply(nullptr) {}
+Aria2cManager::Aria2cManager() : nextId(1), maxConcurrent(3), isDownloading(false), nam(new QNetworkAccessManager(this)), activeReply(nullptr) {
+    m_token = "copper-" + QString::number(QRandomGenerator::global()->generate()) + QString::number(QRandomGenerator::global()->generate());
+    pollTimer = new QTimer(this);
+    connect(pollTimer, &QTimer::timeout, this, &Aria2cManager::poll);
+    pollTimer->setInterval(1000);
+}
+
+Aria2cManager::~Aria2cManager() {
+    shutdownDaemon();
+}
 
 Aria2cManager& Aria2cManager::instance() {
     static Aria2cManager instance;
@@ -48,6 +65,12 @@ QString Aria2cManager::getVersion() {
 void Aria2cManager::installOrUpdate() {
     if (isDownloading) {
         Logger::instance().info("aria2c installation already in progress");
+        return;
+    }
+
+    if (isInstalled()) {
+        Logger::instance().info("aria2c already installed: " + getVersion() + " (skipping download)");
+        emit installationProgress("Already installed: " + getVersion());
         return;
     }
 
@@ -281,92 +304,268 @@ bool Aria2cManager::extractAria2c(const QString& zipPath) {
 #endif
 }
 
-int Aria2cManager::addTorrent(const QString& magnetOrFile, const QString& savePath) {
+// ---------------------------------------------------------------------------
+// RPC daemon lifecycle
+// ---------------------------------------------------------------------------
+
+// Kill whatever process is currently bound to the given TCP port. This clears
+// stale/orphaned daemons (left running by a crashed or previous session) that
+// would otherwise keep port 6800 occupied and cause the new daemon to fail,
+// surfacing as "aria2.addTorrent failed: rpc error" on subsequent launches.
+// Returns true if at least one foreign process was killed.
+bool Aria2cManager::killProcessOnTcpPort(int port) {
+    bool killedAny = false;
+#ifdef Q_OS_WIN
+    QProcess netstat;
+    netstat.start("netstat", QStringList() << "-ano");
+    if (!netstat.waitForFinished(3000)) return false;
+    const QList<QByteArray> lines = netstat.readAllStandardOutput().split('\n');
+    QSet<QString> pids;
+    const QString portStr = ":" + QString::number(port);
+    for (const QByteArray& line : lines) {
+        QString l = QString::fromLocal8Bit(line).trimmed();
+        if (!l.contains(portStr)) continue;
+        QStringList parts = l.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+        if (parts.size() >= 5 && parts[parts.size() - 1].toInt() > 0) {
+            pids.insert(parts[parts.size() - 1]);
+        }
+    }
+    for (const QString& pid : pids) {
+        int pidNo = pid.toInt();
+        // Never kill our own app process or the daemon we currently manage (a
+        // concurrent startDaemonProcess call could otherwise kill the daemon we
+        // just launched while it is still binding, producing an endless
+        // "daemon exited ... restarting" loop and "aria2.addTorrent failed".
+        if (pidNo == QCoreApplication::applicationPid()) continue;
+        if (m_daemonProcess && m_daemonProcess->state() != QProcess::NotRunning &&
+            m_daemonProcess->processId() == pidNo) continue;
+        Logger::instance().warning("Killing stale process on port " + QString::number(port) + " (PID " + pid + ")");
+        QProcess taskkill;
+        taskkill.start("taskkill", QStringList() << "/F" << "/T" << "/PID" << pid);
+        taskkill.waitForFinished(3000);
+        killedAny = true;
+    }
+#endif
+    return killedAny;
+}
+
+bool Aria2cManager::startDaemonProcess() {
     if (!isInstalled()) {
-        Logger::instance().error("aria2c not installed");
-        return -1;
+        if (!ensureInstalled()) {
+            emit errorOccurred("aria2c could not be installed");
+            return false;
+        }
     }
 
-    QDir().mkpath(savePath);
-    int id = getNextId();
+    // Clear any orphaned daemon still holding the RPC port from a previous
+    // session so that the freshly launched daemon can bind successfully.
+    // After killing a listener the OS socket often lingers in TIME_WAIT, which
+    // briefly blocks rebinding port 6800 and makes the new daemon exit right
+    // away (an endless "daemon exited ... restarting" loop). If we had to kill
+    // a stale listener, wait briefly so the port is actually free to rebind.
+    bool killedStale = killProcessOnTcpPort(6800);
+    QThread::msleep(killedStale ? 1200 : 50);
 
-    Aria2cDownloadTask task;
-    task.id = id;
-    task.url = magnetOrFile;
-    task.outputPath = savePath;
-    task.process = nullptr;
-    task.isRunning = false;
-    task.downloadedBytes = 0;
-    task.totalBytes = 0;
-    task.speed = 0;
-
-    tasks[id] = task;
+    int seedTime = DatabaseManager::instance().getSetting("seedTime", "30").toInt();
+    QString seedStr = QString::number(seedTime == -1 ? 0 : (seedTime <= 0 ? -1 : seedTime));
+    int maxConc = maxConcurrent;
 
     QStringList args;
-    args << "--dir=" + savePath;
-    args << "--seed-time=0";
-    args << "--summary-interval=1";
-    args << "--console-log-level=warn";
+    args << "--enable-rpc"
+         << "--rpc-listen-all=false"
+         << "--rpc-listen-port=6800"
+         << "--rpc-secret=" + m_token
+         << "--rpc-max-request-size=20M"
+         << "--seed-time=" + seedStr
+         << "--bt-detach-seed-only=true"
+         << "--enable-dht=true"
+         << "--dht-listen-port=6881-6999"
+         << "--bt-enable-lpd=true"
+         << "--enable-peer-exchange=true"
+         << "--max-concurrent-downloads=" + QString::number(maxConc)
+         << "--console-log-level=warn"
+         << "--summary-interval=0"
+         << "--file-allocation=none";
 
-    QString trackerStr = DatabaseManager::instance().getSetting("defaultTrackers", "");
-    QStringList trackerList = trackerStr.isEmpty() ?
-        QStringList() << "udp://tracker.opentrackr.org:1337/announce" << "udp://open.stealth.si:80/announce" << "udp://tracker.torrent.eu.org:451/announce"
-        : trackerStr.split("\n", Qt::SkipEmptyParts);
-    QString trackers = trackerList.join(",");
-    if (!trackers.isEmpty()) {
-        args << "--bt-tracker=" + trackers;
+    QString defaultDir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    QDir().mkpath(defaultDir);
+    args << "--dir=" + defaultDir;
+
+    Logger::instance().info("Starting aria2c RPC daemon on port 6800");
+    m_daemonProcess = new QProcess(this);
+    connect(m_daemonProcess, &QProcess::finished, this, [this](int exitCode, QProcess::ExitStatus) {
+        Logger::instance().warning("aria2c daemon exited (code " + QString::number(exitCode) + ") stderr: " +
+            (m_daemonProcess ? QString::fromUtf8(m_daemonProcess->readAllStandardError()).trimmed() : QString("")));
+        if (m_daemonProcess) {
+            m_daemonProcess->deleteLater();
+            m_daemonProcess = nullptr;
+        }
+        m_daemonRunning = false;
+        m_daemonStarting = false;
+        emit daemonStateChanged(false);
+    });
+    m_daemonProcess->start(getAria2cPath(), args);
+    return m_daemonProcess->waitForStarted(5000) || m_daemonProcess->state() == QProcess::Running;
+}
+
+bool Aria2cManager::ensureDaemon() {
+    if (m_daemonRunning) {
+        // Trust but verify: the cached "running" flag may be stale if the
+        // daemon died, or the port may be held by an orphaned process instead.
+        QJsonObject check = rpcCall("aria2.getVersion", QJsonArray() << ("token:" + m_token), 1500);
+        if (!check.contains("__error") && check.contains("version")) return true;
+        Logger::instance().warning("aria2c daemon unresponsive despite cached state; restarting");
+        m_daemonRunning = false;
+        shutdownDaemon();
+    }
+    if (m_daemonStarting) return false;
+
+    m_daemonStarting = true;
+    if (!startDaemonProcess()) {
+        m_daemonStarting = false;
+        emit errorOccurred("Failed to start aria2c daemon");
+        return false;
     }
 
-    if (magnetOrFile.startsWith("magnet:?")) {
-        args << magnetOrFile;
-    } else if (QFile::exists(magnetOrFile)) {
-        args << magnetOrFile;
-    } else {
-        Logger::instance().error("Torrent file not found: " + magnetOrFile);
-        return -1;
+    // Wait for RPC availability
+    for (int i = 0; i < 60; i++) {
+        // If the daemon process exited during startup (e.g. it failed to bind
+        // the port before the stale holder was fully cleared), restart it once.
+        if (!m_daemonProcess) {
+            Logger::instance().warning("aria2c daemon exited during startup; restarting");
+            if (!startDaemonProcess()) {
+                m_daemonStarting = false;
+                emit errorOccurred("Failed to restart aria2c daemon");
+                return false;
+            }
+        }
+        QJsonObject r = rpcCall("aria2.getVersion", QJsonArray() << ("token:" + m_token), 1500);
+        if (!r.contains("__error") && r.contains("version")) {
+            m_daemonRunning = true;
+            m_daemonStarting = false;
+            pollTimer->start();
+            Logger::instance().info("aria2c RPC daemon ready");
+            emit daemonStateChanged(true);
+            return true;
+        }
+        QThread::msleep(500);
+        QCoreApplication::processEvents();
     }
 
-    QProcess* process = new QProcess(this);
-    task.process = process;
-    task.isRunning = true;
-    tasks[id] = task;
+    m_daemonStarting = false;
+    if (m_daemonProcess) {
+        m_daemonProcess->kill();
+        m_daemonProcess->deleteLater();
+        m_daemonProcess = nullptr;
+    }
+    emit errorOccurred("aria2c daemon did not respond");
+    return false;
+}
 
-    connect(process, &QProcess::readyReadStandardOutput, this, [this, id]() {
-        if (!tasks.contains(id)) return;
-        QByteArray data = tasks[id].process->readAllStandardOutput();
-        QStringList lines = QString::fromUtf8(data).split(QRegularExpression("[\\r\\n]"), Qt::SkipEmptyParts);
-        for (const QString& line : lines) {
-            parseProgress(line.trimmed(), id);
-        }
-    });
+bool Aria2cManager::daemonRunning() const {
+    return m_daemonRunning;
+}
 
-    connect(process, &QProcess::readyReadStandardError, this, [this, id]() {
-        if (!tasks.contains(id)) return;
-        QByteArray data = tasks[id].process->readAllStandardError();
-        QStringList lines = QString::fromUtf8(data).split(QRegularExpression("[\\r\\n]"), Qt::SkipEmptyParts);
-        for (const QString& line : lines) {
-            parseProgress(line.trimmed(), id);
-        }
-    });
+void Aria2cManager::shutdownDaemon() {
+    if (m_daemonRunning) {
+        rpcCall("aria2.shutdown", QJsonArray() << ("token:" + m_token), 1500);
+    }
+    if (m_daemonProcess) {
+        m_daemonProcess->kill();
+        m_daemonProcess->waitForFinished(1500);
+        m_daemonProcess->deleteLater();
+        m_daemonProcess = nullptr;
+    }
+    m_daemonRunning = false;
+    m_daemonStarting = false;
+    pollTimer->stop();
+    emit daemonStateChanged(false);
+}
 
-    connect(process, &QProcess::finished, this, [this, id](int exitCode, QProcess::ExitStatus) {
-        if (!tasks.contains(id)) return;
-        tasks[id].isRunning = false;
+QJsonValue Aria2cManager::rpcResult(const QString& method, const QJsonArray& params, int timeoutMs) {
+    if (!isInstalled()) return QJsonValue(QJsonValue::Undefined);
 
-        if (exitCode == 0) {
-            emit downloadFinished(id);
-        } else {
-            QString err = tasks[id].process ? QString::fromUtf8(tasks[id].process->readAllStandardError()) : "Unknown error";
-            emit downloadFailed(id, err);
-        }
+    QNetworkRequest request(QUrl("http://127.0.0.1:6800/jsonrpc"));
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
 
-        tasks[id].process->deleteLater();
-        tasks.remove(id);
-    });
+    QJsonObject req;
+    req["jsonrpc"] = "2.0";
+    req["id"] = QString::number(QRandomGenerator::global()->bounded(2000000000));
+    req["method"] = method;
+    req["params"] = params;
 
-    process->start(getAria2cPath(), args);
-    Logger::instance().info("aria2c started, id=" + QString::number(id));
-    return id;
+    QNetworkReply* reply = nam->post(request, QJsonDocument(req).toJson(QJsonDocument::Compact));
+
+    QEventLoop loop;
+    bool done = false;
+    connect(reply, &QNetworkReply::finished, &loop, [&]() { done = true; loop.quit(); });
+
+    if (timeoutMs > 0) {
+        QTimer::singleShot(timeoutMs, &loop, &QEventLoop::quit);
+    }
+    loop.exec();
+
+    if (!done) {
+        reply->abort();
+        reply->deleteLater();
+        return QJsonValue(QJsonValue::Undefined);
+    }
+
+    QByteArray data = reply->readAll();
+    reply->deleteLater();
+
+    QJsonParseError parseErr;
+    QJsonDocument doc = QJsonDocument::fromJson(data, &parseErr);
+    if (parseErr.error != QJsonParseError::NoError || !doc.isObject()) {
+        return QJsonValue(QJsonValue::Undefined);
+    }
+
+    QJsonObject obj = doc.object();
+    if (obj.contains("error")) {
+        QJsonObject errObj = obj.value("error").toObject();
+        Logger::instance().error("aria2 RPC " + method + " error: " + errObj.value("message").toString());
+        return QJsonValue(QJsonValue::Undefined);
+    }
+    return obj.value("result");
+}
+
+QJsonObject Aria2cManager::rpcCall(const QString& method, const QJsonArray& params, int timeoutMs) {
+    QJsonValue result = rpcResult(method, params, timeoutMs);
+    if (result.isUndefined() || result.isNull()) {
+        QJsonObject err;
+        err["__error"] = "rpc error";
+        return err;
+    }
+    if (result.isObject()) {
+        return result.toObject();
+    }
+    // Non-object result (string gid, etc.): wrap for compatibility.
+    QJsonObject wrapped;
+    if (result.isString()) wrapped["gid"] = result.toString();
+    return wrapped;
+}
+
+// ---------------------------------------------------------------------------
+// Downloads (RPC backed)
+// ---------------------------------------------------------------------------
+
+QString Aria2cManager::seedTimeArg() const {
+    int seedTime = DatabaseManager::instance().getSetting("seedTime", "30").toInt();
+    return QString::number(seedTime == -1 ? 0 : (seedTime <= 0 ? -1 : seedTime));
+}
+
+static QString resolveCachedTorrent(const QString& magnetOrFile, QString* torrentName) {
+    if (!magnetOrFile.startsWith("magnet:?")) return QString();
+    QRegularExpression hashRegex("btih:([A-Fa-f0-9]{40})", QRegularExpression::CaseInsensitiveOption);
+    QRegularExpressionMatch hashMatch = hashRegex.match(magnetOrFile);
+    if (!hashMatch.hasMatch()) return QString();
+    QString tmpDir = QDir::tempPath() + "/copper_torrent_meta";
+    QString saved = tmpDir + "/" + hashMatch.captured(1).toLower() + ".torrent";
+    return QFile::exists(saved) ? saved : QString();
+}
+
+int Aria2cManager::addTorrent(const QString& magnetOrFile, const QString& savePath) {
+    return addTorrentWithSelection(magnetOrFile, savePath, QVector<int>());
 }
 
 int Aria2cManager::addTorrentWithSelection(const QString& magnetOrFile, const QString& savePath, const QVector<int>& selectedIndices) {
@@ -374,6 +573,10 @@ int Aria2cManager::addTorrentWithSelection(const QString& magnetOrFile, const QS
         Logger::instance().error("aria2c not installed");
         return -1;
     }
+    if (!ensureDaemon()) {
+        Logger::instance().error("aria2c daemon unavailable");
+        return -1;
+    }
 
     QDir().mkpath(savePath);
     int id = getNextId();
@@ -383,91 +586,400 @@ int Aria2cManager::addTorrentWithSelection(const QString& magnetOrFile, const QS
     task.url = magnetOrFile;
     task.outputPath = savePath;
     task.process = nullptr;
-    task.isRunning = false;
-    task.downloadedBytes = 0;
-    task.totalBytes = 0;
-    task.speed = 0;
+    task.isRunning = true;
+    task.isTorrent = true;
 
-    tasks[id] = task;
+    QJsonObject options;
+    options["dir"] = savePath;
+    options["seed-time"] = seedTimeArg();
 
-    QStringList args;
-    args << "--dir=" + savePath;
-    args << "--seed-time=0";
-    args << "--summary-interval=1";
-    args << "--console-log-level=warn";
-
+    QString torrentName;
     QString trackerStr = DatabaseManager::instance().getSetting("defaultTrackers", "");
     QStringList trackerList = trackerStr.isEmpty() ?
         QStringList() << "udp://tracker.opentrackr.org:1337/announce" << "udp://open.stealth.si:80/announce" << "udp://tracker.torrent.eu.org:451/announce"
         : trackerStr.split("\n", Qt::SkipEmptyParts);
-    QString trackers = trackerList.join(",");
-    if (!trackers.isEmpty()) {
-        args << "--bt-tracker=" + trackers;
+    if (!trackerList.isEmpty()) {
+        options["bt-tracker"] = trackerList.join(",");
+        task.trackers = trackerList;
     }
 
     bool isMagnet = magnetOrFile.startsWith("magnet:?");
-
-    if (!selectedIndices.isEmpty()) {
-        QStringList idxStrs;
-        for (int idx : selectedIndices) {
-            idxStrs.append(QString::number(idx));
-        }
-        args << "--select-file=" + idxStrs.join(",");
-    }
+    QByteArray metainfo;
 
     if (isMagnet) {
-        args << magnetOrFile;
+        QString cached = resolveCachedTorrent(magnetOrFile, &torrentName);
+        if (!cached.isEmpty()) {
+            QFile f(cached);
+            if (f.open(QIODevice::ReadOnly)) {
+                metainfo = f.readAll();
+            }
+            Logger::instance().info("RPC addTorrent: using cached metadata " + cached);
+        } else {
+            Logger::instance().info("RPC addUri: bare magnet (fetching metadata via magnet)");
+        }
     } else if (QFile::exists(magnetOrFile)) {
-        args << magnetOrFile;
+        QFile f(magnetOrFile);
+        if (f.open(QIODevice::ReadOnly)) {
+            metainfo = f.readAll();
+        }
+        torrentName = QFileInfo(magnetOrFile).completeBaseName();
     } else {
         Logger::instance().error("Torrent file not found: " + magnetOrFile);
         return -1;
     }
 
-    Logger::instance().info("Starting torrent download: " + magnetOrFile.left(80) + " selected=" + QString::number(selectedIndices.size()) + " files, save=" + savePath);
+    if (!selectedIndices.isEmpty()) {
+        QStringList zeroBased;
+        for (int idx : selectedIndices) {
+            zeroBased.append(QString::number(idx - 1));  // aria2 bt-select-file is 0-based
+        }
+        options["bt-select-file"] = zeroBased.join(",");
+    }
 
-    QProcess* process = new QProcess(this);
-    task.process = process;
-    task.isRunning = true;
+    // aria2.addTorrent requires actual base64 bencoded metainfo; a bare magnet
+    // link cannot be decoded as metainfo (aria2 rejects it with "Bencode
+    // decoding failed"). For magnets without cached metainfo, use aria2.addUri,
+    // which handles magnet links natively.
+    bool isBareMagnet = isMagnet && metainfo.isEmpty();
+
+    if (isBareMagnet) {
+        QJsonArray params;
+        params.append("token:" + m_token);
+        params.append(QJsonArray() << magnetOrFile);
+        params.append(options);
+
+        QJsonObject res = rpcCall("aria2.addUri", params);
+        if (res.contains("__error")) {
+            Logger::instance().error("aria2.addUri failed: " + res.value("__error").toString());
+            return -1;
+        }
+
+        task.trackers = trackerList;
+        QString gid = res.value("gid").toString();
+        if (gid.isEmpty()) {
+            Logger::instance().error("aria2.addUri returned no gid");
+            return -1;
+        }
+        task.gid = gid;
+        tasks[id] = task;
+        taskByGid[gid] = id;
+
+        Logger::instance().info("aria2c RPC magnet started, id=" + QString::number(id) + ", gid=" + gid + ", save=" + savePath);
+        return id;
+    }
+
+    QJsonArray params;
+    params.append("token:" + m_token);
+    params.append(QString::fromLatin1(metainfo.toBase64()));
+    if (isMagnet) {
+        params.append(QJsonArray() << magnetOrFile);
+    } else {
+        params.append(QJsonArray());
+    }
+    params.append(options);
+
+    QJsonObject res = rpcCall("aria2.addTorrent", params);
+    if (res.contains("__error")) {
+        Logger::instance().error("aria2.addTorrent failed: " + res.value("__error").toString());
+        return -1;
+    }
+
+    QString gid = res.value("gid").toString();
+    if (gid.isEmpty()) {
+        Logger::instance().error("aria2.addTorrent returned no gid");
+        return -1;
+    }
+
+    task.gid = gid;
+    if (!torrentName.isEmpty()) task.torrentName = torrentName;
     tasks[id] = task;
+    taskByGid[gid] = id;
 
-    connect(process, &QProcess::readyReadStandardOutput, this, [this, id]() {
-        if (!tasks.contains(id)) return;
-        QByteArray data = tasks[id].process->readAllStandardOutput();
-        QStringList lines = QString::fromUtf8(data).split(QRegularExpression("[\\r\\n]"), Qt::SkipEmptyParts);
-        for (const QString& line : lines) {
-            parseProgress(line.trimmed(), id);
-        }
-    });
-
-    connect(process, &QProcess::readyReadStandardError, this, [this, id]() {
-        if (!tasks.contains(id)) return;
-        QByteArray data = tasks[id].process->readAllStandardError();
-        QStringList lines = QString::fromUtf8(data).split(QRegularExpression("[\\r\\n]"), Qt::SkipEmptyParts);
-        for (const QString& line : lines) {
-            parseProgress(line.trimmed(), id);
-        }
-    });
-
-    connect(process, &QProcess::finished, this, [this, id](int exitCode, QProcess::ExitStatus) {
-        if (!tasks.contains(id)) return;
-        tasks[id].isRunning = false;
-
-        if (exitCode == 0) {
-            emit downloadFinished(id);
-        } else {
-            QString err = tasks[id].process ? QString::fromUtf8(tasks[id].process->readAllStandardError()) : "Unknown error";
-            emit downloadFailed(id, err);
-        }
-
-        tasks[id].process->deleteLater();
-        tasks.remove(id);
-    });
-
-    process->start(getAria2cPath(), args);
-    Logger::instance().info("aria2c torrent started, id=" + QString::number(id) + ", selected=" + QString::number(selectedIndices.size()) + ", save=" + savePath);
+    Logger::instance().info("aria2c RPC torrent started, id=" + QString::number(id) + ", gid=" + gid + ", files=" + QString::number(selectedIndices.size()) + ", save=" + savePath);
     return id;
 }
+
+// ---------------------------------------------------------------------------
+// Status polling
+// ---------------------------------------------------------------------------
+
+void Aria2cManager::poll() {
+    if (tasks.isEmpty()) return;
+    if (!m_daemonRunning) {
+        // attempt to restart once
+        if (!m_daemonStarting) {
+            m_daemonStarting = true;
+            bool ok = startDaemonProcess();
+            m_daemonStarting = false;
+            if (ok) m_daemonRunning = true;
+        }
+        return;
+    }
+
+    pollTick++;
+
+    QVector<int> stale;
+    for (int id : tasks.keys()) {
+        const Aria2cDownloadTask& t = tasks[id];
+        if (t.gid.isEmpty()) continue;
+
+        QJsonArray fields;
+        const QStringList keys = {
+            "gid","status","totalLength","completedLength","downloadSpeed","uploadSpeed",
+            "connections","numSeeders","seeder","uploadLength","infoHash","dir","errorMessage","announceList"
+        };
+        for (const QString& k : keys) fields.append(k);
+
+        QJsonObject res = rpcCall("aria2.tellStatus", QJsonArray() << ("token:" + m_token) << t.gid << fields, 3000);
+        if (res.contains("__error")) {
+            Logger::instance().warning("tellStatus[" + QString::number(id) + "] error: " + res.value("__error").toString());
+            continue;
+        }
+
+        parseTorrentStatus(id, res);
+
+        if (pollTick % 3 == 0) {
+            parsePeers(id);
+        }
+        emit torrentStateUpdated(id);
+    }
+
+    for (int id : stale) {
+        tasks.remove(id);
+    }
+}
+
+void Aria2cManager::parseTorrentStatus(int id, const QJsonObject& status) {
+    if (!tasks.contains(id)) return;
+    Aria2cDownloadTask& task = tasks[id];
+
+    QString st = status.value("status").toString();
+    task.totalBytes = status.value("totalLength").toString().toLongLong();
+    task.downloadedBytes = status.value("completedLength").toString().toLongLong();
+    task.speed = status.value("downloadSpeed").toString().toLongLong();
+    task.uploadSpeed = status.value("uploadSpeed").toString().toLongLong();
+    task.uploadedBytes = status.value("uploadLength").toString().toLongLong();
+    task.connectedPeers = status.value("connections").toInt();
+    task.seeds = status.value("numSeeders").toInt();
+    task.infoHash = status.value("infoHash").toString();
+
+    if (status.contains("announceList")) {
+        QStringList trackerUrls;
+        QJsonArray list = status.value("announceList").toArray();
+        for (const QJsonValue& tierVal : list) {
+            QJsonArray tier = tierVal.toArray();
+            for (const QJsonValue& entry : tier) {
+                QJsonArray pair = entry.toArray();
+                if (pair.size() >= 2) {
+                    trackerUrls.append(pair.at(0).toString());
+                }
+            }
+        }
+        if (!trackerUrls.isEmpty()) task.trackers = trackerUrls;
+    }
+
+    if (st == "complete" && !task.finishedEmitted) {
+        task.finishedEmitted = true;
+        task.isRunning = false;
+        Logger::instance().info("Torrent download complete: id=" + QString::number(id) + ", gid=" + task.gid);
+        emit downloadProgress(id, task.totalBytes, task.totalBytes, 0);
+        emit downloadFinished(id);
+    } else if (st == "error" && !task.failedEmitted) {
+        task.failedEmitted = true;
+        task.isRunning = false;
+        QString err = status.value("errorMessage").toString();
+        if (err.isEmpty()) err = "aria2 error";
+        Logger::instance().error("Torrent download failed: id=" + QString::number(id) + " - " + err);
+        emit downloadFailed(id, err);
+    } else if (st == "removed") {
+        if (!task.finishedEmitted && !task.failedEmitted) {
+            task.finishedEmitted = true;
+            task.isRunning = false;
+        }
+    }
+
+    task.isRunning = (st == "active" || st == "waiting" || st == "complete");
+    emit downloadProgress(id, task.downloadedBytes, task.totalBytes, task.speed);
+}
+
+void Aria2cManager::parsePeers(int id) {
+    if (!tasks.contains(id)) return;
+    Aria2cDownloadTask& task = tasks[id];
+    if (task.gid.isEmpty()) return;
+
+    QJsonObject res = rpcCall("aria2.getPeers", QJsonArray() << ("token:" + m_token) << task.gid, 3000);
+    if (res.contains("__error")) return;
+
+    QJsonArray peersArr = res.value("peers").toArray();
+    QVector<PeerInfo> peers;
+    int leecherCount = 0;
+    for (const QJsonValue& val : peersArr) {
+        QJsonObject p = val.toObject();
+        PeerInfo pi;
+        pi.ip = p.value("ip").toString();
+        pi.port = p.value("port").toInt();
+        pi.seeder = p.value("seeder").toString() == "true";
+        pi.amChoking = p.value("amChoking").toString() == "true";
+        pi.peerChoking = p.value("peerChoking").toString() == "true";
+        pi.downloadSpeed = p.value("downloadSpeed").toString().toLongLong();
+        pi.uploadSpeed = p.value("uploadSpeed").toString().toLongLong();
+        pi.peerId = p.value("peerId").toString();
+        pi.connectedVia = p.value("connectedVia").toString();
+        if (!pi.seeder) leecherCount++;
+        peers.append(pi);
+    }
+    task.peers = peers;
+    task.leechers = leecherCount;
+    if (task.seeds <= 0) {
+        int seedCount = 0;
+        for (const PeerInfo& p : peers) if (p.seeder) seedCount++;
+        task.seeds = seedCount;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Control
+// ---------------------------------------------------------------------------
+
+void Aria2cManager::pauseDownload(int id) {
+    if (!tasks.contains(id)) return;
+    if (tasks[id].gid.isEmpty()) return;
+    rpcCall("aria2.pause", QJsonArray() << ("token:" + m_token) << tasks[id].gid);
+    tasks[id].isRunning = false;
+    Logger::instance().info("Torrent paused: id=" + QString::number(id));
+}
+
+void Aria2cManager::resumeDownload(int id) {
+    if (!tasks.contains(id)) return;
+    if (tasks[id].gid.isEmpty()) return;
+    rpcCall("aria2.unpause", QJsonArray() << ("token:" + m_token) << tasks[id].gid);
+    tasks[id].isRunning = true;
+    Logger::instance().info("Torrent resumed: id=" + QString::number(id));
+}
+
+void Aria2cManager::removeDownload(int id) {
+    if (!tasks.contains(id)) return;
+    if (!tasks[id].gid.isEmpty()) {
+        rpcCall("aria2.forceRemove", QJsonArray() << ("token:" + m_token) << tasks[id].gid);
+        taskByGid.remove(tasks[id].gid);
+    }
+    tasks.remove(id);
+    Logger::instance().info("Torrent removed: id=" + QString::number(id));
+}
+
+bool Aria2cManager::isRunning(int id) const {
+    return tasks.contains(id) && tasks[id].isRunning;
+}
+
+int Aria2cManager::getConnectedPeers(int id) const {
+    return tasks.contains(id) ? tasks[id].connectedPeers : 0;
+}
+
+int Aria2cManager::getLeechers(int id) const {
+    return tasks.contains(id) ? tasks[id].leechers : 0;
+}
+
+int Aria2cManager::getSeeds(int id) const {
+    return tasks.contains(id) ? tasks[id].seeds : 0;
+}
+
+qint64 Aria2cManager::getUploadSpeed(int id) const {
+    return tasks.contains(id) ? tasks[id].uploadSpeed : 0;
+}
+
+qint64 Aria2cManager::getUploadedBytes(int id) const {
+    return tasks.contains(id) ? tasks[id].uploadedBytes : 0;
+}
+
+qint64 Aria2cManager::getTotalBytes(int id) const {
+    return tasks.contains(id) ? tasks[id].totalBytes : 0;
+}
+
+qint64 Aria2cManager::getDownloadedBytes(int id) const {
+    return tasks.contains(id) ? tasks[id].downloadedBytes : 0;
+}
+
+qint64 Aria2cManager::getSpeed(int id) const {
+    return tasks.contains(id) ? tasks[id].speed : 0;
+}
+
+QString Aria2cManager::getInfoHash(int id) const {
+    return tasks.contains(id) ? tasks[id].infoHash : QString();
+}
+
+QVector<PeerInfo> Aria2cManager::getPeers(int id) const {
+    return tasks.contains(id) ? tasks[id].peers : QVector<PeerInfo>();
+}
+
+QStringList Aria2cManager::getTrackers(int id) const {
+    return tasks.contains(id) ? tasks[id].trackers : QStringList();
+}
+
+QStringList Aria2cManager::getTrackerList(int id) const {
+    return tasks.contains(id) ? tasks[id].trackers : QStringList();
+}
+
+QString Aria2cManager::getGid(int id) const {
+    return tasks.contains(id) ? tasks[id].gid : QString();
+}
+
+void Aria2cManager::addTrackers(int torrentId, const QStringList& trackers) {
+    for (const QString& t : trackers) {
+        addTrackerToTorrent(torrentId, t);
+    }
+}
+
+void Aria2cManager::addTrackerToTorrent(int torrentId, const QString& tracker) {
+    if (!tasks.contains(torrentId) || tasks[torrentId].gid.isEmpty()) return;
+    if (tracker.trimmed().isEmpty()) return;
+    QJsonObject res = rpcCall("aria2.changeUri", QJsonArray()
+        << ("token:" + m_token) << tasks[torrentId].gid
+        << QJsonArray() << (QJsonArray() << tracker.trimmed()));
+    if (!res.contains("__error")) {
+        Logger::instance().info("Tracker added to torrent " + QString::number(torrentId) + ": " + tracker.trimmed());
+    } else {
+        Logger::instance().error("Failed to add tracker: " + res.value("__error").toString());
+    }
+}
+
+void Aria2cManager::removeTrackerFromTorrent(int torrentId, const QString& tracker) {
+    if (!tasks.contains(torrentId) || tasks[torrentId].gid.isEmpty()) return;
+    QStringList cur = tasks[torrentId].trackers;
+    for (int i = 0; i < cur.size(); i++) {
+        if (cur[i] == tracker) {
+            QJsonArray delUris;
+            delUris.append(tracker);
+            QJsonArray positions;
+            positions.append(i);
+            rpcCall("aria2.changeUri", QJsonArray()
+                << ("token:" + m_token) << tasks[torrentId].gid
+                << delUris << QJsonArray() << positions);
+            Logger::instance().info("Tracker removed from torrent " + QString::number(torrentId) + ": " + tracker);
+            return;
+        }
+    }
+}
+
+void Aria2cManager::seedTorrent(int torrentId, int seedTimeMinutes) {
+    if (!tasks.contains(torrentId) || tasks[torrentId].gid.isEmpty()) return;
+    QString value = QString::number(seedTimeMinutes == -1 ? 0 : (seedTimeMinutes <= 0 ? -1 : seedTimeMinutes));
+    rpcCall("aria2.changeOption", QJsonArray() << ("token:" + m_token) << tasks[torrentId].gid << QJsonObject{{"seed-time", value}});
+    Logger::instance().info("Torrent seed-time set: id=" + QString::number(torrentId) + " -> " + value);
+}
+
+void Aria2cManager::cancelSeeding(int torrentId) {
+    if (!tasks.contains(torrentId) || tasks[torrentId].gid.isEmpty()) return;
+    rpcCall("aria2.forcePause", QJsonArray() << ("token:" + m_token) << tasks[torrentId].gid);
+    Logger::instance().info("Torrent seeding cancelled: id=" + QString::number(torrentId));
+}
+
+int Aria2cManager::getNextId() {
+    return nextId++;
+}
+
+// ---------------------------------------------------------------------------
+// File list fetch (kept one-shot, used by dialog)
+// ---------------------------------------------------------------------------
 
 void Aria2cManager::fetchTorrentFiles(const QString& magnetOrFile, std::function<void(const QVector<PlaylistEntry>&, const TorrentInfo&)> callback) {
     if (!isInstalled()) {
@@ -493,7 +1005,7 @@ void Aria2cManager::fetchTorrentFiles(const QString& magnetOrFile, std::function
     }
 }
 
-void Aria2cManager::fetchMagnetMetadata(const QString& magnet, std::function<void(const QVector<PlaylistEntry>&, const TorrentInfo&)> callback) {
+void Aria2cManager::fetchMagnetMetadata(const QString& magnet, std::function<void(const QVector<PlaylistEntry>&, const TorrentInfo&)> callback, int attempt) {
     QString tmpDir = QDir::tempPath() + "/copper_torrent_meta";
     QDir().mkpath(tmpDir);
 
@@ -509,7 +1021,8 @@ void Aria2cManager::fetchMagnetMetadata(const QString& magnet, std::function<voi
 
     Logger::instance().info("Fetching magnet metadata...");
 
-    connect(process, &QProcess::finished, this, [this, process, callback, tmpDir, magnet](int exitCode, QProcess::ExitStatus) {
+    connect(process, static_cast<void(QProcess::*)(int, QProcess::ExitStatus)>(&QProcess::finished), this,
+        [this, process, callback, tmpDir, magnet, attempt](int exitCode, QProcess::ExitStatus) {
         QByteArray allOutput = process->readAllStandardOutput() + process->readAllStandardError();
         QString data = QString::fromUtf8(allOutput);
         Logger::instance().info("Magnet metadata fetch output:\n" + data.left(3000));
@@ -530,6 +1043,11 @@ void Aria2cManager::fetchMagnetMetadata(const QString& magnet, std::function<voi
             info.name = QUrl::fromPercentEncoding(dnMatch.captured(1).toUtf8());
         }
 
+        if (exitCode != 0 && attempt < 1) {
+            // retry once
+            fetchMagnetMetadata(magnet, callback, attempt + 1);
+            return;
+        }
         if (exitCode != 0) {
             Logger::instance().error("Failed to fetch magnet metadata");
             callback(QVector<PlaylistEntry>(), info);
@@ -573,7 +1091,8 @@ void Aria2cManager::fetchTorrentFileList(const QString& torrentPath, std::functi
     args << "--summary-interval=0";
     args << torrentPath;
 
-    connect(process, &QProcess::finished, this, [this, process, callback](int exitCode, QProcess::ExitStatus) {
+    connect(process, static_cast<void(QProcess::*)(int, QProcess::ExitStatus)>(&QProcess::finished), this,
+        [this, process, callback](int exitCode, QProcess::ExitStatus) {
         QByteArray output = process->readAllStandardOutput();
         QByteArray errOutput = process->readAllStandardError();
         QByteArray allOutput = output + errOutput;
@@ -669,151 +1188,10 @@ void Aria2cManager::fetchTorrentFileList(const QString& torrentPath, std::functi
             }
         }
 
-        if (entries.isEmpty()) {
-            Logger::instance().warning("Could not parse file list from aria2c output, using fallback parsing");
-            for (const QString& line : lines) {
-                QString trimmed = line.trimmed();
-                if (trimmed.isEmpty()) continue;
-
-                QRegularExpression fallbackRegex("^(\\d+)\\|(.+)$");
-                QRegularExpressionMatch fallbackMatch = fallbackRegex.match(trimmed);
-                if (fallbackMatch.hasMatch()) {
-                    int idx = fallbackMatch.captured(1).toInt();
-                    QString path = fallbackMatch.captured(2).trimmed();
-                    QString name = QFileInfo(path).fileName();
-                    if (!name.isEmpty()) {
-                        PlaylistEntry entry;
-                        entry.index = idx;
-                        entry.title = name;
-                        entry.fileSize = "Unknown";
-                        entry.selected = true;
-                        entries.append(entry);
-                    }
-                }
-            }
-        }
-
         info.fileCount = entries.size();
         Logger::instance().info("Parsed " + QString::number(entries.size()) + " file(s) from torrent, name=" + info.name);
         callback(entries, info);
     });
 
     process->start(getAria2cPath(), args);
-}
-
-void Aria2cManager::parseProgress(const QString& line, int id) {
-    if (!tasks.contains(id)) return;
-    if (line.contains('#') || line.contains('%') || line.contains("DL:")) {
-        Logger::instance().info("aria2c[" + QString::number(id) + "]: " + line);
-    }
-
-    QRegularExpression progressRegex("\\((\\d+)%\\)");
-    QRegularExpressionMatch match = progressRegex.match(line);
-
-    if (match.hasMatch()) {
-        double percent = match.captured(1).toDouble();
-
-        QRegularExpression sizeRegex("([\\d.]+)(B|KiB|MiB|GiB|TiB)/([\\d.]+)(B|KiB|MiB|GiB|TiB)");
-        QRegularExpressionMatch sizeMatch = sizeRegex.match(line);
-        if (sizeMatch.hasMatch()) {
-            auto parseSize = [](const QString& val, const QString& unit) -> qint64 {
-                double num = val.toDouble();
-                if (unit == "B") return (qint64)num;
-                if (unit == "KiB") return (qint64)(num * 1024);
-                if (unit == "MiB") return (qint64)(num * 1024 * 1024);
-                if (unit == "GiB") return (qint64)(num * 1024 * 1024 * 1024);
-                if (unit == "TiB") return (qint64)(num * 1024.0 * 1024 * 1024 * 1024);
-                return (qint64)num;
-            };
-            qint64 downloaded = parseSize(sizeMatch.captured(1), sizeMatch.captured(2));
-            qint64 total = parseSize(sizeMatch.captured(3), sizeMatch.captured(4));
-            tasks[id].downloadedBytes = downloaded;
-            tasks[id].totalBytes = total;
-            emit downloadProgress(id, downloaded, total, tasks[id].speed);
-        } else {
-            qint64 totalBytes = tasks[id].totalBytes;
-            qint64 downloadedBytes = (qint64)((percent / 100.0) * totalBytes);
-            tasks[id].downloadedBytes = downloadedBytes;
-            emit downloadProgress(id, downloadedBytes, totalBytes, tasks[id].speed);
-        }
-    }
-
-    QRegularExpression speedRegex("DL:([\\d.]+)(B|KiB|MiB|GiB)/s");
-    QRegularExpressionMatch speedMatch = speedRegex.match(line);
-    if (speedMatch.hasMatch()) {
-        double spd = speedMatch.captured(1).toDouble();
-        QString unit = speedMatch.captured(2);
-
-        if (unit == "KiB") tasks[id].speed = (qint64)(spd * 1024);
-        else if (unit == "MiB") tasks[id].speed = (qint64)(spd * 1024 * 1024);
-        else if (unit == "GiB") tasks[id].speed = (qint64)(spd * 1024 * 1024 * 1024);
-        else tasks[id].speed = (qint64)spd;
-    }
-
-    QRegularExpression cnRegex("CN:(\\d+)");
-    QRegularExpressionMatch cnMatch = cnRegex.match(line);
-    if (cnMatch.hasMatch()) {
-        tasks[id].connectedPeers = cnMatch.captured(1).toInt();
-    }
-
-    QRegularExpression sdRegex("SD:(\\d+)");
-    QRegularExpressionMatch sdMatch = sdRegex.match(line);
-    if (sdMatch.hasMatch()) {
-        tasks[id].seeds = sdMatch.captured(1).toInt();
-    }
-}
-
-int Aria2cManager::getNextId() {
-    return nextId++;
-}
-
-void Aria2cManager::pauseDownload(int id) {
-    if (!tasks.contains(id)) return;
-    if (tasks[id].process && tasks[id].isRunning) {
-#ifdef PLATFORM_WINDOWS
-        QProcess::execute("powershell", QStringList() << "-Command" << "(Get-Process -Id " + QString::number(tasks[id].process->processId()) + ").Suspend()");
-#else
-        kill(tasks[id].process->processId(), SIGSTOP);
-#endif
-        tasks[id].isRunning = false;
-        Logger::instance().info("aria2c download paused: " + QString::number(id));
-    }
-}
-
-void Aria2cManager::resumeDownload(int id) {
-    if (!tasks.contains(id)) return;
-    if (tasks[id].process && !tasks[id].isRunning) {
-#ifdef PLATFORM_WINDOWS
-        QProcess::execute("powershell", QStringList() << "-Command" << "(Get-Process -Id " + QString::number(tasks[id].process->processId()) + ").Resume()");
-#else
-        kill(tasks[id].process->processId(), SIGCONT);
-#endif
-        tasks[id].isRunning = true;
-        Logger::instance().info("aria2c download resumed: " + QString::number(id));
-    }
-}
-
-void Aria2cManager::removeDownload(int id) {
-    if (!tasks.contains(id)) return;
-    if (tasks[id].process) {
-        tasks[id].process->kill();
-        tasks[id].process->deleteLater();
-    }
-    tasks.remove(id);
-}
-
-void Aria2cManager::addTrackers(int torrentId, const QStringList& trackers) {
-    Logger::instance().info("Adding trackers to torrent " + QString::number(torrentId) + ": " + QString::number(trackers.size()) + " trackers");
-}
-
-bool Aria2cManager::isRunning(int id) const {
-    return tasks.contains(id) && tasks[id].isRunning;
-}
-
-int Aria2cManager::getConnectedPeers(int id) const {
-    return tasks.contains(id) ? tasks[id].connectedPeers : 0;
-}
-
-int Aria2cManager::getSeeds(int id) const {
-    return tasks.contains(id) ? tasks[id].seeds : 0;
 }

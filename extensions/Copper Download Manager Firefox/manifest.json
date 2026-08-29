@@ -1,25 +1,55 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "name": "Copper Download Manager",
-  "version": "2.0.0",
-  "description": "Powerful download interceptor — send downloads, detect media, bulk download, and more with Copper Download Manager",
-  "permissions": ["downloads", "storage", "notifications", "contextMenus", "activeTab", "tabs", "http://localhost:*/*"],
+  "version": "3.0.0",
+  "description": "Send downloads, detect media, bulk download and more with Copper Download Manager via the copper:// download scheme",
+  "permissions": [
+    "downloads",
+    "storage",
+    "notifications",
+    "contextMenus",
+    "activeTab",
+    "tabs",
+    "scripting",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
-    "scripts": ["background.js"],
-    "persistent": false
+    "scripts": ["background.js"]
   },
-  "browser_action": {
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["copper-content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "action": {
     "default_popup": "popup.html",
     "default_icon": {
       "128": "icons/icon128.png"
     }
   },
-  "web_accessible_resources": ["icons/*.png"],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*.png"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "browser_specific_settings": {
     "gecko": {
       "id": "copper-download-manager@copper",
-      "strict_min_version": "59.0"
+      "strict_min_version": "109.0",
+      "data_collection_permissions": {
+        "required": ["none"],
+        "optional": ["websiteContent","websiteActivity"]
+      }
+
     }
+    
   },
   "icons": {
     "16": "icons/icon16.png",

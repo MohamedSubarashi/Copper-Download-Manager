@@ -5,6 +5,7 @@
 #include "utils/FfmpegManager.h"
 #include "utils/Aria2cManager.h"
 #include "utils/DefaultHandler.h"
+#include "utils/UpdateManager.h"
 #include "db/DatabaseManager.h"
 #include "core/DownloadManager.h"
 #include <QVBoxLayout>
@@ -23,6 +24,7 @@
 #include <QSpinBox>
 #include <QCoreApplication>
 #include <QSettings>
+#include <QProcess>
 
 SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     setWindowTitle("Settings");
@@ -164,6 +166,21 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     QPushButton* updateAria2cBtn = new QPushButton("Check & Update aria2c");
     connect(updateAria2cBtn, &QPushButton::clicked, this, &SettingsDialog::onUpdateAria2c);
     aria2cLayout->addWidget(updateAria2cBtn);
+
+    QHBoxLayout* seedTimeRow = new QHBoxLayout();
+    seedTimeRow->addWidget(new QLabel("Default seed time:"));
+    seedTimeCombo = new QComboBox();
+    seedTimeCombo->addItem("No seeding", -1);
+    seedTimeCombo->addItem("30 minutes", 30);
+    seedTimeCombo->addItem("1 hour", 60);
+    seedTimeCombo->addItem("2 hours", 120);
+    seedTimeCombo->addItem("Seed forever", 0);
+    int curSeed = DatabaseManager::instance().getSetting("seedTime", "30").toInt();
+    int seedIdx = seedTimeCombo->findData(curSeed);
+    if (seedIdx >= 0) seedTimeCombo->setCurrentIndex(seedIdx);
+    seedTimeRow->addWidget(seedTimeCombo);
+    aria2cLayout->addLayout(seedTimeRow);
+
     toolsLayout->addWidget(aria2cGroup);
 
     if (Aria2cManager::instance().isInstalled()) {
@@ -185,7 +202,7 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     QPlainTextEdit* licensesText = new QPlainTextEdit();
     licensesText->setReadOnly(true);
     licensesText->setPlainText(
-        "COPPER DOWNLOAD MANAGER v0.1.5\n"
+        "COPPER DOWNLOAD MANAGER v0.2.0\n"
         "Third-Party Software Notices\n\n"
         "This product includes software developed by third parties.\n\n"
         "--------------------------------------------------\n"
@@ -259,6 +276,22 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     // System Tab
     QWidget* systemTab = new QWidget();
     QVBoxLayout* systemLayout = new QVBoxLayout(systemTab);
+
+    QGroupBox* updateGroup = new QGroupBox("Updates");
+    QVBoxLayout* updateBoxLayout = new QVBoxLayout(updateGroup);
+    QLabel* updateInfoLabel = new QLabel("Current version: " + QCoreApplication::applicationVersion());
+    updateBoxLayout->addWidget(updateInfoLabel);
+    QPushButton* checkUpdateBtn = new QPushButton("Check for Updates...");
+    connect(checkUpdateBtn, &QPushButton::clicked, this, &SettingsDialog::onCheckForUpdates);
+    connect(&UpdateManager::instance(), &UpdateManager::updateAvailable, this, &SettingsDialog::onUpdateReady);
+    connect(&UpdateManager::instance(), &UpdateManager::noUpdateAvailable, this, [this]() {
+        QMessageBox::information(this, "No Updates", "You are running the latest version of Copper Download Manager.");
+    });
+    connect(&UpdateManager::instance(), &UpdateManager::downloadFinished, this, &SettingsDialog::onUpdateDownloaded);
+    connect(&UpdateManager::instance(), &UpdateManager::downloadFailed, this, &SettingsDialog::onUpdateMessage);
+    connect(&UpdateManager::instance(), &UpdateManager::errorOccurred, this, &SettingsDialog::onUpdateMessage);
+    updateBoxLayout->addWidget(checkUpdateBtn);
+    systemLayout->addWidget(updateGroup);
 
     QGroupBox* handlerGroup = new QGroupBox("Default Downloader");
     QVBoxLayout* handlerBoxLayout = new QVBoxLayout(handlerGroup);
@@ -353,6 +386,38 @@ void SettingsDialog::onUpdateAria2c() {
     Aria2cManager::instance().installOrUpdate();
 }
 
+void SettingsDialog::onCheckForUpdates() {
+    Logger::instance().info("Checking for updates...");
+    UpdateManager::instance().checkForUpdates(false);
+}
+
+void SettingsDialog::onUpdateReady(const QString& version) {
+    QString msg = "A new version of Copper Download Manager is available:\n\n"
+                  "Current version: " + QCoreApplication::applicationVersion() + "\n"
+                  "Latest version: " + version + "\n\n"
+                  "Do you want to download and install it now?";
+    QMessageBox::StandardButton reply = QMessageBox::question(this, "Update Available", msg,
+        QMessageBox::Yes | QMessageBox::No);
+    if (reply == QMessageBox::Yes) {
+        UpdateManager::instance().downloadAndInstall();
+    }
+}
+
+void SettingsDialog::onUpdateDownloaded() {
+    QString installerPath = UpdateManager::instance().installerPathOrEmpty();
+    QMessageBox::StandardButton reply = QMessageBox::question(this, "Update Downloaded",
+        "The update has been downloaded. Restart Copper Download Manager to install the update?",
+        QMessageBox::Yes | QMessageBox::No);
+    if (reply == QMessageBox::Yes) {
+        qApp->quit();
+        QProcess::startDetached(installerPath);
+    }
+}
+
+void SettingsDialog::onUpdateMessage(const QString& error) {
+    QMessageBox::warning(this, "Update", error);
+}
+
 void SettingsDialog::onClearDefaultTrackers() {
     defaultTrackerEdit->clear();
 }
@@ -395,6 +460,7 @@ void SettingsDialog::onSave() {
     DatabaseManager::instance().saveSetting("chunks", chunkCombo->currentText());
     DatabaseManager::instance().saveSetting("defaultTrackers", defaultTrackerEdit->toPlainText());
     DatabaseManager::instance().saveSetting("speedLimit", QString::number(speedLimitSpin->value()));
+    DatabaseManager::instance().saveSetting("seedTime", QString::number(seedTimeCombo->currentData().toInt()));
 
     qint64 speedLimit = (qint64)speedLimitSpin->value() * 1024;
     DownloadManager::instance().setSpeedLimit(speedLimit);

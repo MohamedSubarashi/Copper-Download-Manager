@@ -3,6 +3,8 @@
 #include "utils/ThemeManager.h"
 #include "utils/Logger.h"
 #include "utils/DefaultHandler.h"
+#include "utils/CopperLink.h"
+#include "utils/Aria2cManager.h"
 #include "db/DatabaseManager.h"
 #include "core/LocalServer.h"
 #include "core/DownloadManager.h"
@@ -15,6 +17,19 @@
 #include <QTcpSocket>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPair>
+
+static bool isRunningInstance() {
+    QTcpSocket socket;
+    socket.connectToHost("127.0.0.1", 24680);
+    if (!socket.waitForConnected(2000)) return false;
+    socket.write("GET /api/ping HTTP/1.1\r\nHost: 127.0.0.1:24680\r\nConnection: close\r\n\r\n");
+    socket.waitForBytesWritten(2000);
+    socket.waitForReadyRead(2000);
+    QByteArray response = socket.readAll();
+    socket.close();
+    return response.contains("200 OK");
+}
 
 static bool sendToRunningInstance(const QString& arg) {
     QTcpSocket socket;
@@ -40,10 +55,33 @@ static bool sendToRunningInstance(const QString& arg) {
     return true;
 }
 
+static bool sendShowToRunningInstance() {
+    QTcpSocket socket;
+    socket.connectToHost("127.0.0.1", 24680);
+    if (!socket.waitForConnected(2000)) return false;
+
+    QJsonObject obj;
+    obj["argument"] = "show";
+    QByteArray body = QJsonDocument(obj).toJson(QJsonDocument::Compact);
+
+    QByteArray request = "POST /api/forward HTTP/1.1\r\n"
+                         "Host: 127.0.0.1:24680\r\n"
+                         "Content-Type: application/json\r\n"
+                         "Content-Length: " + QByteArray::number(body.size()) + "\r\n"
+                         "Connection: close\r\n"
+                         "\r\n" + body;
+
+    socket.write(request);
+    socket.waitForBytesWritten(3000);
+    socket.waitForReadyRead(3000);
+    socket.close();
+    return true;
+}
+
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("Copper Download Manager");
-    app.setApplicationVersion("0.1.5");
+    app.setApplicationVersion("0.2.5");
     app.setOrganizationName("Copper");
 
     Logger::instance().info("========================================");
@@ -78,18 +116,23 @@ int main(int argc, char* argv[]) {
         forwardArgs.append(arg);
     }
 
-    if (hasUrlArg) {
-        bool forwarded = false;
-        for (const QString& arg : forwardArgs) {
-            if (sendToRunningInstance(arg)) {
-                forwarded = true;
-                Logger::instance().info("Forwarded to running instance: " + arg.left(80));
+    if (isRunningInstance()) {
+        if (hasUrlArg) {
+            bool forwarded = false;
+            for (const QString& arg : forwardArgs) {
+                if (sendToRunningInstance(arg)) {
+                    forwarded = true;
+                    Logger::instance().info("Forwarded to running instance: " + arg.left(80));
+                }
             }
+            if (!forwarded) {
+                Logger::instance().info("Forwarded arguments to existing instance, exiting");
+            }
+        } else {
+            sendShowToRunningInstance();
+            Logger::instance().info("Instance already running, activating existing window, exiting");
         }
-        if (forwarded) {
-            Logger::instance().info("Arguments forwarded to existing instance, exiting");
-            return 0;
-        }
+        return 0;
     }
 
     int port = DatabaseManager::instance().getSetting("localServerPort", "24680").toInt();
@@ -102,6 +145,7 @@ int main(int argc, char* argv[]) {
     QStringList pendingTorrentFiles;
     QStringList pendingMagnetLinks;
     QStringList pendingHttpUrls;
+    QList<QPair<QString, QString>> pendingCopperDownloads;
 
     for (const QString& arg : forwardArgs) {
         if (arg.startsWith("copper://")) {
@@ -109,6 +153,25 @@ int main(int argc, char* argv[]) {
             QString path = arg.mid(QString("copper://").size());
             if (path == "open") {
                 Logger::instance().info("copper://open received, showing main window");
+            } else {
+                CopperLink cl = parseCopperLink(arg);
+                if (cl.valid) {
+                    Logger::instance().info("Copper download injection: " + cl.url.left(80));
+                    if (cl.url.startsWith("magnet:?")) {
+                        pendingMagnetLinks.append(cl.url);
+                    } else {
+                        QString fullSavePath = cl.path;
+                        if (!fullSavePath.isEmpty() && !cl.filename.isEmpty()) {
+                            if (!fullSavePath.endsWith('/') && !fullSavePath.endsWith('\\')) fullSavePath += "/";
+                            fullSavePath += cl.filename;
+                        } else if (cl.path.isEmpty()) {
+                            fullSavePath.clear(); // use default download dir
+                        }
+                        pendingCopperDownloads.append({cl.url, fullSavePath});
+                    }
+                } else {
+                    Logger::instance().warning("Unhandled copper:// URL: " + arg);
+                }
             }
             continue;
         }
@@ -202,11 +265,23 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    for (const QPair<QString, QString>& pair : pendingCopperDownloads) {
+        const QString& url = pair.first;
+        const QString& savePath = pair.second;
+        if (url.contains("youtube.com") || url.contains("youtu.be") ||
+            url.contains("soundcloud.com") || url.contains("vimeo.com")) {
+            DownloadManager::instance().addDownload(url, "", "YtDlp");
+        } else {
+            DownloadManager::instance().addDownload(url, savePath, "HTTP");
+        }
+    }
+
     Logger::instance().info("Application started successfully");
 
     int result = app.exec();
 
     LocalServer::instance().stop();
+    Aria2cManager::instance().shutdownDaemon();
     Logger::instance().info("Application shutting down");
 
     return result;

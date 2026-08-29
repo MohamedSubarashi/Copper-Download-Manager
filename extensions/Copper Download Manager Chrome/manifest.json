@@ -1,13 +1,32 @@
 {
   "manifest_version": 3,
   "name": "Copper Download Manager",
-  "version": "2.0.0",
-  "description": "Powerful download interceptor — send downloads, detect media, bulk download, and more with Copper Download Manager",
-  "permissions": ["downloads", "notifications", "storage", "contextMenus", "activeTab", "scripting", "tabs"],
-  "host_permissions": ["http://localhost:*/*"],
+  "version": "3.0.0",
+  "description": "Send downloads, detect media, bulk download and more with Copper Download Manager via the copper:// download scheme",
+  "permissions": [
+    "downloads",
+    "storage",
+    "notifications",
+    "contextMenus",
+    "activeTab",
+    "tabs",
+    "scripting",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js"
   },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["copper-content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

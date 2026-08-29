@@ -11,7 +11,6 @@ const mediaList = document.getElementById("mediaList");
 const historyList = document.getElementById("historyList");
 const historyCount = document.getElementById("historyCount");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
-const portInput = document.getElementById("portInput");
 const filterMode = document.getElementById("filterMode");
 const fileFilterInput = document.getElementById("fileFilterInput");
 const domainFilterToggle = document.getElementById("domainFilterToggle");
@@ -49,25 +48,24 @@ function updateConn(connected) {
   connDot.title = connected ? "Copper is running" : "Copper not found";
 }
 
-browser.runtime.sendMessage({ action: "getStatus" }).then(r => { if (r) updateUI(r.enabled); });
-browser.runtime.sendMessage({ action: "ping" }).then(r => { if (r) updateConn(r.connected); });
+chrome.runtime.sendMessage({ action: "getStatus" }, (r) => { if (r) updateUI(r.enabled); });
 
 // --- Toggle ---
 toggleBtn.addEventListener("click", () => {
-  browser.runtime.sendMessage({ action: "getStatus" }).then(r => {
+  chrome.runtime.sendMessage({ action: "getStatus" }, (r) => {
     const next = !r.enabled;
-    browser.runtime.sendMessage({ action: "toggle", enabled: next }).then(() => updateUI(next));
+    chrome.runtime.sendMessage({ action: "toggle", enabled: next }, () => updateUI(next));
   });
 });
 
 // --- Open Copper ---
-openBtn.addEventListener("click", () => browser.runtime.sendMessage({ action: "openCopper" }));
+openBtn.addEventListener("click", () => chrome.runtime.sendMessage({ action: "openCopper" }));
 
 // --- Quick URL send ---
 sendBtn.addEventListener("click", () => {
   const url = urlInput.value.trim();
   if (!url) return;
-  browser.runtime.sendMessage({ action: "sendUrl", url }).then(r => {
+  chrome.runtime.sendMessage({ action: "sendUrl", url }, (r) => {
     if (r && r.success) {
       urlInput.value = "";
       urlInput.placeholder = "Sent!";
@@ -105,7 +103,7 @@ function renderMedia(media) {
   mediaList.querySelectorAll(".media-dl-btn").forEach(btn => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      browser.runtime.sendMessage({ action: "sendUrl", url: btn.dataset.url, filename: btn.dataset.filename });
+      chrome.runtime.sendMessage({ action: "sendUrl", url: btn.dataset.url, filename: btn.dataset.filename });
       btn.textContent = "Sent!";
       btn.style.borderColor = "#4cff4c";
       btn.style.color = "#4cff4c";
@@ -115,7 +113,7 @@ function renderMedia(media) {
 
 detectBtn.addEventListener("click", () => {
   detectBtn.textContent = "Scanning...";
-  browser.runtime.sendMessage({ action: "detectMedia" }).then(r => {
+  chrome.runtime.sendMessage({ action: "detectMedia" }, (r) => {
     detectBtn.textContent = "Scan Page";
     if (r && r.media) {
       currentMedia = r.media;
@@ -130,7 +128,7 @@ downloadAllBtn.addEventListener("click", () => {
   const filtered = mediaFilter.value !== "all"
     ? currentMedia.filter(m => m.type === mediaFilter.value) : currentMedia;
   filtered.forEach(m => {
-    browser.runtime.sendMessage({ action: "sendUrl", url: m.url, filename: m.filename });
+    chrome.runtime.sendMessage({ action: "sendUrl", url: m.url, filename: m.filename });
   });
   downloadAllBtn.textContent = `Sent ${filtered.length}!`;
   setTimeout(() => { downloadAllBtn.textContent = "Download All"; }, 1500);
@@ -160,22 +158,21 @@ function renderHistory(items) {
 }
 
 function loadHistory() {
-  browser.runtime.sendMessage({ action: "getHistory" }).then(r => {
+  chrome.runtime.sendMessage({ action: "getHistory" }, (r) => {
     if (r) renderHistory(r.history || []);
   });
 }
 
 clearHistoryBtn.addEventListener("click", () => {
-  browser.runtime.sendMessage({ action: "clearHistory" }).then(() => {
+  chrome.runtime.sendMessage({ action: "clearHistory" }, () => {
     renderHistory([]);
   });
 });
 
 // --- Settings ---
 function loadSettings() {
-  browser.runtime.sendMessage({ action: "getSettings" }).then(s => {
+  chrome.runtime.sendMessage({ action: "getSettings" }, (s) => {
     if (!s) return;
-    portInput.value = s.port || 24680;
     filterMode.value = s.fileFilterMode || "none";
     fileFilterInput.value = (s.fileFilter || []).join(",");
     domainFilterToggle.checked = !!s.domainFilterEnabled;
@@ -189,17 +186,17 @@ saveSettingsBtn.addEventListener("click", () => {
   const domainWhitelistArr = domainWhitelist.value.split("\n").map(d => d.trim()).filter(d => d);
   const domainBlacklistArr = domainBlacklist.value.split("\n").map(d => d.trim()).filter(d => d);
   const settings = {
-    port: parseInt(portInput.value) || 24680,
     fileFilterMode: filterMode.value,
     fileFilter,
     domainFilterEnabled: domainFilterToggle.checked,
     domainWhitelist: domainWhitelistArr,
     domainBlacklist: domainBlacklistArr
   };
-  browser.runtime.sendMessage({ action: "updateSettings", settings }).then(() => {
+  chrome.runtime.sendMessage({ action: "updateSettings", settings }, () => {
     settingsSaved.style.display = "block";
     setTimeout(() => { settingsSaved.style.display = "none"; }, 1500);
   });
 });
 
+// --- Initial history load if visible ---
 loadHistory();

@@ -4,6 +4,7 @@
 #include <QString>
 #include <QDateTime>
 #include <QVector>
+#include <QStringList>
 
 struct DownloadItem {
     int id = 0;
@@ -28,7 +29,12 @@ struct DownloadItem {
     QVector<int> selectedIndices;
     int aria2cId = -1;
     int connectedPeers = 0;
+    int leechers = 0;
     int seeds = 0;
+    qint64 uploadSpeed = 0;
+    qint64 uploadedSize = 0;
+    QString infoHash;
+    QStringList trackers;
 };
 
 #endif

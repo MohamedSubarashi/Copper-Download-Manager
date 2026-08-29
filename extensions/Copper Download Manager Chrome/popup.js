@@ -11,7 +11,6 @@ const mediaList = document.getElementById("mediaList");
 const historyList = document.getElementById("historyList");
 const historyCount = document.getElementById("historyCount");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
-const portInput = document.getElementById("portInput");
 const filterMode = document.getElementById("filterMode");
 const fileFilterInput = document.getElementById("fileFilterInput");
 const domainFilterToggle = document.getElementById("domainFilterToggle");
@@ -50,7 +49,6 @@ function updateConn(connected) {
 }
 
 chrome.runtime.sendMessage({ action: "getStatus" }, (r) => { if (r) updateUI(r.enabled); });
-chrome.runtime.sendMessage({ action: "ping" }, (r) => { if (r) updateConn(r.connected); });
 
 // --- Toggle ---
 toggleBtn.addEventListener("click", () => {
@@ -175,7 +173,6 @@ clearHistoryBtn.addEventListener("click", () => {
 function loadSettings() {
   chrome.runtime.sendMessage({ action: "getSettings" }, (s) => {
     if (!s) return;
-    portInput.value = s.port || 24680;
     filterMode.value = s.fileFilterMode || "none";
     fileFilterInput.value = (s.fileFilter || []).join(",");
     domainFilterToggle.checked = !!s.domainFilterEnabled;
@@ -189,7 +186,6 @@ saveSettingsBtn.addEventListener("click", () => {
   const domainWhitelistArr = domainWhitelist.value.split("\n").map(d => d.trim()).filter(d => d);
   const domainBlacklistArr = domainBlacklist.value.split("\n").map(d => d.trim()).filter(d => d);
   const settings = {
-    port: parseInt(portInput.value) || 24680,
     fileFilterMode: filterMode.value,
     fileFilter,
     domainFilterEnabled: domainFilterToggle.checked,

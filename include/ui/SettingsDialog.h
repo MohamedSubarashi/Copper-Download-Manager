@@ -21,6 +21,10 @@ private slots:
     void onUpdateYtDlp();
     void onUpdateFfmpeg();
     void onUpdateAria2c();
+    void onCheckForUpdates();
+    void onUpdateReady(const QString& version);
+    void onUpdateDownloaded();
+    void onUpdateMessage(const QString& error);
     void onRegisterDefaultHandler();
     void onUnregisterDefaultHandler();
     void onBrowseDownloadPath();
@@ -39,6 +43,7 @@ private:
     QLabel* aria2cVersionLabel;
     QLabel* handlerStatusLabel;
     QSpinBox* speedLimitSpin;
+    QComboBox* seedTimeCombo;
 };
 
 #endif
