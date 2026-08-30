@@ -26,6 +26,8 @@ public:
 
 private:
     DatabaseManager();
+    int getSchemaVersion();
+    void migrate(int from);
     QSqlDatabase db;
 };
 

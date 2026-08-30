@@ -48,14 +48,55 @@ bool DatabaseManager::init() {
                "value TEXT"
                ")");
 
+    migrate(getSchemaVersion());
+
     Logger::instance().info("Database initialized at " + dbPath);
     return true;
 }
 
+int DatabaseManager::getSchemaVersion() {
+    QSqlQuery query(db);
+    if (query.exec("PRAGMA user_version") && query.next()) {
+        return query.value(0).toInt();
+    }
+    return 0;
+}
+
+void DatabaseManager::migrate(int from) {
+    const int targetVersion = 1;
+    QSqlQuery query(db);
+
+    // A pre-0.3.x database may predate the parent_id column (playlist / torrent
+    // folder children). Add it defensively so inserts never fail after upgrade.
+    if (from < 1) {
+        bool hasParent = false;
+        QSqlQuery cols(db);
+        if (cols.exec("PRAGMA table_info(downloads)")) {
+            while (cols.next()) {
+                if (cols.value("name").toString() == "parent_id") { hasParent = true; break; }
+            }
+        }
+        if (!hasParent) {
+            if (!query.exec("ALTER TABLE downloads ADD COLUMN parent_id INTEGER DEFAULT -1")) {
+                Logger::instance().error("Migration to v1 failed: " + query.lastError().text());
+                return;
+            }
+        }
+        from = 1;
+    }
+
+    if (from < targetVersion) {
+        Logger::instance().info("Database schema migrating from " + QString::number(from) + " to " + QString::number(targetVersion));
+        from = targetVersion;
+    }
+
+    query.exec("PRAGMA user_version = " + QString::number(from));
+}
+
 void DatabaseManager::addDownload(const DownloadItem& item) {
     QSqlQuery query(db);
-    query.prepare("INSERT INTO downloads (id, url, filePath, type, downloadedSize, totalSize, status, addedAt, completedAt, error, progress, isFolder) "
-                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    query.prepare("INSERT INTO downloads (id, url, filePath, type, downloadedSize, totalSize, status, addedAt, completedAt, error, progress, isFolder, parent_id) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     query.addBindValue(item.id);
     query.addBindValue(item.url);
     query.addBindValue(item.filePath);
@@ -68,6 +109,7 @@ void DatabaseManager::addDownload(const DownloadItem& item) {
     query.addBindValue(item.error);
     query.addBindValue(item.progress);
     query.addBindValue(item.isFolder ? 1 : 0);
+    query.addBindValue(item.parentId);
 
     if (!query.exec()) {
         Logger::instance().error("Add download failed: " + query.lastError().text());
@@ -77,7 +119,7 @@ void DatabaseManager::addDownload(const DownloadItem& item) {
 void DatabaseManager::updateDownload(const DownloadItem& item) {
     QSqlQuery query(db);
     query.prepare("UPDATE downloads SET url=?, filePath=?, type=?, downloadedSize=?, totalSize=?, status=?, "
-                  "addedAt=?, completedAt=?, error=?, progress=?, isFolder=? WHERE id=?");
+                  "addedAt=?, completedAt=?, error=?, progress=?, isFolder=?, parent_id=? WHERE id=?");
     query.addBindValue(item.url);
     query.addBindValue(item.filePath);
     query.addBindValue(item.type);
@@ -89,6 +131,7 @@ void DatabaseManager::updateDownload(const DownloadItem& item) {
     query.addBindValue(item.error);
     query.addBindValue(item.progress);
     query.addBindValue(item.isFolder ? 1 : 0);
+    query.addBindValue(item.parentId);
     query.addBindValue(item.id);
 
     if (!query.exec()) {
@@ -141,6 +184,7 @@ QVector<DownloadItem> DatabaseManager::getAllDownloads() {
         item.error = query.value("error").toString();
         item.progress = query.value("progress").toDouble();
         item.isFolder = query.value("isFolder").toBool();
+        item.parentId = query.value("parent_id").toInt();
         items.append(item);
     }
 
@@ -169,6 +213,7 @@ QVector<DownloadItem> DatabaseManager::getDownloadsByStatus(const QString& statu
         item.error = query.value("error").toString();
         item.progress = query.value("progress").toDouble();
         item.isFolder = query.value("isFolder").toBool();
+        item.parentId = query.value("parent_id").toInt();
         items.append(item);
     }
 
@@ -196,6 +241,7 @@ DownloadItem DatabaseManager::getDownload(int id) {
         item.error = query.value("error").toString();
         item.progress = query.value("progress").toDouble();
         item.isFolder = query.value("isFolder").toBool();
+        item.parentId = query.value("parent_id").toInt();
         return item;
     }
 
