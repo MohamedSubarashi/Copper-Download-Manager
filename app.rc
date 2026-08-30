@@ -1,4 +1,6 @@
-#include <winver.h>
+// NOTE: No #include <winver.h> here. The MinGW windres preprocessor cannot
+// handle winver.h's WINAPI_FAMILY_PARTITION macro guards. Every constant below
+// is a literal number, so the header is unnecessary.
 
 1 ICON "Assets\\app.ico"
 

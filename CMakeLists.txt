@@ -31,6 +31,7 @@ endif()
 
 if(WIN32)
     add_definitions(-DPLATFORM_WINDOWS)
+    enable_language(RC)
 elseif(APPLE)
     add_definitions(-DPLATFORM_MACOS)
 else()
@@ -45,14 +46,15 @@ set(RESOURCE_FILES resources.qrc)
 set(ALL_SOURCES main.cpp ${SOURCES} ${HEADERS} ${RESOURCE_FILES})
 
 if(WIN32)
-    # MinGW windres cannot reliably preprocess includes when the source/build path
-    # contains spaces (e.g. "Copper Download Manager"). Skip the RC file in that
-    # case and keep the version metadata in the app code instead.
-    if(CMAKE_SOURCE_DIR MATCHES " ")
-        message(STATUS "Source path contains spaces; skipping app.rc to avoid windres preprocessing failures")
-    else()
-        list(APPEND ALL_SOURCES app.rc)
-    endif()
+    # Compile the version/icon resource from a copy in the (space-free) build
+    # tree. MinGW windres re-tokenizes include/argument lists and breaks when
+    # the source path contains spaces (e.g. "Copper Download Manager"). By
+    # compiling the RC from a build-tree copy we sidestep that entirely.
+    set(RESRC_DIR "${CMAKE_BINARY_DIR}/_resrc")
+    set(RESRC_RC "${RESRC_DIR}/app.rc")
+    configure_file("${CMAKE_SOURCE_DIR}/app.rc" "${RESRC_RC}" COPYONLY)
+    file(COPY "${CMAKE_SOURCE_DIR}/Assets/app.ico" DESTINATION "${RESRC_DIR}/Assets")
+    list(APPEND ALL_SOURCES "${RESRC_RC}")
 endif()
 
 if(APPLE)
