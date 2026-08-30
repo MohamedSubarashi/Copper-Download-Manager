@@ -29,6 +29,12 @@ jobs:
           host: windows
           arch: win64_mingw
           cache: true
+          # The Qt mingw_64 binary packages are built with GCC 13. windows-latest
+          # only ships GCC 15.2 (C:\mingw64), which fails to link
+          # libQt6EntryPoint.a ("undefined reference to __imp___argc"). Install the
+          # matching MinGW 13.1 tool and prepend it to PATH so CMake uses it.
+          tools: 'tools_mingw,qt.tools.win64_mingw1310'
+          add-tools-to-path: true
 
       - name: Configure
         shell: bash
