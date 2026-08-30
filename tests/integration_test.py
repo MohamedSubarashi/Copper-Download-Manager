@@ -17,7 +17,11 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
+import shutil
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DEFAULT_PORT = 24680
 
@@ -75,6 +79,109 @@ def wait_for_ready(port, timeout=30.0):
             pass
         time.sleep(0.5)
     return False
+
+
+# ---------------------------------------------------------------------------
+# Range-aware local file servers to exercise the chunked download engine.
+# ---------------------------------------------------------------------------
+
+def _make_file_server(payload, mode="normal", chunk_bits=""):
+    """mode: 'normal' (full ranges + Content-Length), _
+           'truncate' (server closes range connections early to simulate a dropped link),
+           'nolength' (no Content-Length, forces the unknown-size path)."""
+    payload = payload.encode("utf-8") if isinstance(payload, str) else payload
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def _do_get(self):
+            if mode == "truncate":
+                # Serve at most one range connection at a time, closing the others early.
+                rng = self.headers.get("Range")
+                if rng:
+                    start = int(rng.split("bytes=")[1].split("-")[0])
+                    data = payload[start:start + 5000]
+                else:
+                    data = payload[:5000]
+                self.send_response(206 if rng else 200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Accept-Ranges", "bytes")
+                if rng:
+                    self.send_header("Content-Range", f"bytes {start}-{start + len(data) - 1}/{len(payload)}")
+                    self.send_header("Content-Length", str(len(data)))
+                else:
+                    self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                try:
+                    self.wfile.write(data)
+                    self.wfile.flush()
+                except BrokenPipeError:
+                    pass
+                return
+
+            rng = self.headers.get("Range")
+            if rng:
+                start, end = rng.split("bytes=")[1].split("-")
+                start = int(start)
+                end = int(end) if end else len(payload) - 1
+                end = min(end, len(payload) - 1)
+                data = payload[start:end + 1]
+                self.send_response(206)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Range", f"bytes {start}-{end}/{len(payload)}")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
+            data = payload
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Accept-Ranges", "bytes")
+            if mode != "nolength":
+                self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_HEAD(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Accept-Ranges", "bytes")
+            if mode != "nolength":
+                self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+
+        def do_GET(self):
+            self._do_get()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, port
+
+
+def find_download(js, mid):
+    for d in js.get("downloads", []):
+        if d.get("id") == mid:
+            return d
+    return None
+
+
+def wait_download_status(port, mid, statuses, timeout=30.0):
+    """Poll /api/downloads until the download reaches one of `statuses`."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        _, j = http_request(port, "GET", "/api/downloads")
+        d = find_download(j, mid)
+        last = d
+        if d is not None and d.get("status") in statuses:
+            return d
+        time.sleep(0.5)
+    return last
 
 
 def main():
@@ -165,6 +272,60 @@ def main():
         # --- OPTIONS preflight from allowed origin is answered with echoed origin ---
         st, _ = http_request(port, "OPTIONS", "/api/download", headers={"Origin": "chrome-extension://abcdefghijklmnop"})
         check("OPTIONS from allowed Origin -> 204", st == 204, f"status={st}")
+
+        # --- Download-engine regression tests (chunked HTTP via a local server) ---
+        chk = "DLCHUNK-REG" + ("x" * 262144)  # ~256KB, forces multi-chunk
+        workdir = tempfile.mkdtemp(prefix="copper_it_")
+        try:
+            def add_download(url, name, path):
+                st, j = http_request(port, "POST", "/api/download",
+                                     {"url": url, "filename": name, "path": path})
+                return st, j.get("id")
+
+            # 1) Complete chunked download reaches Completed and is byte-exact.
+            srv, sp = _make_file_server(chk, mode="normal")
+            try:
+                st, mid = add_download(f"http://127.0.0.1:{sp}/file.bin", "normal.bin", workdir)
+                check("add chunked download -> 200", st == 200, f"status={st} mid={mid}")
+                d = wait_download_status(port, mid, {"Completed", "Failed"})
+                final_path = os.path.join(workdir, "normal.bin")
+                ok = d is not None and d.get("status") == "Completed"
+                if ok and os.path.isfile(final_path):
+                    with open(final_path, "rb") as f:
+                        ok = f.read() == chk.encode("utf-8")
+                else:
+                    ok = ok and os.path.isfile(final_path)
+                check("chunked download completes byte-exact", ok,
+                      f"status={d.get('status') if d else None} file={os.path.isfile(final_path)}")
+            finally:
+                srv.shutdown()
+
+            # 2) Truncated range connections must NOT produce a corrupt "Completed" file.
+            srv, sp = _make_file_server(chk, mode="truncate")
+            try:
+                st, mid = add_download(f"http://127.0.0.1:{sp}/file.bin", "trunc.bin", workdir)
+                check("add truncated download -> 200", st == 200, f"status={st}")
+                d = wait_download_status(port, mid, {"Completed", "Failed"})
+                check("truncated download is not marked Completed",
+                      d is not None and d.get("status") != "Completed", str(d))
+            finally:
+                srv.shutdown()
+
+            # 3) Unknown-length (no Content-Length) single-GET completes at 100%.
+            srv, sp = _make_file_server(chk, mode="nolength")
+            try:
+                st, mid = add_download(f"http://127.0.0.1:{sp}/file.bin", "nolength.bin", workdir)
+                check("add nolength download -> 200", st == 200, f"status={st}")
+                d = wait_download_status(port, mid, {"Completed", "Failed"})
+                ok = d is not None and d.get("status") == "Completed"
+                if ok and os.path.isfile(os.path.join(workdir, "nolength.bin")):
+                    with open(os.path.join(workdir, "nolength.bin"), "rb") as f:
+                        ok = f.read() == chk.encode("utf-8")
+                check("unknown-length download completes byte-exact", ok, str(d))
+            finally:
+                srv.shutdown()
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
 
     finally:
         try:

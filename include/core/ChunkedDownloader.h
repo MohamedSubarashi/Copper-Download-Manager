@@ -17,6 +17,8 @@ struct ChunkState {
     qint64 downloaded = 0;
     QNetworkReply* reply = nullptr;
     QFile* file = nullptr;
+    bool error = false;
+    QString errorMessage;
 };
 
 class ChunkedDownloader : public QObject {
@@ -50,6 +52,7 @@ private slots:
     void onSpeedTimer();
     void onHeadFinished();
     void onDrainTimer();
+    void onHangTimer();
 
 private:
     void setupChunks(qint64 totalSize);
@@ -71,15 +74,18 @@ private:
     int downloadId;
     bool downloading;
     bool paused;
+    bool cancelled;
     bool supportsRange;
     qint64 totalBytes;
     qint64 downloadedBytes;
     qint64 lastSpeedBytes;
     qint64 speed;
+    qint64 lastActivityMs;
 
     QNetworkAccessManager* nam;
     QVector<ChunkState> chunks;
     QTimer* speedTimer;
+    QTimer* hangTimer;
     QNetworkReply* headReply;
 
     qint64 limitBytesPerSec;

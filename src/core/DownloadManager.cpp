@@ -425,6 +425,11 @@ void DownloadManager::pauseDownload(int id) {
     if (item.type == "Torrent" && item.aria2cId > 0) {
         Aria2cManager::instance().pauseDownload(item.aria2cId);
     }
+
+    if (item.type == "YtDlp") {
+        YtDlpManager::instance().pauseDownload(id);
+    }
+
     if (item.isFolder && item.type == "Torrent") {
         for (int cid : item.childIds) {
             if (downloads.contains(cid)) downloads[cid].status = "Paused";
@@ -465,7 +470,11 @@ void DownloadManager::resumeDownload(int id) {
         activeChunkedDownloaders[id] = downloader;
         downloader->startDownload(item.url, item.filePath, item.chunks, id);
     } else if (item.type == "YtDlp") {
-        YtDlpManager::instance().startDownload(item.url, item.filePath, id, item.audioFormat);
+        if (YtDlpManager::instance().isRunning(id)) {
+            YtDlpManager::instance().resumeDownload(id);
+        } else {
+            YtDlpManager::instance().startDownload(item.url, item.filePath, id, item.audioFormat);
+        }
     } else if (item.type == "Torrent") {
         QString sourceUrl = item.torrentSourceUrl.isEmpty() ? item.url : item.torrentSourceUrl;
         int ariaId = -1;
@@ -579,9 +588,17 @@ void DownloadManager::cancelDownload(int id) {
         item.speed = 0;
         item.uploadSpeed = 0;
     }
+
+    if (item.type == "YtDlp") {
+        YtDlpManager::instance().cancelDownload(id);
+    }
+
     if (item.isFolder) {
         for (int cid : item.childIds) {
             if (downloads.contains(cid)) {
+                if (downloads[cid].type == "YtDlp") {
+                    YtDlpManager::instance().cancelDownload(cid);
+                }
                 downloads[cid].status = "Cancelled";
                 DatabaseManager::instance().updateDownload(downloads[cid]);
             }
@@ -703,7 +720,15 @@ void DownloadManager::onChunkProgress(int id, qint64 downloaded, qint64 total) {
     downloads[id].totalSize = total;
     downloads[id].progress = total > 0 ? (double)downloaded / total * 100.0 : 0;
 
-    DatabaseManager::instance().updateDownloadProgress(id, downloaded, total, downloads[id].progress);
+    // Throttle SQLite writes to at most one per 500ms per download so high
+    // chunk progress frequency cannot lag the UI thread.
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    auto it = lastProgressToDbMs.constFind(id);
+    if (it == lastProgressToDbMs.constEnd() || now - it.value() >= 500) {
+        DatabaseManager::instance().updateDownloadProgress(id, downloaded, total, downloads[id].progress);
+        lastProgressToDbMs[id] = now;
+    }
+
     emit downloadProgress(id, downloaded, total);
 
     if (downloads[id].parentId > 0) {

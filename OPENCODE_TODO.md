@@ -23,9 +23,9 @@ This list is ordered by impact and should be tackled in sequence for the next de
 
 ## Priority 2: Download engine and queue management
 
-- [ ] Review the core download manager for queue ordering, retry logic, pause/resume correctness, and cancellation edge cases.
-- [ ] Improve progress reporting accuracy during chunked downloads and multi-part transfers.
-- [ ] Validate resume behavior across interruptions, file corruption, and partial download states.
+- [x] Review the core download manager for queue ordering, retry logic, pause/resume correctness, and cancellation edge cases. (yt-dlp pause/resume/cancel now drive the process; no more duplicate/orphaned yt-dlp; pause no longer corrupts the file; resume of non-range servers restarts; per-chunk hang timeout 90s)
+- [x] Improve progress reporting accuracy during chunked downloads and multi-part transfers. (drains trailing bytes before completion; unknown-length downloads now reach 100% via final byte count; DB progress writes throttled to 500ms)
+- [x] Validate resume behavior across interruptions, file corruption, and partial download states. (byte-exact completion + truncated-drop detection verified by new integration tests; truncated connections no longer marked Completed)
 - [x] Verify speed limiter implementation and ensure it does not cause CPU or UI stalls. (real token-bucket throttle in `ChunkedDownloader` + hysteresis in `DownloadManager::processSpeedLimit`, commit `873e16f`)
 - [x] Review database persistence for download state and ensure recovery is consistent after app restart. (parent_id now persisted/migrated; restart marks stale as Failed by design)
 

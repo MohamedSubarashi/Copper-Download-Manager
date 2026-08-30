@@ -7,6 +7,7 @@
 #include <QTimer>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QDateTime>
 #include <algorithm>
 
 ChunkedDownloader::ChunkedDownloader(QObject* parent)
@@ -15,11 +16,13 @@ ChunkedDownloader::ChunkedDownloader(QObject* parent)
     , downloadId(0)
     , downloading(false)
     , paused(false)
+    , cancelled(false)
     , supportsRange(false)
     , totalBytes(0)
     , downloadedBytes(0)
     , lastSpeedBytes(0)
     , speed(0)
+    , lastActivityMs(0)
     , nam(new QNetworkAccessManager(this))
     , headReply(nullptr)
     , limitBytesPerSec(0)
@@ -30,6 +33,10 @@ ChunkedDownloader::ChunkedDownloader(QObject* parent)
 {
     speedTimer = new QTimer(this);
     connect(speedTimer, &QTimer::timeout, this, &ChunkedDownloader::onSpeedTimer);
+
+    hangTimer = new QTimer(this);
+    hangTimer->setInterval(15000);
+    connect(hangTimer, &QTimer::timeout, this, &ChunkedDownloader::onHangTimer);
 
     drainTimer->setInterval(200);
     connect(drainTimer, &QTimer::timeout, this, &ChunkedDownloader::onDrainTimer);
@@ -124,8 +131,10 @@ void ChunkedDownloader::startDownload(const QString& url, const QString& filePat
     downloadId = id;
     downloading = true;
     paused = false;
+    cancelled = false;
     downloadedBytes = 0;
     totalBytes = 0;
+    lastActivityMs = QDateTime::currentMSecsSinceEpoch();
 
     resetThrottleState();
 
@@ -334,6 +343,7 @@ void ChunkedDownloader::setupChunks(qint64 totalSize) {
         connect(reply, &QNetworkReply::errorOccurred, this, &ChunkedDownloader::onChunkError);
 
         chunks.append(chunk);
+        hangTimer->start();
         return;
     }
 
@@ -374,6 +384,8 @@ void ChunkedDownloader::setupChunks(qint64 totalSize) {
 
         chunks.append(chunk);
     }
+
+    hangTimer->start();
 }
 
 void ChunkedDownloader::onChunkReadyRead() {
@@ -381,6 +393,8 @@ void ChunkedDownloader::onChunkReadyRead() {
 
     QNetworkReply* reply = qobject_cast<QNetworkReply*>(sender());
     if (!reply) return;
+
+    lastActivityMs = QDateTime::currentMSecsSinceEpoch();
 
     if (throttleActive) {
         refreshThrottleBudget();
@@ -424,6 +438,21 @@ void ChunkedDownloader::onChunkFinished() {
         if (chunk.reply == reply) {
             if (reply->error() != QNetworkReply::NoError && reply->error() != QNetworkReply::OperationCanceledError) {
                 Logger::instance().error("Chunk " + QString::number(chunk.index) + " error: " + reply->errorString());
+                chunk.error = true;
+                chunk.errorMessage = reply->errorString();
+            }
+
+            // A clean finish can leave trailing bytes buffered that never arrived
+            // via readyRead; drain them into the file or they are lost.
+            if (!paused && !cancelled && reply->error() == QNetworkReply::NoError) {
+                QByteArray tail = reply->readAll();
+                if (!tail.isEmpty() && chunk.file) {
+                    chunk.file->write(tail);
+                    chunk.downloaded += tail.size();
+                    downloadedBytes += tail.size();
+                    lastActivityMs = QDateTime::currentMSecsSinceEpoch();
+                    emit downloadProgress(downloadId, downloadedBytes, totalBytes);
+                }
             }
 
             if (chunk.file) {
@@ -447,25 +476,45 @@ void ChunkedDownloader::onChunkFinished() {
 
     if (allDone) {
         speedTimer->stop();
+        hangTimer->stop();
         speed = 0;
+
+        if (paused || cancelled) {
+            downloading = false;
+            return;
+        }
 
         bool hasError = false;
         QString errorMsg;
         for (const ChunkState& chunk : chunks) {
-            if (chunk.reply && chunk.reply->error() != QNetworkReply::NoError) {
+            if (chunk.error) {
                 hasError = true;
-                errorMsg = chunk.reply->errorString();
+                errorMsg = chunk.errorMessage;
             }
         }
 
         if (hasError) {
             emit downloadFailed(downloadId, errorMsg);
-        } else {
-            mergeChunks();
-            emit downloadProgress(downloadId, totalBytes, totalBytes);
-            emit downloadFinished(downloadId);
+            downloading = false;
+            return;
         }
 
+        mergeChunks();
+
+        qint64 finalSize = QFileInfo(saveFilePath).size();
+        if (totalBytes > 0 && finalSize < totalBytes) {
+            Logger::instance().error("Download incomplete: " + QString::number(finalSize) + " of " + QString::number(totalBytes) + " bytes");
+            emit downloadFailed(downloadId,
+                QString("Download incomplete: received %1 of %2 bytes. The connection dropped before all data arrived.")
+                    .arg(finalSize)
+                    .arg(totalBytes));
+            downloading = false;
+            return;
+        }
+
+        qint64 finalTotal = totalBytes > 0 ? totalBytes : finalSize;
+        emit downloadProgress(downloadId, finalTotal, finalTotal);
+        emit downloadFinished(downloadId);
         downloading = false;
     }
 }
@@ -553,12 +602,22 @@ void ChunkedDownloader::pause() {
 
     drainTimer->stop();
     speedTimer->stop();
+    hangTimer->stop();
     Logger::instance().info("Download paused (id: " + QString::number(downloadId) + ")");
 }
 
 void ChunkedDownloader::resume() {
     if (!paused) return;
     paused = false;
+    downloading = true;
+    lastActivityMs = QDateTime::currentMSecsSinceEpoch();
+
+    // Without Range support the partial chunks cannot be continued; restart from scratch.
+    if (!supportsRange) {
+        Logger::instance().info("Server does not support resume, restarting download (id: " + QString::number(downloadId) + ")");
+        startDownload(downloadUrl, saveFilePath, totalChunks, downloadId);
+        return;
+    }
 
     for (ChunkState& chunk : chunks) {
         if (chunk.reply == nullptr && chunk.downloaded < (chunk.endByte - chunk.startByte + 1)) {
@@ -585,16 +644,40 @@ void ChunkedDownloader::resume() {
     }
 
     speedTimer->start(1000);
+    hangTimer->start();
     Logger::instance().info("Download resumed (id: " + QString::number(downloadId) + ")");
 }
 
 void ChunkedDownloader::cancel() {
     downloading = false;
     paused = false;
+    cancelled = true;
     speedTimer->stop();
     drainTimer->stop();
+    hangTimer->stop();
     cleanupChunks();
     cleanupTempFiles();
+}
+
+void ChunkedDownloader::onHangTimer() {
+    if (paused || cancelled || !downloading) return;
+
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - lastActivityMs < 90000) return;
+
+    // No data received for 90s: fail the stalled chunks instead of hanging forever.
+    QList<QNetworkReply*> toAbort;
+    for (ChunkState& chunk : chunks) {
+        if (chunk.reply && !chunk.error) {
+            chunk.error = true;
+            chunk.errorMessage = "Chunk timed out (no data received for 90s)";
+            toAbort.append(chunk.reply);
+        }
+    }
+    for (QNetworkReply* reply : toAbort) {
+        reply->abort();
+    }
+    emit downloadProgress(downloadId, downloadedBytes, totalBytes);
 }
 
 bool ChunkedDownloader::isDownloading() const { return downloading && !paused; }
@@ -635,6 +718,7 @@ void ChunkedDownloader::refreshThrottleBudget() {
 
 void ChunkedDownloader::drainAvailableData(qint64 maxBytes) {
     qint64 budgetLeft = maxBytes;
+    lastActivityMs = QDateTime::currentMSecsSinceEpoch();
     for (ChunkState& chunk : chunks) {
         if (budgetLeft <= 0) break;
         if (!chunk.reply || !chunk.file) continue;

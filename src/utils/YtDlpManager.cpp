@@ -314,7 +314,10 @@ void YtDlpManager::resumeDownload(int id) {
 
 void YtDlpManager::cancelDownload(int id) {
     if (!activeProcesses.contains(id)) return;
-    activeProcesses[id]->kill();
+    QProcess* process = activeProcesses.take(id);
+    QObject::disconnect(process, nullptr, this, nullptr);
+    process->kill();
+    process->deleteLater();
     Logger::instance().info("yt-dlp download cancelled: " + QString::number(id));
 }
 

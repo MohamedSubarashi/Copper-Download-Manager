@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QVector>
 #include <QMap>
+#include <QHash>
 #include <QTimer>
 #include <QProcess>
 #include "core/DownloadItem.h"
@@ -63,7 +64,7 @@ private:
 
     QMap<int, DownloadItem> downloads;
     QMap<int, ChunkedDownloader*> activeChunkedDownloaders;
-    QMap<int, QProcess*> activeYtDlpProcesses;
+    QHash<int, qint64> lastProgressToDbMs;
     int nextId;
     int maxConcurrent;
     qint64 speedLimit;
