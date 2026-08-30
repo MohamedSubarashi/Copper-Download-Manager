@@ -131,7 +131,12 @@ DownloadManagerDialog::DownloadManagerDialog(SourceType sourceType, const QStrin
             fetchBtn->setEnabled(true);
             progressBar->setVisible(false);
             downloadBtn->setEnabled(false);
-            statusLabel->setText("Error: " + msg);
+            if (msg.contains("not installed")) {
+                statusLabel->setText(
+                    "yt-dlp is not installed. Install or update it in Settings > Tools, then fetch again.");
+            } else {
+                statusLabel->setText("Error: " + msg);
+            }
         });
         fetchFiles();
     } else {
@@ -173,10 +178,21 @@ void DownloadManagerDialog::fetchFiles() {
             progressBar->setVisible(false);
         });
     } else if (sourceType == SourceVideo) {
+        if (!YtDlpManager::instance().isInstalled()) {
+            statusLabel->setText(
+                "yt-dlp is not installed. It will be downloaded automatically when you fetch — "
+                "this can take a moment the first time.");
+        }
         YtDlpManager::instance().fetchPlaylistInfo(url, [this](const QVector<PlaylistEntry>& fetchedEntries) {
             entries = fetchedEntries;
-            showFileList(entries);
-            statusLabel->setText("Found " + QString::number(entries.size()) + " video(s)");
+            if (entries.isEmpty()) {
+                statusLabel->setText(
+                    "No videos found. Check the URL, or install yt-dlp and FFmpeg in Settings > Tools "
+                    "if fetching a file list failed.");
+            } else {
+                showFileList(entries);
+                statusLabel->setText("Found " + QString::number(entries.size()) + " video(s)");
+            }
             downloadBtn->setEnabled(!entries.isEmpty());
             fetchBtn->setEnabled(true);
             progressBar->setVisible(false);

@@ -50,7 +50,7 @@ This list is ordered by impact and should be tackled in sequence for the next de
 - [x] Review aria2c integration and fallback behavior when tools are missing or fail to initialize.
 - [x] Audit yt-dlp integration for format selection, progress parsing, and error recovery. (progress now parsed from stderr channel; ffmpeg pre-flight check)
 - [x] Review FFmpeg use for conversion/transcoding pipelines and failure handling. (unused `convert()` identified as dead code; ffmpeg absence surfaced before yt-dlp merge/extract)
-- [ ] Improve user feedback for tool install/download progress and failed dependency setup. (Settings error labels wired; remaining: pre-flight messaging polish)
+- [x] Improve user feedback for tool install/download progress and failed dependency setup. (yt-dlp missing when Video selected now shows a clear pre-flight message with an install hint; empty fetch results explain the action instead of stalling; Settings error labels already wired)
 
 ## Priority 6: Data model and settings
 
