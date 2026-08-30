@@ -35,6 +35,7 @@ struct Aria2cDownloadTask {
     bool isTorrent = true;
     bool finishedEmitted = false;
     bool failedEmitted = false;
+    bool terminal = false;         // complete/error/removed reached; stop polling
 
     qint64 downloadedBytes = 0;
     qint64 totalBytes = 0;

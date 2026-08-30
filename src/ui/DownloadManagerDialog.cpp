@@ -117,8 +117,22 @@ DownloadManagerDialog::DownloadManagerDialog(SourceType sourceType, const QStrin
     mainLayout->addLayout(btnLayout);
 
     if (sourceType == SourceTorrent) {
+        connect(&Aria2cManager::instance(), &Aria2cManager::errorOccurred, this,
+            [this](const QString& msg) {
+            fetchBtn->setEnabled(true);
+            progressBar->setVisible(false);
+            downloadBtn->setEnabled(false);
+            statusLabel->setText("Error: " + msg);
+        });
         fetchFiles();
     } else if (sourceType == SourceVideo) {
+        connect(&YtDlpManager::instance(), &YtDlpManager::errorOccurred, this,
+            [this](const QString& msg) {
+            fetchBtn->setEnabled(true);
+            progressBar->setVisible(false);
+            downloadBtn->setEnabled(false);
+            statusLabel->setText("Error: " + msg);
+        });
         fetchFiles();
     } else {
         statusLabel->setText("Ready to download");

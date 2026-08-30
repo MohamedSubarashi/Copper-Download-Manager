@@ -506,6 +506,7 @@ QJsonValue Aria2cManager::rpcResult(const QString& method, const QJsonArray& par
     loop.exec();
 
     if (!done) {
+        QObject::disconnect(reply, &QNetworkReply::finished, &loop, nullptr);
         reply->abort();
         reply->deleteLater();
         return QJsonValue(QJsonValue::Undefined);
@@ -718,10 +719,9 @@ void Aria2cManager::poll() {
 
     pollTick++;
 
-    QVector<int> stale;
     for (int id : tasks.keys()) {
-        const Aria2cDownloadTask& t = tasks[id];
-        if (t.gid.isEmpty()) continue;
+        Aria2cDownloadTask& t = tasks[id];
+        if (t.gid.isEmpty() || t.terminal) continue;
 
         QJsonArray fields;
         const QStringList keys = {
@@ -741,11 +741,9 @@ void Aria2cManager::poll() {
         if (pollTick % 3 == 0) {
             parsePeers(id);
         }
-        emit torrentStateUpdated(id);
-    }
-
-    for (int id : stale) {
-        tasks.remove(id);
+        if (!tasks[id].terminal) {
+            emit torrentStateUpdated(id);
+        }
     }
 }
 
@@ -781,25 +779,30 @@ void Aria2cManager::parseTorrentStatus(int id, const QJsonObject& status) {
     if (st == "complete" && !task.finishedEmitted) {
         task.finishedEmitted = true;
         task.isRunning = false;
+        task.terminal = true;
         Logger::instance().info("Torrent download complete: id=" + QString::number(id) + ", gid=" + task.gid);
         emit downloadProgress(id, task.totalBytes, task.totalBytes, 0);
         emit downloadFinished(id);
     } else if (st == "error" && !task.failedEmitted) {
         task.failedEmitted = true;
         task.isRunning = false;
+        task.terminal = true;
         QString err = status.value("errorMessage").toString();
         if (err.isEmpty()) err = "aria2 error";
         Logger::instance().error("Torrent download failed: id=" + QString::number(id) + " - " + err);
         emit downloadFailed(id, err);
     } else if (st == "removed") {
+        task.terminal = true;
+        task.isRunning = false;
         if (!task.finishedEmitted && !task.failedEmitted) {
             task.finishedEmitted = true;
-            task.isRunning = false;
         }
     }
 
-    task.isRunning = (st == "active" || st == "waiting" || st == "complete");
-    emit downloadProgress(id, task.downloadedBytes, task.totalBytes, task.speed);
+    if (!task.terminal) {
+        task.isRunning = (st == "active" || st == "waiting");
+        emit downloadProgress(id, task.downloadedBytes, task.totalBytes, task.speed);
+    }
 }
 
 void Aria2cManager::parsePeers(int id) {
@@ -1009,7 +1012,7 @@ void Aria2cManager::fetchMagnetMetadata(const QString& magnet, std::function<voi
     QString tmpDir = QDir::tempPath() + "/copper_torrent_meta";
     QDir().mkpath(tmpDir);
 
-    QProcess* process = new QProcess();
+    QProcess* process = new QProcess(this);
     QStringList args;
     args << "--bt-metadata-only=true";
     args << "--bt-save-metadata=true";
@@ -1049,7 +1052,13 @@ void Aria2cManager::fetchMagnetMetadata(const QString& magnet, std::function<voi
             return;
         }
         if (exitCode != 0) {
-            Logger::instance().error("Failed to fetch magnet metadata");
+            QString err;
+            QRegularExpression errRegex("errorCode[^\\n]*|Exception[^\\n]*");
+            QRegularExpressionMatch m = errRegex.match(data);
+            if (m.hasMatch()) err = m.captured(0).trimmed();
+            if (err.isEmpty()) err = "Failed to fetch magnet metadata (exit " + QString::number(exitCode) + ")";
+            Logger::instance().error(err);
+            emit errorOccurred(err);
             callback(QVector<PlaylistEntry>(), info);
             return;
         }
@@ -1069,7 +1078,9 @@ void Aria2cManager::fetchMagnetMetadata(const QString& magnet, std::function<voi
         }
 
         if (torrentFiles.isEmpty()) {
-            Logger::instance().error("No .torrent metadata file found in " + tmpDir);
+            QString err = "aria2c did not produce metadata for the magnet link";
+            Logger::instance().error(err);
+            emit errorOccurred(err);
             callback(QVector<PlaylistEntry>(), info);
             return;
         }
@@ -1083,7 +1094,7 @@ void Aria2cManager::fetchMagnetMetadata(const QString& magnet, std::function<voi
 }
 
 void Aria2cManager::fetchTorrentFileList(const QString& torrentPath, std::function<void(const QVector<PlaylistEntry>&, const TorrentInfo&)> callback) {
-    QProcess* process = new QProcess();
+    QProcess* process = new QProcess(this);
     QStringList args;
     args << "--show-files";
     args << "--dry-run";
@@ -1100,6 +1111,22 @@ void Aria2cManager::fetchTorrentFileList(const QString& torrentPath, std::functi
 
         QString data = QString::fromUtf8(allOutput);
         QStringList lines = data.split("\n");
+
+        if (exitCode != 0) {
+            QString errLine;
+            for (const QString& l : lines) {
+                QString t = l.trimmed();
+                if (t.startsWith("Exception:") || t.startsWith("errorCode:") || t.startsWith("Failed to open")) {
+                    errLine = t;
+                    break;
+                }
+            }
+            if (errLine.isEmpty()) errLine = "aria2c --show-files exited with code " + QString::number(exitCode);
+            Logger::instance().error("Torrent file list parse failed: " + errLine);
+            emit errorOccurred("Failed to parse torrent: " + errLine);
+            callback(QVector<PlaylistEntry>(), TorrentInfo());
+            return;
+        }
 
         Logger::instance().info("aria2c --show-files output:\n" + data.left(5000));
 

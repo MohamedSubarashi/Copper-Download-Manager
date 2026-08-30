@@ -1,5 +1,6 @@
 #include "utils/YtDlpManager.h"
 #include "utils/Logger.h"
+#include "utils/FfmpegManager.h"
 #include <QStandardPaths>
 #include <QDir>
 #include <QFile>
@@ -214,31 +215,34 @@ void YtDlpManager::startDownload(const QString& url, const QString& outputPath, 
     args << "--no-warnings";
     args << "--progress";
 
+    bool needsFfmpeg = true;
     if (format == "mp3") {
         args << "--extract-audio";
         args << "--audio-format" << "mp3";
     } else if (format == "mkv") {
         args << "--merge-output-format" << "mkv";
+        needsFfmpeg = false;
     } else if (format == "best") {
-        // no format restriction
+        needsFfmpeg = false;
     } else {
         args << "--merge-output-format" << "mp4";
+    }
+
+    if (needsFfmpeg && !FfmpegManager::instance().isInstalled()) {
+        emit downloadFailed(downloadId,
+            "FFmpeg is required for \"" + format + "\" output but is not installed. "
+            "Install it from Settings > Tools, then retry the download.");
+        return;
     }
 
     args << url;
 
     Logger::instance().info("Starting yt-dlp download: " + url + " (format: " + format + ")");
 
-    connect(process, &QProcess::readyReadStandardOutput, this, [this, downloadId]() {
-        processYtDlpOutput(downloadId);
-    });
-
+    // yt-dlp writes --progress lines to stderr when stdout is not a TTY.
     connect(process, &QProcess::readyReadStandardError, this, [this, downloadId]() {
         if (!activeProcesses.contains(downloadId)) return;
-        QString errLine = QString::fromUtf8(activeProcesses[downloadId]->readAllStandardError()).trimmed();
-        if (!errLine.isEmpty() && errLine.contains("[download]")) {
-            processYtDlpOutput(downloadId);
-        }
+        processYtDlpOutput(downloadId);
     });
 
     connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, [this, downloadId](int exitCode, QProcess::ExitStatus) {
@@ -263,6 +267,7 @@ void YtDlpManager::startDownload(const QString& url, const QString& outputPath, 
 void YtDlpManager::processYtDlpOutput(int id) {
     if (!activeProcesses.contains(id)) return;
     QProcess* process = activeProcesses[id];
+    process->setReadChannel(QProcess::StandardError);
 
     while (process->canReadLine()) {
         QString line = QString::fromUtf8(process->readLine()).trimmed();
