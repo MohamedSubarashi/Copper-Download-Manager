@@ -35,7 +35,7 @@ This list is ordered by impact and should be tackled in sequence for the next de
 - [x] Review permission usage in both extensions and remove any unnecessary access. (contextMenus/storage/tabs/notifications + `<all_urls>` all in use)
 - [x] Validate the desktop app receives intercepted link data reliably from the browser extension and handles it consistently. (copper:// flow verified: `encodeURIComponent` on extension side, `decodeOnce()` in `parseCopperLink()`)
 - [x] Improve error handling when the desktop app is not running or when the browser cannot reach it. (`pingCopper()` + `notifyCopperUnreachable()` in both `background.js`, commit `7794a2c`)
-- [ ] Add manifest and compatibility checks for Firefox and Chrome release requirements.
+- [x] Add manifest and compatibility checks for Firefox and Chrome release requirements. (added `tests/validate_extensions.py` wired into CI: MV3 shape per browser, toolbar `action`+`default_popup` wiring, Firefox `gecko.id` + honest `data_collection_permissions required:["none"]`, icon presence; wired the previously-unreachable popup to the toolbar button via `action`)
 
 ## Priority 4: Protocol and desktop integration
 

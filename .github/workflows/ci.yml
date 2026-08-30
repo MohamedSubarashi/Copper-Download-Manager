@@ -7,6 +7,14 @@ on:
     branches: [master, main]
 
 jobs:
+  extension-lint:
+    name: Extension manifest validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Chrome/Firefox manifests
+        run: python tests/validate_extensions.py
+
   build-windows:
     name: Build (Windows / Qt ${{ matrix.qt }} / ${{ matrix.config }})
     runs-on: windows-latest
