@@ -125,6 +125,7 @@ endif()
 if(WIN32)
     set(RELEASE_DIR "${CMAKE_SOURCE_DIR}/installer/release/${PROJECT_VERSION}")
     add_custom_command(TARGET copper_native_host POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${RELEASE_DIR}"
         COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:copper_native_host>" "${RELEASE_DIR}/"
         COMMENT "Deploying native messaging host to ${RELEASE_DIR}/"
     )
