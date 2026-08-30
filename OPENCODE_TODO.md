@@ -17,8 +17,8 @@ This list is ordered by impact and should be tackled in sequence for the next de
 
 - [x] Audit single-instance startup behavior and local IPC reliability for the embedded local server.
 - [x] Validate all forward-argument paths: HTTP URLs, magnet links, torrent files, and copper:// links.
-- [ ] Review thread safety around download scheduling, state updates, and UI refresh callbacks.
-- [ ] Harden startup/shutdown logic so partial initialization does not leave stale locks, sockets, or database state behind.
+- [x] Review thread safety around download scheduling, state updates, and UI refresh callbacks. (single-threaded GUI design audited; no locks and no cross-thread signal delivery — all QTimer/QNetworkReply/QProcess on the GUI thread; DB progress writes throttled to avoid main-loop stalls)
+- [x] Harden startup/shutdown logic so partial initialization does not leave stale locks, sockets, or database state behind. (WAL journal_mode + NORMAL synchronous for crash-safe DB; `DownloadManager::shutdown()` cancels chunked downloads + kills yt-dlp/aria2c on exit so no processes are orphaned; ordered teardown in `main.cpp`)
 - [x] Add automated regression tests for critical flows: launch with URL, already-running instance, minimized startup, and protocol link handling. (`tests/integration_test.py`, 14 cases)
 
 ## Priority 2: Download engine and queue management

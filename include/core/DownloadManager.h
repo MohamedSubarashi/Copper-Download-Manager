@@ -33,6 +33,7 @@ public:
     void setSpeedLimit(qint64 bytesPerSecond);
     qint64 getSpeedLimit() const;
     void addChildDownload(int parentId, const QString& url, const QString& path, const QString& type, const QString& audioFormat = "mp4");
+    void shutdown();
 
 signals:
     void downloadAdded(int id, const QString& path, const QString& type, bool isFolder);

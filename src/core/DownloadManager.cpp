@@ -32,7 +32,31 @@ DownloadManager::DownloadManager() : nextId(1), maxConcurrent(5), speedLimit(0),
     connect(&YtDlpManager::instance(), &YtDlpManager::downloadFailed, this, &DownloadManager::onYtDlpFailed);
 }
 
-DownloadManager::~DownloadManager() {}
+DownloadManager::~DownloadManager() {
+    shutdown();
+}
+
+void DownloadManager::shutdown() {
+    // Cancel every in-flight download and stop all spawned external processes
+    // (yt-dlp, ffmpeg children, chunked transfers) so nothing is orphaned on exit.
+    speedLimitTimer->stop();
+
+    for (int id : activeChunkedDownloaders.keys()) {
+        if (activeChunkedDownloaders.contains(id)) {
+            activeChunkedDownloaders[id]->cancel();
+            activeChunkedDownloaders[id]->deleteLater();
+        }
+    }
+    activeChunkedDownloaders.clear();
+
+    for (const DownloadItem& item : downloads) {
+        if (item.type == "YtDlp") {
+            YtDlpManager::instance().cancelDownload(item.id);
+        } else if (item.type == "Torrent" && item.aria2cId > 0) {
+            Aria2cManager::instance().removeDownload(item.aria2cId);
+        }
+    }
+}
 
 DownloadManager& DownloadManager::instance() {
     static DownloadManager instance;

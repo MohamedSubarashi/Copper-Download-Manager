@@ -26,6 +26,12 @@ bool DatabaseManager::init() {
         return false;
     }
 
+    // WAL keeps readers (settings, downloads queries) from blocking writers and
+    // makes crash recovery robust for the progress-heavy download writes.
+    QSqlQuery pragma(db);
+    pragma.exec("PRAGMA journal_mode=WAL");
+    pragma.exec("PRAGMA synchronous=NORMAL");
+
     QSqlQuery query(db);
     query.exec("CREATE TABLE IF NOT EXISTS downloads ("
                "id INTEGER PRIMARY KEY, "

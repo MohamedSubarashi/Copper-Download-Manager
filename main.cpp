@@ -294,9 +294,13 @@ int main(int argc, char* argv[]) {
 
     int result = app.exec();
 
+    Logger::instance().info("Application shutting down");
+
+    // Stop all in-flight downloads and spawned processes (yt-dlp/ffmpeg/aria2c)
+    // before the local server and daemon teardown so nothing is left orphaned.
+    DownloadManager::instance().shutdown();
     LocalServer::instance().stop();
     Aria2cManager::instance().shutdownDaemon();
-    Logger::instance().info("Application shutting down");
 
     return result;
 }
