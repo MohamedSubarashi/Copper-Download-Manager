@@ -24,18 +24,34 @@ A high-performance, cross-platform download manager written in C++17 with Qt6.
 
 ## Requirements
 
-- **Qt 6.5+** — LGPLv3
-- **CMake 3.16+**
-- **C++17 compiler** — MSVC 2019+, GCC 9+, Clang 10+
+- **Qt 6.5+** (validated on **Qt 6.11.2 MinGW 64-bit**) — LGPLv3
+- **CMake 3.16+** (validated on **3.30.5**)
+- **Ninja** build system
+- **C++17 compiler** — MinGW/GCC (validated on **GCC 13.1.0**, `x86_64-posix-seh`); also MSVC 2019+ / Clang 10+
+- **Optional:** `libtorrent-rasterbar` (torrent support; otherwise aria2c is used)
 
-## Building
+> **Note:** Because the executable is linked as a GUI (Win32) application, it no longer opens a terminal/console log window on launch. Logs go only to `copper.log` in the app-data folder.
+
+## Building (Windows, MinGW)
+
+1. Install Qt + MinGW toolchain (e.g. `C:\Qt\6.11.2\mingw_64` with `C:\Qt\Tools\mingw1310_64`).
+2. Ensure `gcc`, `ninja`, and `cmake` are on `PATH`.
+3. Configure and build (use a **space-free** build directory):
 
 ```bash
-cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH=C:\Qt\6.x.x\msvc2022_64
-cmake --build build --config Release
+cmake -S . -B C:\Qt\Builds\CopperDownloadManager\rel -G Ninja ^
+  -DCMAKE_BUILD_TYPE=Release ^
+  -DCMAKE_PREFIX_PATH=C:/Qt/6.11.2/mingw_64
+cmake --build C:\Qt\Builds\CopperDownloadManager\rel
 ```
 
-The release build is automatically deployed to `installer/release/<version>/` and the final package (Setup.exe + portable zip) is placed in `Release/`.
+> **Space-in-path caveat:** `app.rc` (Windows version/icon resource) is skipped when the source path contains spaces (e.g. `Copper Download Manager`) to avoid a MinGW `windres` preprocessing failure. The app still reports its version at runtime via `main.cpp`.
+
+The release build is automatically deployed to `installer/release/<version>/` (windeployqt) and the final package (Setup.exe + portable zip) is placed in `Release/`.
+
+## CI
+
+A GitHub Actions workflow (`.github/workflows/ci.yml`) builds the project in Debug and Release across Qt 6.6.3 and 6.11.2 on Windows, and smoke-checks that the produced executable is a GUI (non-console) application.
 
 ## External Tools (Downloaded on Demand)
 
