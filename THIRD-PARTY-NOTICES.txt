@@ -1,10 +1,10 @@
-COPPER DOWNLOAD MANAGER v0.2.0
+COPPER DOWNLOAD MANAGER v0.3.5
 Third-Party Software Notices
 
 This product includes software developed by third parties.
 
 --------------------------------------------------
-Qt 6.9.3
+Qt 6.11.2
 --------------------------------------------------
 
 License: GNU Lesser General Public License v3.0 (LGPLv3)
@@ -21,6 +21,24 @@ Qt Modules used:
   - Qt6Network
   - Qt6Sql
   - Qt6Svg
+
+--------------------------------------------------
+MinGW GCC Runtime Library
+--------------------------------------------------
+
+License: GNU General Public License v3.0 (GPLv3) with the
+         GCC Runtime Library Exception
+Copyright (C) Free Software Foundation, Inc.
+
+Copper Download Manager is built with the MinGW-w64 toolchain and
+distributes the following runtime libraries (libgcc_s_seh-1.dll,
+libstdc++-6.dll, libwinpthread-1.dll). These are covered by the GPLv3
+with the GCC Runtime Library Exception, which permits their use with and
+redistribution alongside this application.
+
+Source: https://gcc.gnu.org/
+License text: https://www.gnu.org/licenses/gpl-3.0.html
+Exception text: https://gcc.gnu.org/git/?p=gcc.git;a=blob_plain;f=gcc/COPYING3
 
 --------------------------------------------------
 aria2 1.37.0

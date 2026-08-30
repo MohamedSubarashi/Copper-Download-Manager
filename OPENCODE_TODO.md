@@ -71,8 +71,8 @@ This list is ordered by impact and should be tackled in sequence for the next de
 
 - [x] Finalize release packaging for Windows and other target platforms. (Windows exe now embeds `Assets/app.ico` + version resource; RC compiled from a space-free build-tree copy so MinGW windres works with the space-containing source path, commit `fa21a61`)
 - [x] Validate installer/portable output structure and dependency deployment. (portable folder verified complete; CI uploads portable zip artifact)
-- [ ] Ensure licensing and third-party notices are included correctly in every release package. (THIRD-PARTY-NOTICES.txt copied into package; in-app license tab now dynamic)
-- [x] Add a release checklist for QA before publishing new versions. (14-case integration suite + CI packaging smoke checks)
+- [x] Ensure licensing and third-party notices are included correctly in every release package. (THIRD-PARTY-NOTICES.txt copied into package; MinGW GCC runtime libraries now listed under GPLv3 + GCC Runtime Library Exception; Qt version bumped to deployed 6.11.2; in-app license tab dynamic)
+- [x] Add a release checklist for QA before publishing new versions. (14-case integration suite + CI packaging smoke checks; formalized as `RELEASE.md` with versioning, build, automated-suite, manual-QA, packaging, and publish steps)
 
 ## Priority 9: Hardening and security review
 
