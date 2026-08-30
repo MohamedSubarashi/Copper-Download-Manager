@@ -6,86 +6,25 @@
 </head>
 <body>
   <div class="header">
-    <img src="icons/icon48.png" alt="Copper">
+    <img src="icons/icon48.png" alt="Copper icon">
     <div class="header-text">
       <h1>Copper Download Manager</h1>
-      <span class="version">v2.0</span>
+      <span class="version">v0.3.5</span>
     </div>
-    <div id="connDot" class="conn-dot disconnected" title="Copper status"></div>
+    <span id="connDot" class="conn-dot disconnected" title="Copper status"></span>
   </div>
 
-  <div id="status" class="status enabled">Interception: ON</div>
+  <div id="status" class="status disabled">Copper not running</div>
 
-  <button id="toggleBtn" class="toggle-btn disable">Disable</button>
-
-  <div class="section">
-    <label class="section-label">Quick Download</label>
-    <div class="url-input-row">
-      <input type="text" id="urlInput" placeholder="Paste URL here..." />
-      <button id="sendBtn" class="send-btn">Send</button>
-    </div>
+  <div class="actions">
+    <button id="openBtn" class="primary">Open Copper</button>
+    <button id="pageBtn" class="secondary">Send current page</button>
   </div>
 
-  <div class="tabs">
-    <button class="tab active" data-tab="media">Media</button>
-    <button class="tab" data-tab="history">History</button>
-    <button class="tab" data-tab="settings">Settings</button>
-  </div>
-
-  <div id="tab-media" class="tab-content active">
-    <div class="media-toolbar">
-      <select id="mediaFilter" class="filter-select">
-        <option value="all">All Types</option>
-        <option value="image">Images</option>
-        <option value="video">Videos</option>
-        <option value="audio">Audio</option>
-        <option value="document">Documents</option>
-        <option value="archive">Archives</option>
-        <option value="executable">Executables</option>
-      </select>
-      <button id="detectBtn" class="small-btn">Scan Page</button>
-      <button id="downloadAllBtn" class="small-btn accent">Download All</button>
-    </div>
-    <div id="mediaList" class="media-list">
-      <div class="empty-state">Click "Scan Page" to detect media</div>
-    </div>
-  </div>
-
-  <div id="tab-history" class="tab-content">
-    <div class="history-toolbar">
-      <span id="historyCount" class="history-count">0 intercepted</span>
-      <button id="clearHistoryBtn" class="small-btn danger">Clear</button>
-    </div>
-    <div id="historyList" class="media-list">
-      <div class="empty-state">No downloads intercepted yet</div>
-    </div>
-  </div>
-
-  <div id="tab-settings" class="tab-content">
-    <label class="section-label">File Type Filter</label>
-    <div class="settings-row">
-      <select id="filterMode" class="filter-select">
-        <option value="none">Disabled</option>
-        <option value="include">Only these types</option>
-        <option value="exclude">Exclude these types</option>
-      </select>
-    </div>
-    <input type="text" id="fileFilterInput" placeholder="e.g. mp4,zip,exe" class="settings-input" />
-
-    <label class="section-label">Domain Filter</label>
-    <input type="checkbox" id="domainFilterToggle" />
-    <label for="domainFilterToggle" class="checkbox-label">Enable domain filtering</label>
-    <div class="settings-row">
-      <textarea id="domainWhitelist" placeholder="Whitelist (one per line, or empty for all)" class="settings-textarea"></textarea>
-      <textarea id="domainBlacklist" placeholder="Blacklist (one per line)" class="settings-textarea"></textarea>
-    </div>
-
-    <button id="saveSettingsBtn" class="save-btn">Save Settings</button>
-    <div id="settingsSaved" class="saved-msg" style="display:none;">Settings saved!</div>
-  </div>
-
-  <div class="footer">
-    <button id="openBtn" class="open-btn">Open Copper</button>
+  <label class="section-label" for="urlInput">Quick download</label>
+  <div class="url-input-row">
+    <input type="text" id="urlInput" placeholder="Paste URL or magnet link" />
+    <button id="sendBtn" class="send-btn">Send</button>
   </div>
 
   <script src="popup.js"></script>

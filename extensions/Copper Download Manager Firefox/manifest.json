@@ -1,17 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Copper Download Manager",
-  "version": "3.0.0",
-  "description": "Send downloads, detect media, bulk download and more with Copper Download Manager via the copper:// download scheme",
+  "version": "0.3.5",
+  "description": "Powerful download interceptor and launcher for Copper Download Manager.",
   "permissions": [
-    "downloads",
-    "storage",
-    "notifications",
     "contextMenus",
-    "activeTab",
-    "tabs",
-    "scripting",
-    "alarms"
+    "storage",
+    "tabs"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -27,29 +22,19 @@
       "all_frames": false
     }
   ],
-  "action": {
-    "default_popup": "popup.html",
-    "default_icon": {
-      "128": "icons/icon128.png"
-    }
-  },
-  "web_accessible_resources": [
-    {
-      "resources": ["icons/*.png"],
-      "matches": ["<all_urls>"]
-    }
-  ],
   "browser_specific_settings": {
     "gecko": {
       "id": "copper-download-manager@copper",
       "strict_min_version": "109.0",
       "data_collection_permissions": {
-        "required": ["none"],
-        "optional": ["websiteContent","websiteActivity"]
-      }
-
+      "required": [
+        "none"
+      ],
+      "optional": [
+        "browsingActivity"
+      ]
     }
-    
+    }
   },
   "icons": {
     "16": "icons/icon16.png",

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(CopperDownloadManager VERSION 0.3.0 LANGUAGES CXX)
+project(CopperDownloadManager VERSION 0.3.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,7 +45,14 @@ set(RESOURCE_FILES resources.qrc)
 set(ALL_SOURCES main.cpp ${SOURCES} ${HEADERS} ${RESOURCE_FILES})
 
 if(WIN32)
-    list(APPEND ALL_SOURCES app.rc)
+    # MinGW windres cannot reliably preprocess includes when the source/build path
+    # contains spaces (e.g. "Copper Download Manager"). Skip the RC file in that
+    # case and keep the version metadata in the app code instead.
+    if(CMAKE_SOURCE_DIR MATCHES " ")
+        message(STATUS "Source path contains spaces; skipping app.rc to avoid windres preprocessing failures")
+    else()
+        list(APPEND ALL_SOURCES app.rc)
+    endif()
 endif()
 
 if(APPLE)
@@ -79,10 +86,6 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "$<$<NOT:$<COMPILE_LANGUAGE:RC>>:${CMAKE_SOURCE_DIR}/include/torrent>"
     "$<$<NOT:$<COMPILE_LANGUAGE:RC>>:${CMAKE_SOURCE_DIR}/include/db>"
 )
-target_compile_definitions(${PROJECT_NAME} PRIVATE
-    "$<$<NOT:$<COMPILE_LANGUAGE:RC>>:LOG_DIR=\"${CMAKE_SOURCE_DIR}\">"
-)
-
 target_link_libraries(${PROJECT_NAME} Qt6::Core Qt6::Widgets Qt6::Network Qt6::Sql Qt6::Gui)
 
 if(LIBTORRENT_FOUND)

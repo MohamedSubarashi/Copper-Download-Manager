@@ -2,6 +2,7 @@
 #define SETTINGSDIALOG_H
 
 #include <QDialog>
+#include <QVector>
 
 class QTabWidget;
 class QLineEdit;
@@ -9,6 +10,7 @@ class QComboBox;
 class QPlainTextEdit;
 class QLabel;
 class QSpinBox;
+class QCheckBox;
 
 class SettingsDialog : public QDialog {
     Q_OBJECT
@@ -37,6 +39,8 @@ private:
     QTabWidget* tabWidget;
     QLineEdit* downloadPathEdit;
     QComboBox* chunkCombo;
+    QComboBox* typeFilterModeCombo;
+    QVector<QCheckBox*> typeFilterChecks;
     QPlainTextEdit* defaultTrackerEdit;
     QLabel* ytdlpVersionLabel;
     QLabel* ffmpegVersionLabel;

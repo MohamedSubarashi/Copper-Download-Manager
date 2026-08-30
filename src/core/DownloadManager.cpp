@@ -174,6 +174,12 @@ int DownloadManager::addDownload(const QString& url, const QString& path, const 
 void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries, const QString& path, const QString& type, bool useTrackNumbers, const QString& audioFormat, const QString& torrentSourceUrl, const QString& folderName) {
     Logger::instance().info("Adding playlist download: " + QString::number(entries.size()) + " files, type: " + type + ", tracks: " + (useTrackNumbers ? "yes" : "no") + ", format: " + audioFormat);
 
+    QString outputBase = path.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) : path;
+    if (outputBase.isEmpty()) {
+        outputBase = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    }
+    QDir().mkpath(outputBase);
+
     if (type == "Torrent" && !torrentSourceUrl.isEmpty()) {
         QVector<int> selectedIndices;
         for (const PlaylistEntry& entry : entries) {
@@ -182,14 +188,14 @@ void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries,
             }
         }
 
-        QString parentName = folderName.isEmpty() ? QFileInfo(path).fileName() : folderName;
+        QString parentName = folderName.isEmpty() ? QFileInfo(outputBase).fileName() : folderName;
         QString torrentFolder = parentName;
-        if (torrentFolder.isEmpty()) torrentFolder = QFileInfo(path).fileName();
+        if (torrentFolder.isEmpty()) torrentFolder = QFileInfo(outputBase).fileName();
 
         DownloadItem parentItem;
         parentItem.id = nextId++;
         parentItem.url = torrentSourceUrl;
-        parentItem.filePath = path;
+        parentItem.filePath = outputBase;
         parentItem.fileName = parentName;
         parentItem.type = "Torrent";
         parentItem.status = "Downloading";
@@ -201,11 +207,14 @@ void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries,
         downloads[parentItem.id] = parentItem;
 
         DatabaseManager::instance().addDownload(parentItem);
-        emit downloadAdded(parentItem.id, path, "Torrent", true);
+        emit downloadAdded(parentItem.id, outputBase, "Torrent", true);
+
+        QString torrentFolderPath = QDir(outputBase).filePath(torrentFolder);
+        QDir().mkpath(torrentFolderPath);
 
         for (const PlaylistEntry& entry : entries) {
             if (!entry.selected) continue;
-            QString childPath = path + "/" + torrentFolder + "/" + entry.title;
+            QString childPath = QDir(torrentFolderPath).filePath(entry.title);
             addChildDownload(parentItem.id, torrentSourceUrl, childPath, "Torrent", audioFormat);
             if (downloads.contains(parentItem.id) && !downloads[parentItem.id].childIds.isEmpty()) {
                 int lastChildId = downloads[parentItem.id].childIds.last();
@@ -216,7 +225,7 @@ void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries,
             }
         }
 
-        int ariaId = Aria2cManager::instance().addTorrentWithSelection(torrentSourceUrl, path, selectedIndices);
+        int ariaId = Aria2cManager::instance().addTorrentWithSelection(torrentSourceUrl, outputBase, selectedIndices);
         if (ariaId > 0) {
             downloads[parentItem.id].aria2cId = ariaId;
             connect(&Aria2cManager::instance(), &Aria2cManager::downloadProgress, this, [this, id = parentItem.id, ariaId](int aId, qint64 downloaded, qint64 total, qint64 spd) {

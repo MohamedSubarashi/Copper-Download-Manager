@@ -89,6 +89,53 @@ bool UrlDetector::isYtDlpUrl(const QString& url) {
     return false;
 }
 
+QString UrlDetector::detectContentCategory(const QString& url) {
+    QString lower = url.toLower().trimmed();
+
+    if (isTorrentUrl(url)) return "torrent";
+    if (lower.contains("youtube.com") || lower.contains("youtu.be") || lower.contains("vimeo.com") || lower.contains("soundcloud.com") || lower.contains("facebook.com") || lower.contains("twitter.com") || lower.contains("x.com") || lower.contains("tiktok.com") || lower.contains("instagram.com") || lower.contains("reddit.com") || lower.contains("rumble.com") || lower.contains("odysee.com") || lower.contains("bitchute.com")) {
+        return "video";
+    }
+
+    QUrl qurl(url);
+    QString path = qurl.isValid() ? qurl.path() : url;
+    QString ext = QFileInfo(path).suffix().toLower();
+
+    static const QStringList imageExts = {"jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico"};
+    static const QStringList videoExts = {"mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpeg", "mpg", "ts", "m2ts"};
+    static const QStringList audioExts = {"mp3", "wav", "flac", "aac", "ogg", "m4a", "opus", "wma"};
+    static const QStringList archiveExts = {"zip", "rar", "7z", "tar", "gz", "bz2", "xz", "tgz"};
+    static const QStringList documentExts = {"pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv"};
+    static const QStringList executableExts = {"exe", "msi", "dmg", "apk", "deb", "rpm", "appimage"};
+
+    if (imageExts.contains(ext)) return "image";
+    if (videoExts.contains(ext)) return "video";
+    if (audioExts.contains(ext)) return "audio";
+    if (archiveExts.contains(ext)) return "archive";
+    if (documentExts.contains(ext)) return "document";
+    if (executableExts.contains(ext)) return "executable";
+
+    if (lower.contains(".jpg") || lower.contains(".jpeg") || lower.contains(".png") || lower.contains(".gif") || lower.contains(".webp") || lower.contains(".avif")) return "image";
+    if (lower.contains(".mp4") || lower.contains(".mkv") || lower.contains(".mp3") || lower.contains(".wav") || lower.contains(".flac")) return "video";
+
+    return "other";
+}
+
+bool UrlDetector::isAllowedByDownloadType(const QString& url, const QString& mode, const QStringList& selectedFilters) {
+    if (selectedFilters.isEmpty()) {
+        return true;
+    }
+
+    QString category = detectContentCategory(url);
+    if (mode == "include") {
+        return selectedFilters.contains(category) || selectedFilters.contains("all");
+    }
+    if (mode == "exclude") {
+        return !selectedFilters.contains(category) || selectedFilters.contains("all");
+    }
+    return true;
+}
+
 QString UrlDetector::typeToString(UrlType type) {
     switch (type) {
         case UrlTorrent: return "Torrent/Magnet";

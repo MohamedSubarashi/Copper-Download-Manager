@@ -72,6 +72,7 @@ DownloadManagerDialog::DownloadManagerDialog(SourceType sourceType, const QStrin
     mainLayout->addWidget(progressBar);
 
     fileList = new QListWidget();
+    connect(fileList, &QListWidget::itemChanged, this, &DownloadManagerDialog::onItemChanged);
     mainLayout->addWidget(fileList);
 
     QHBoxLayout* optionsLayout = new QHBoxLayout();
@@ -173,6 +174,15 @@ void DownloadManagerDialog::showFileList(const QVector<PlaylistEntry>& entries) 
     fileList->clear();
     bool useTracks = trackNumberCheck->isChecked();
     int total = entries.size();
+    bool allSelected = !entries.isEmpty();
+    for (const PlaylistEntry& entry : entries) {
+        if (!entry.selected) {
+            allSelected = false;
+            break;
+        }
+    }
+    selectAllCheck->setChecked(allSelected);
+
     for (const PlaylistEntry& entry : entries) {
         QString text;
         if (useTracks) {
@@ -186,6 +196,7 @@ void DownloadManagerDialog::showFileList(const QVector<PlaylistEntry>& entries) 
             text += " (" + entry.fileSize + ")";
         }
         QListWidgetItem* item = new QListWidgetItem(text);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(entry.selected ? Qt::Checked : Qt::Unchecked);
         fileList->addItem(item);
     }
@@ -203,10 +214,12 @@ void DownloadManagerDialog::onBrowse() {
 }
 
 void DownloadManagerDialog::onDownload() {
-    for (int i = 0; i < fileList->count(); i++) {
-        if (i < entries.size()) {
-            entries[i].selected = (fileList->item(i)->checkState() == Qt::Checked);
+    for (int i = 0; i < fileList->count(); ++i) {
+        QListWidgetItem* item = fileList->item(i);
+        if (!item || i >= entries.size()) {
+            continue;
         }
+        entries[i].selected = (item->checkState() == Qt::Checked);
     }
     accept();
 }

@@ -18,6 +18,8 @@ public:
     static bool isPlaylistUrl(const QString& url);
     static bool isTorrentUrl(const QString& url);
     static bool isYtDlpUrl(const QString& url);
+    static QString detectContentCategory(const QString& url);
+    static bool isAllowedByDownloadType(const QString& url, const QString& mode, const QStringList& selectedFilters);
     static QString typeToString(UrlType type);
 };
 

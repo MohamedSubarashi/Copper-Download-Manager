@@ -3,6 +3,7 @@
 #include "ui/DownloadManagerDialog.h"
 #include "utils/UrlDetector.h"
 #include "utils/Logger.h"
+#include "db/DatabaseManager.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -101,6 +102,16 @@ void AddUrlDialog::setUrl(const QString& url) {
 void AddUrlDialog::onAdd() {
     QString url = urlEdit->text().trimmed();
     if (url.isEmpty()) return;
+
+    QString mode = DatabaseManager::instance().getSetting("downloadTypeFilterMode", "disabled");
+    QStringList selected = DatabaseManager::instance().getSetting("downloadTypeFilterTypes", "all").split(';', Qt::SkipEmptyParts);
+    if (mode == "include" || mode == "exclude") {
+        if (!UrlDetector::isAllowedByDownloadType(url, mode, selected)) {
+            QMessageBox::warning(this, "Blocked by filter",
+                "This URL type is filtered out by your current download-type settings.\n\nChange the filter in Settings > Downloads to allow it.");
+            return;
+        }
+    }
 
     int typeIndex = typeCombo->currentIndex();
     QString path = pathEdit->text();
@@ -205,6 +216,13 @@ void AddUrlDialog::validateUrl() {
     if (valid) {
         UrlType type = UrlDetector::detect(url);
         typeInfoLabel->setText("Detected: " + UrlDetector::typeToString(type));
+        QString mode = DatabaseManager::instance().getSetting("downloadTypeFilterMode", "disabled");
+        QStringList selected = DatabaseManager::instance().getSetting("downloadTypeFilterTypes", "all").split(';', Qt::SkipEmptyParts);
+        if (mode == "include" || mode == "exclude") {
+            if (!UrlDetector::isAllowedByDownloadType(url, mode, selected)) {
+                typeInfoLabel->setText(typeInfoLabel->text() + " | Filtered by type settings");
+            }
+        }
     } else {
         typeInfoLabel->setText("");
     }
