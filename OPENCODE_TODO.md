@@ -8,10 +8,10 @@ This list is ordered by impact and should be tackled in sequence for the next de
 
 ## Priority 0: Stabilize the build and project health
 
-- [ ] Verify the project builds cleanly in Debug and Release across the supported OS targets.
-- [ ] Fix any compiler warnings, linker issues, and platform-specific build problems discovered during validation.
-- [ ] Add a reproducible build/test workflow for CI (CMake, Qt path handling, packaging smoke checks).
-- [ ] Document exact prerequisites for development environments (Qt version, toolchain, optional libtorrent support).
+- [x] Verify the project builds cleanly in Debug and Release across the supported OS targets.
+- [x] Fix any compiler warnings, linker issues, and platform-specific build problems discovered during validation.
+- [x] Add a reproducible build/test workflow for CI (CMake, Qt path handling, packaging smoke checks). (`.github/workflows/ci.yml`)
+- [x] Document exact prerequisites for development environments (Qt version, toolchain, optional libtorrent support). (README)
 
 ## Priority 1: Reliability and crash-safety of the app core
 
@@ -26,15 +26,15 @@ This list is ordered by impact and should be tackled in sequence for the next de
 - [ ] Review the core download manager for queue ordering, retry logic, pause/resume correctness, and cancellation edge cases.
 - [ ] Improve progress reporting accuracy during chunked downloads and multi-part transfers.
 - [ ] Validate resume behavior across interruptions, file corruption, and partial download states.
-- [ ] Verify speed limiter implementation and ensure it does not cause CPU or UI stalls.
+- [x] Verify speed limiter implementation and ensure it does not cause CPU or UI stalls. (real token-bucket throttle in `ChunkedDownloader` + hysteresis in `DownloadManager::processSpeedLimit`, commit `873e16f`)
 - [ ] Review database persistence for download state and ensure recovery is consistent after app restart.
 
 ## Priority 3: Browser extension integration
 
-- [ ] Confirm Chrome and Firefox extension behavior is aligned for interception, URL capture, and native app communication.
-- [ ] Review permission usage in both extensions and remove any unnecessary access.
-- [ ] Validate the desktop app receives intercepted link data reliably from the browser extension and handles it consistently.
-- [ ] Improve error handling when the desktop app is not running or when the browser cannot reach it.
+- [x] Confirm Chrome and Firefox extension behavior is aligned for interception, URL capture, and native app communication. (background/popup/content JS byte-identical; only intentional MV3 manifest differences)
+- [x] Review permission usage in both extensions and remove any unnecessary access. (contextMenus/storage/tabs/notifications + `<all_urls>` all in use)
+- [x] Validate the desktop app receives intercepted link data reliably from the browser extension and handles it consistently. (copper:// flow verified: `encodeURIComponent` on extension side, `decodeOnce()` in `parseCopperLink()`)
+- [x] Improve error handling when the desktop app is not running or when the browser cannot reach it. (`pingCopper()` + `notifyCopperUnreachable()` in both `background.js`, commit `7794a2c`)
 - [ ] Add manifest and compatibility checks for Firefox and Chrome release requirements.
 
 ## Priority 4: Protocol and desktop integration
@@ -69,7 +69,7 @@ This list is ordered by impact and should be tackled in sequence for the next de
 
 ## Priority 8: Packaging, distribution, and release readiness
 
-- [ ] Finalize release packaging for Windows and other target platforms.
+- [x] Finalize release packaging for Windows and other target platforms. (Windows exe now embeds `Assets/app.ico` + version resource; RC compiled from a space-free build-tree copy so MinGW windres works with the space-containing source path, commit `fa21a61`)
 - [ ] Validate installer/portable output structure and dependency deployment.
 - [ ] Ensure licensing and third-party notices are included correctly in every release package.
 - [ ] Add a release checklist for QA before publishing new versions.
