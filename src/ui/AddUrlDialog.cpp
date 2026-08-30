@@ -141,12 +141,13 @@ void AddUrlDialog::onAdd() {
             bool useTracks = dialog.getUseTrackNumbers();
             QString fmt = dialog.getAudioFormat();
             QString torrentName = dialog.getTorrentName();
+            QString source = dialog.getTorrentSource();
             if (fmt.isEmpty()) fmt = audioFormat;
             if (!selected.isEmpty()) {
-                DownloadManager::instance().addPlaylistDownload(selected, outputPath, "Torrent", useTracks, fmt, url, torrentName);
+                DownloadManager::instance().addPlaylistDownload(selected, outputPath, "Torrent", useTracks, fmt, source, torrentName);
             } else {
                 QString savePath = path.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) : path;
-                DownloadManager::instance().addDownload(url, savePath, "Torrent");
+                DownloadManager::instance().addDownload(source, savePath, "Torrent");
             }
         }
         accept();

@@ -172,16 +172,29 @@ void DownloadManagerDialog::fetchFiles() {
         if (!Aria2cManager::instance().isInstalled()) {
             statusLabel->setText("aria2c not found. Downloading and installing aria2c... (this may take a moment)");
         }
-        Aria2cManager::instance().fetchTorrentFiles(url, [this](const QVector<PlaylistEntry>& fetchedEntries, const TorrentInfo& info) {
-            entries = fetchedEntries;
-            torrentInfo = info;
-            showFileList(entries);
-            showTorrentInfo(info);
-            statusLabel->setText("Found " + QString::number(entries.size()) + " file(s)");
-            downloadBtn->setEnabled(!entries.isEmpty());
-            fetchBtn->setEnabled(true);
-            progressBar->setVisible(false);
-        });
+        QString source = url;
+        QUrl su(url);
+        bool isRemote = !url.startsWith("magnet:?")
+            && (su.scheme() == "http" || su.scheme() == "https" || su.scheme() == "ftp")
+            && su.path().endsWith(".torrent", Qt::CaseInsensitive);
+        if (isRemote) {
+            statusLabel->setText("Downloading torrent metadata...");
+            Aria2cManager::instance().resolveTorrentSource(url,
+                [this, isRemote](const QString& localPath, const QString& err) {
+                if (localPath.isEmpty()) {
+                    statusLabel->setText(err.isEmpty() ? "Failed to load torrent." : err);
+                    downloadBtn->setEnabled(false);
+                    fetchBtn->setEnabled(true);
+                    progressBar->setVisible(false);
+                    return;
+                }
+                torrentFilePath = localPath;
+                fetchTorrentFileListFrom(localPath);
+            });
+            return;
+        }
+        torrentFilePath = url;
+        fetchTorrentFileListFrom(url);
     } else if (sourceType == SourceVideo) {
         if (!YtDlpManager::instance().isInstalled()) {
             statusLabel->setText(
@@ -203,6 +216,24 @@ void DownloadManagerDialog::fetchFiles() {
             progressBar->setVisible(false);
         });
     }
+}
+
+void DownloadManagerDialog::fetchTorrentFileListFrom(const QString& source) {
+    Aria2cManager::instance().fetchTorrentFiles(source,
+        [this](const QVector<PlaylistEntry>& fetchedEntries, const TorrentInfo& info) {
+        entries = fetchedEntries;
+        torrentInfo = info;
+        showFileList(entries);
+        showTorrentInfo(info);
+        if (info.name.isEmpty() && entries.isEmpty()) {
+            statusLabel->setText("No files found. The torrent may be invalid or the metadata could not be read.");
+        } else {
+            statusLabel->setText("Found " + QString::number(entries.size()) + " file(s)");
+        }
+        downloadBtn->setEnabled(!entries.isEmpty());
+        fetchBtn->setEnabled(true);
+        progressBar->setVisible(false);
+    });
 }
 
 void DownloadManagerDialog::showFileList(const QVector<PlaylistEntry>& entries) {
@@ -288,6 +319,13 @@ QString DownloadManagerDialog::getOutputPath() const {
 
 QString DownloadManagerDialog::getTorrentName() const {
     return torrentInfo.name;
+}
+
+QString DownloadManagerDialog::getTorrentSource() const {
+    // For remote .torrent URLs, return the resolved local temp path so the
+    // downstream download can seed aria2 from an actual file. For magnets and
+    // local paths, the original source is used.
+    return torrentFilePath;
 }
 
 void DownloadManagerDialog::showTorrentInfo(const TorrentInfo& info) {

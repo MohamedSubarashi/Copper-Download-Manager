@@ -126,11 +126,19 @@ private:
 
     void fetchMagnetMetadata(const QString& magnet, std::function<void(const QVector<PlaylistEntry>&, const TorrentInfo&)> callback, int attempt = 0);
     void fetchTorrentFileList(const QString& torrentPath, std::function<void(const QVector<PlaylistEntry>&, const TorrentInfo&)> callback);
+    void fetchRemoteTorrentFile(const QString& url, std::function<void(const QVector<PlaylistEntry>&, const TorrentInfo&)> callback);
 
     // Old one-shot helper (kept only for install path)
     QString getToolsDir();
     void startDownload(const QString& url, const QString& fileName);
     bool extractAria2c(const QString& zipPath);
+
+public:
+    // Resolve/download a torrent source (local path, magnet, or remote .torrent URL)
+    // to the local path that aria2 should seed from. For magnets, localPath is empty
+    // because aria2 handles magnet links natively.
+    void resolveTorrentSource(const QString& url, std::function<void(const QString& localPath, const QString& error)> callback);
+    void downloadTorrentFile(const QString& url, std::function<void(const QString& localPath, const QString& error)> callback);
 
     QMap<int, Aria2cDownloadTask> tasks;
     QMap<QString, int> taskByGid;

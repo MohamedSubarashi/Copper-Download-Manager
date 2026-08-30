@@ -996,16 +996,84 @@ void Aria2cManager::fetchTorrentFiles(const QString& magnetOrFile, std::function
     }
 
     bool isMagnet = magnetOrFile.startsWith("magnet:?");
-    bool isTorrentFile = QFile::exists(magnetOrFile) && magnetOrFile.endsWith(".torrent", Qt::CaseInsensitive);
+    bool isLocalTorrent = QFile::exists(magnetOrFile) && magnetOrFile.endsWith(".torrent", Qt::CaseInsensitive);
+    QUrl u(magnetOrFile);
+    bool isRemoteTorrent = !isMagnet
+        && (u.scheme() == "http" || u.scheme() == "https" || u.scheme() == "ftp")
+        && u.path().endsWith(".torrent", Qt::CaseInsensitive);
 
     if (isMagnet) {
         fetchMagnetMetadata(magnetOrFile, callback);
-    } else if (isTorrentFile) {
+    } else if (isLocalTorrent) {
         fetchTorrentFileList(magnetOrFile, callback);
+    } else if (isRemoteTorrent) {
+        fetchRemoteTorrentFile(magnetOrFile, callback);
     } else {
         Logger::instance().error("Invalid torrent source: " + magnetOrFile);
         callback(QVector<PlaylistEntry>(), TorrentInfo());
     }
+}
+
+void Aria2cManager::fetchRemoteTorrentFile(const QString& url, std::function<void(const QVector<PlaylistEntry>&, const TorrentInfo&)> callback) {
+    downloadTorrentFile(url, [this, callback, url](const QString& localPath, const QString& err) {
+        if (localPath.isEmpty()) {
+            emit errorOccurred(err.isEmpty() ? ("Failed to download .torrent from " + url) : err);
+            callback(QVector<PlaylistEntry>(), TorrentInfo());
+            return;
+        }
+        fetchTorrentFileList(localPath, callback);
+    });
+}
+
+void Aria2cManager::resolveTorrentSource(const QString& url, std::function<void(const QString& localPath, const QString& error)> callback) {
+    if (url.startsWith("magnet:?")) {
+        callback(QString(), QString());
+        return;
+    }
+    QUrl u(url);
+    bool isRemote = (u.scheme() == "http" || u.scheme() == "https" || u.scheme() == "ftp")
+                    && u.path().endsWith(".torrent", Qt::CaseInsensitive);
+    if (!isRemote) {
+        callback(url, QString());  // local torrent file path
+        return;
+    }
+    downloadTorrentFile(url, callback);
+}
+
+void Aria2cManager::downloadTorrentFile(const QString& url, std::function<void(const QString& localPath, const QString& error)> callback) {
+    QString tmpDir = QDir::tempPath() + "/copper_torrent_meta";
+    QDir().mkpath(tmpDir);
+
+    QFileInfo fi(QUrl(url).path());
+    QString fileName = fi.fileName();
+    if (fileName.isEmpty()) fileName = "remote.torrent";
+    QString dest = tmpDir + "/" + fileName;
+
+    QNetworkRequest req{QUrl(url)};
+    req.setRawHeader("User-Agent", "Copper Download Manager");
+    QNetworkReply* reply = nam->get(req);
+    connect(reply, &QNetworkReply::finished, this, [reply, callback, dest, url]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            callback(QString(), "Failed to download .torrent from " + url + ": " + reply->errorString());
+            return;
+        }
+        QByteArray data = reply->readAll();
+        if (data.isEmpty()) {
+            callback(QString(), "Empty .torrent received from " + url);
+            return;
+        }
+        QFile f(dest);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            callback(QString(), "Could not write downloaded .torrent to " + dest);
+            return;
+        }
+        f.write(data);
+        f.close();
+        Logger::instance().info("Downloaded .torrent from URL to " + dest +
+                                " (" + QString::number(data.size()) + " bytes)");
+        callback(dest, QString());
+    });
 }
 
 void Aria2cManager::fetchMagnetMetadata(const QString& magnet, std::function<void(const QVector<PlaylistEntry>&, const TorrentInfo&)> callback, int attempt) {

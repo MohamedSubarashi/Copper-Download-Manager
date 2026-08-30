@@ -31,6 +31,7 @@ public:
     bool getUseTrackNumbers() const;
     QString getAudioFormat() const;
     QString getTorrentName() const;
+    QString getTorrentSource() const;
     void setAudioFormat(const QString& format);
 
 private slots:
@@ -42,6 +43,7 @@ private slots:
 
 private:
     void fetchFiles();
+    void fetchTorrentFileListFrom(const QString& source);
     void showFileList(const QVector<PlaylistEntry>& entries);
     void showTorrentInfo(const TorrentInfo& info);
 
@@ -58,6 +60,7 @@ private:
     QProgressBar* progressBar;
     QVector<PlaylistEntry> entries;
     QString audioFormat;
+    QString torrentFilePath;
     TorrentInfo torrentInfo;
     QGroupBox* torrentInfoGroup;
     QLabel* torrentNameLabel;

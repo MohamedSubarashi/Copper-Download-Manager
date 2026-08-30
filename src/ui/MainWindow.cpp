@@ -986,10 +986,11 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
             bool useTracks = dialog.getUseTrackNumbers();
             QString fmt = dialog.getAudioFormat();
             QString torrentName = dialog.getTorrentName();
+            QString source = dialog.getTorrentSource();
             if (!selected.isEmpty()) {
-                DownloadManager::instance().addPlaylistDownload(selected, outputPath, "Torrent", useTracks, fmt, arg, torrentName);
+                DownloadManager::instance().addPlaylistDownload(selected, outputPath, "Torrent", useTracks, fmt, source, torrentName);
             } else {
-                DownloadManager::instance().addDownload(arg, outputPath, "Torrent");
+                DownloadManager::instance().addDownload(source, outputPath, "Torrent");
             }
         }
     } else if (arg.endsWith(".torrent", Qt::CaseInsensitive)) {
@@ -1003,10 +1004,11 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
                 bool useTracks = dialog.getUseTrackNumbers();
                 QString fmt = dialog.getAudioFormat();
                 QString torrentName = dialog.getTorrentName();
+                QString source = dialog.getTorrentSource();
                 if (!selected.isEmpty()) {
-                    DownloadManager::instance().addPlaylistDownload(selected, outputPath, "Torrent", useTracks, fmt, fi.absoluteFilePath(), torrentName);
+                    DownloadManager::instance().addPlaylistDownload(selected, outputPath, "Torrent", useTracks, fmt, source, torrentName);
                 } else {
-                    DownloadManager::instance().addDownload(fi.absoluteFilePath(), outputPath, "Torrent");
+                    DownloadManager::instance().addDownload(source, outputPath, "Torrent");
                 }
             }
         }
@@ -1024,8 +1026,13 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
         } else {
             CopperLink cl = parseCopperLink(arg);
             if (cl.valid) {
+                bool isMagnet = cl.url.startsWith("magnet:?");
+                QUrl cq(cl.url);
+                bool isTorrentUrl = isMagnet
+                    || (cq.scheme() == "http" || cq.scheme() == "https" || cq.scheme() == "ftp")
+                        && cq.path().endsWith(".torrent", Qt::CaseInsensitive);
                 Logger::instance().info("Copper download injection: " + cl.url.left(80));
-                if (cl.url.startsWith("magnet:?")) {
+                if (isTorrentUrl) {
                     QString savePath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
                     DownloadManagerDialog dialog(SourceTorrent, cl.url, savePath, this);
                     if (dialog.exec() == QDialog::Accepted) {
@@ -1034,10 +1041,11 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
                         bool useTracks = dialog.getUseTrackNumbers();
                         QString fmt = dialog.getAudioFormat();
                         QString torrentName = dialog.getTorrentName();
+                        QString source = dialog.getTorrentSource();
                         if (!selected.isEmpty()) {
-                            DownloadManager::instance().addPlaylistDownload(selected, outputPath, "Torrent", useTracks, fmt, cl.url, torrentName);
+                            DownloadManager::instance().addPlaylistDownload(selected, outputPath, "Torrent", useTracks, fmt, source, torrentName);
                         } else {
-                            DownloadManager::instance().addDownload(cl.url, outputPath, "Torrent");
+                            DownloadManager::instance().addDownload(source, outputPath, "Torrent");
                         }
                     }
                 } else {

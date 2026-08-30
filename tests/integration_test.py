@@ -164,6 +164,29 @@ def _make_file_server(payload, mode="normal", chunk_bits=""):
     return server, port
 
 
+def _make_file_server_from_path(path, content_type="application/octet-stream"):
+    """Serve the raw bytes of an existing file (used to serve a .torrent file)."""
+    with open(path, "rb") as f:
+        payload = f.read()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, port
+
+
 def find_download(js, mid):
     for d in js.get("downloads", []):
         if d.get("id") == mid:
@@ -363,6 +386,49 @@ def main():
                       f"url-matched={'yes' if target else 'no'}")
             finally:
                 srv.shutdown()
+
+            # 5) A .torrent HTTP URL injected via copper:// (as the extension
+            #    does for a .torrent link) must NOT be downloaded as a plain
+            #    HTTP file. It should route to the torrent handling path instead.
+            with tempfile.NamedTemporaryFile(suffix=".torrent", delete=False) as tf:
+                tf.write(b"d4:infod4:lengthi1ee4:name4:a.t8:piece lengthi1eee")
+                tor_path = tf.name
+            try:
+                srv, sp = _make_file_server_from_path(tor_path, "application/x-bittorrent")
+                enc = lambda v: quote(str(v), safe="")
+                tor_url = f"http://127.0.0.1:{sp}/a.torrent"
+                cu_url = (f"copper://download?url={enc(tor_url)}"
+                          f"&filename={enc('a.torrent')}"
+                          f"&path={enc(workdir)}")
+
+                # The torrent dialog is modal, so the forward may block; send it
+                # in a background thread and just verify no HTTP download is
+                # registered for the .torrent URL afterward.
+                def do_forward():
+                    try:
+                        http_request(port, "POST", "/api/forward", {"argument": cu_url}, timeout=2.0)
+                    except Exception:
+                        pass
+
+                th = threading.Thread(target=do_forward, daemon=True)
+                th.start()
+                time.sleep(4)
+
+                _, jl = http_request(port, "GET", "/api/downloads")
+                bug_http = [x for x in jl.get("downloads", [])
+                            if x.get("type") == "HTTP" and "a.torrent" in x.get("url", "")]
+                check("copper// script .torrent URL is not downloaded as HTTP",
+                      not bug_http, str(bug_http))
+
+                raw_file = os.path.join(workdir, "a.torrent")
+                check(".torrent URL not saved as a raw HTTP file",
+                      not os.path.isfile(raw_file))
+            finally:
+                srv.shutdown()
+                try:
+                    os.remove(tor_path)
+                except OSError:
+                    pass
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
