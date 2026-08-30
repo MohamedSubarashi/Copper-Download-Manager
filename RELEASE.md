@@ -26,11 +26,14 @@ Notes:
   install step and lays out Qt DLLs + plugin folders into
   `installer/release/<version>/`.
 - `THIRD-PARTY-NOTICES.txt` is copied into the release folder automatically.
+- `copper_native_host.exe` (the browser native-messaging host) is built and
+  copied into the release folder automatically as a second CMake target.
 
-After a successful build, deploy the freshly built exe over the release copy:
+After a successful build, deploy the freshly built exe(s) over the release copy:
 
 ```powershell
 Copy-Item -Force "rel\CopperDownloadManager.exe" "installer\release\<version>\CopperDownloadManager.exe"
+Copy-Item -Force "rel\copper_native_host.exe" "installer\release\<version>\copper_native_host.exe"
 ```
 
 ## 3. Automated regression suite
@@ -41,19 +44,37 @@ Run the full integration suite against the deployed exe:
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `N passed, 0 failed` (22 cases as of v0.3.5). The suite covers
+Expected result: `N passed, 0 failed` (31 cases as of v0.3.5). The suite covers
 launch/intake, single-instance, protocol forwarding, chunked/truncated/
-unknown-length downloads, pause/resume/cancel, and the copper:// flow.
+unknown-length downloads, the copper:// flow, .torrent injection, and the
+native-messaging host -> named-pipe injection (ping + byte-exact download).
 
 Extension manifest validation (offline, run in CI and locally):
 
 ```powershell
 python tests\validate_extensions.py
 ```
+Validates the MV3 shape, popup wiring, Firefox gecko.id + data-collection
+declaration, and that both extensions use `sendNativeMessage` (no copper:// or
+localhost ping).
 
 ## 4. Manual QA checklist
 
 Run through these before publishing.
+
+### Native-messaging injection (extension → desktop)
+- [ ] Firefox (registered on app startup using stable gecko.id
+      `copper-download-manager@copper`): context-menu "Download link with Copper"
+      sends the URL to the app over the named pipe and starts a download.
+- [ ] Chrome (dev/unpacked): register the loaded extension's `runtime.id` via
+      `--register-native-extension chrome <id>` or the in-extension register
+      handshake, then confirm the host manifest `allowed_origins` includes it and
+      injection works.
+- [ ] When Copper is closed, the host launches it automatically and the link is
+      still injected.
+- [ ] `copper_native_host.exe` sits in `<version>/` next to the app exe and the
+      Firefox manifest `path` points at it.
+
 
 ### Core downloads
 - [ ] Add a plain HTTP download; confirm chunked multi-connection progress and
@@ -81,11 +102,8 @@ Run through these before publishing.
       the peer table update while live.
 
 ### Browser extension → desktop
-- [ ] Chrome: toolbar popup opens; intercepted links reach the app.
+- [ ] Chrome: toolbar popup opens; intercepted links reach the app via the host.
 - [ ] Firefox: same flow works (add-on is signed / identified by gecko.id).
-- [ ] copper:// link with url, filename, and path forwards into the running app
-      and produces the expected file.
-- [ ] When the app is not running, the extension surfaces a reachable hint.
 
 ### Settings & protocol
 - [ ] Change theme (Light/Dark/System) and confirm it applies immediately.
@@ -101,9 +119,10 @@ Run through these before publishing.
 
 ## 5. Packaging checks
 
-- [ ] `installer/release/<version>/` contains the exe, all Qt DLLs and plugin
-      folders (platforms, imageformats, iconengines, styles, sqldrivers, tls,
-      networkinformation), and `THIRD-PARTY-NOTICES.txt`.
+- [ ] `installer/release/<version>/` contains the exe, `copper_native_host.exe`,
+      all Qt DLLs and plugin folders (platforms, imageformats, iconengines,
+      styles, sqldrivers, tls, networkinformation), and
+      `THIRD-PARTY-NOTICES.txt`.
 - [ ] MinGW runtime DLLs (`libgcc_s_seh-1.dll`, `libstdc++-6.dll`,
       `libwinpthread-1.dll`) are present and covered by the notices file.
 - [ ] Create the portable zip and confirm CI packaging smoke check passes.

@@ -60,7 +60,7 @@ private slots:
     void onTableDoubleClick(const QModelIndex& index);
     void onTableCollapse();
     void onArgumentForwarded(const QString& arg);
-
+    void onRegisterExtension(const QString& browser, const QString& extensionId);
 private:
     void setupUI();
     void setupMenuBar();

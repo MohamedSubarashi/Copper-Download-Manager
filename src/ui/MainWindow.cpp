@@ -8,6 +8,8 @@
 #include "utils/FileNameSanitizer.h"
 #include "core/DownloadManager.h"
 #include "core/LocalServer.h"
+#include "core/PipeServer.h"
+#include "utils/NativeMessaging.h"
 #include "db/DatabaseManager.h"
 #include "utils/Logger.h"
 #include "utils/UpdateManager.h"
@@ -90,6 +92,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), currentFilter(0) 
     connect(&DownloadManager::instance(), &DownloadManager::downloadSpeed, this, &MainWindow::onDownloadSpeed);
 
     connect(&LocalServer::instance(), &LocalServer::argumentForwarded, this, &MainWindow::onArgumentForwarded);
+    connect(&PipeServer::instance(), &PipeServer::argumentForwarded, this, &MainWindow::onArgumentForwarded);
+    connect(&PipeServer::instance(), &PipeServer::registerExtension, this, &MainWindow::onRegisterExtension);
 
     connect(&UpdateManager::instance(), &UpdateManager::updateAvailable, this, [this](const QString& version) {
         QString msg = "A new version of Copper Download Manager is available:\n\n"
@@ -1068,6 +1072,26 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
     }
 
     refreshTable();
+}
+
+void MainWindow::onRegisterExtension(const QString& browser, const QString& extensionId) {
+    // Re-point the native-messaging host manifest so the requesting extension
+    // (identified by its runtime.id) is allowed to talk to the app. For Chrome
+    // the manifest's allowed_origins must contain the exact chrome-extension ID,
+    // which is only known after the extension loads, hence this handshake.
+    QString b = browser.toLower();
+    if (b == "chrome" || b == "chromium" || b == "edge") {
+        NativeMessaging::installManifest("chrome", {extensionId});
+        if (browser.toLower() == "edge") {
+            NativeMessaging::installManifest("edge", {extensionId});
+        }
+    } else if (b == "firefox") {
+        NativeMessaging::installManifest("firefox", {extensionId});
+    } else {
+        NativeMessaging::installManifest(browser, {extensionId});
+    }
+    Logger::instance().info("NativeMessaging: registered extension id '" + extensionId +
+                            "' for browser '" + browser + "'");
 }
 
 QString MainWindow::formatSize(qint64 bytes) const {

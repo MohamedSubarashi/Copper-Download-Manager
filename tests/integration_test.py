@@ -208,6 +208,53 @@ def wait_download_status(port, mid, statuses, timeout=30.0):
     return last
 
 
+def _nm_frame(obj):
+    body = json.dumps(obj, separators=(",", ":")).encode("utf-8")
+    return len(body).to_bytes(4, "little") + body
+
+
+def _nm_read(stream):
+    hdr = stream.read(4)
+    if not hdr or len(hdr) < 4:
+        return None
+    length = int.from_bytes(hdr, "little")
+    body = stream.read(length)
+    try:
+        return json.loads(body.decode("utf-8"))
+    except Exception:
+        return None
+
+
+def run_native_host(host_path, message, timeout=20.0):
+    """Run copper_native_host.exe with a native-messaging framed message on
+    stdin and return its framed response (dict) or None on failure/timeout."""
+    p = subprocess.Popen(
+        [host_path],
+        cwd=os.path.dirname(os.path.abspath(host_path)),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        bufsize=0,
+    )
+    try:
+        p.stdin.write(_nm_frame(message))
+        p.stdin.flush()
+        p.stdin.close()
+        reply = _nm_read(p.stdout)
+        try:
+            p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            p.kill()
+        p.stdout.close()
+        return reply
+    except Exception:
+        try:
+            p.kill()
+        except Exception:
+            pass
+        return None
+
+
 def main():
     exe = os.environ.get("COPPER_EXE") or (sys.argv[1] if len(sys.argv) > 1 else None)
     if not exe or not os.path.isfile(exe):
@@ -429,6 +476,61 @@ def main():
                     os.remove(tor_path)
                 except OSError:
                     pass
+
+            # 6) Native-messaging host -> named pipe injection (the IDM model).
+            #    The host exe sits next to the app exe and forwards a browser
+            #    native-messaging message to the app over the QLocalServer pipe.
+            host_path = os.path.join(exe_dir, "copper_native_host.exe")
+            if not os.path.isfile(host_path):
+                check("native host executable deployed", False, f"{host_path} missing")
+            else:
+                check("native host executable deployed", True, "")
+                st, _ = http_request(port, "GET", "/api/ping")
+                check("app reachable for host ping", st == 200, f"status={st}")
+
+                # a) ping: host must reach the app over the pipe and report running.
+                rep = run_native_host(host_path, {"action": "ping"})
+                check("native host ping -> ok", bool(rep and rep.get("ok") is True), str(rep))
+                check("native host reports app running",
+                      bool(rep and rep.get("running") is True), str(rep))
+
+                # b) download: a small file injected through the host + pipe must
+                #    be registered and complete byte-exact.
+                nm_payload = "NMPIPE-" + ("y" * 65536)
+                nm_srv, nm_sp = _make_file_server(nm_payload, mode="normal")
+                try:
+                    nm_url = f"http://127.0.0.1:{nm_sp}/nm.bin"
+                    rep = run_native_host(host_path, {
+                        "action": "download",
+                        "url": nm_url,
+                        "filename": "nm.bin",
+                        "path": workdir,
+                    })
+                    check("native host download -> ok", bool(rep and rep.get("ok") is True), str(rep))
+
+                    nm_mid = None
+                    deadline = time.time() + 15
+                    while time.time() < deadline:
+                        _, jl = http_request(port, "GET", "/api/downloads")
+                        matched = [x for x in jl.get("downloads", [])
+                                   if x.get("url") == nm_url]
+                        if matched:
+                            nm_mid = matched[0]["id"]
+                            break
+                        time.sleep(0.5)
+                    check("pipe-injected download registered", nm_mid is not None,
+                          f"url={nm_url}")
+
+                    if nm_mid is not None:
+                        d = wait_download_status(port, nm_mid, {"Completed", "Failed"})
+                        ok = d is not None and d.get("status") == "Completed"
+                        if ok and os.path.isfile(os.path.join(workdir, "nm.bin")):
+                            with open(os.path.join(workdir, "nm.bin"), "rb") as f:
+                                ok = f.read() == nm_payload.encode("utf-8")
+                        check("pipe-injected download completes byte-exact", ok, str(d))
+                finally:
+                    nm_srv.shutdown()
+
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 

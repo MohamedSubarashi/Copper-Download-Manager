@@ -31,17 +31,17 @@ This list is ordered by impact and should be tackled in sequence for the next de
 
 ## Priority 3: Browser extension integration
 
-- [x] Confirm Chrome and Firefox extension behavior is aligned for interception, URL capture, and native app communication. (background/popup/content JS byte-identical; only intentional MV3 manifest differences)
-- [x] Review permission usage in both extensions and remove any unnecessary access. (contextMenus/storage/tabs/notifications + `<all_urls>` all in use)
-- [x] Validate the desktop app receives intercepted link data reliably from the browser extension and handles it consistently. (copper:// flow verified: `encodeURIComponent` on extension side, `decodeOnce()` in `parseCopperLink()`)
-- [x] Improve error handling when the desktop app is not running or when the browser cannot reach it. (`pingCopper()` + `notifyCopperUnreachable()` in both `background.js`, commit `7794a2c`)
-- [x] Add manifest and compatibility checks for Firefox and Chrome release requirements. (added `tests/validate_extensions.py` wired into CI: MV3 shape per browser, toolbar `action`+`default_popup` wiring, Firefox `gecko.id` + honest `data_collection_permissions required:["none"]`, icon presence; wired the previously-unreachable popup to the toolbar button via `action`)
+- [x] Confirm Chrome and Firefox extension behavior is aligned for interception, URL capture, and native app communication. (background/popup JS byte-identical between Chrome/Firefox; only intentional MV3 manifest differences)
+- [x] Review permission usage in both extensions and remove any unnecessary access. (dropped `copper://` + content-script + `<all_urls>`; now `contextMenus/storage/tabs/notifications/nativeMessaging`)
+- [x] Validate the desktop app receives intercepted link data reliably from the browser extension and handles it consistently. (native-messaging host `com.copper.dm` -> named pipe `copper-dm` -> `MainWindow::onArgumentForwarded`; verified: `copper_native_host` ping + pipe-injected download complete byte-exact)
+- [x] Improve error handling when the desktop app is not running or when the browser cannot reach it. (`sendNativeMessage(actions.ping)` + `notifyCopperUnreachable()` in `background.js`; host launches the app if it is not running)
+- [x] Add manifest and compatibility checks for Firefox and Chrome release requirements. (`tests/validate_extensions.py` wired into CI: MV3 shape per browser, toolbar `action`+`default_popup`, Firefox `gecko.id` + honest `data_collection_permissions required:["none"]`, icon presence, plus native-messaging permission / no-copper:// / no-localhost-ping background checks)
 
 ## Priority 4: Protocol and desktop integration
 
-- [x] Formalize and test the copper:// protocol flow for open, create-download, and URL forwarding scenarios. (end-to-end test added: extension-format `copper://download?url=&filename=&path=` (encodeURIComponent) forwarded to the running app produces a byte-exact HTTP download; `copper://open` and main.cpp/MainWindow intake verified consistent; integration suite now 22 cases)
-- [x] Register and validate the desktop protocol association on Windows/macOS/Linux where appropriate. (`.desktop` for Linux + `MsMimeType`/`x-scheme-handler`; Windows registry registration validated; `autoUpdateRegistryPath()` now repairable — `copper` base key + command always refreshed on startup, heals partial/moved installs even when the app was never formally registered as default)
-- [x] Ensure command-line arguments and protocol calls populate the same download intake path. (both `main.cpp` and `MainWindow::onArgumentForwarded` route magnet/http/copper through the identical `DownloadManager` intake + `DownloadManagerDialog` where selection is needed)
+- [x] Formalize and test the copper:// protocol flow for open, create-download, and URL forwarding scenarios. (`copper://download?url=&filename=&path=` (encodeURIComponent) forwarded to the running app produces a byte-exact HTTP download; `copper://open` and main.cpp/MainWindow intake verified; integration suite now 31 cases)
+- [x] Register and validate the desktop protocol association on Windows/macOS/Linux where appropriate. (`.desktop` for Linux + `MsMimeType`/`x-scheme-handler`; Windows registry registration validated; `autoUpdateRegistryPath()` repairable)
+- [x] Ensure command-line arguments and protocol calls populate the same download intake path. (both `main.cpp` and `MainWindow::onArgumentForwarded` route magnet/http/copper through the identical `DownloadManager` intake + `DownloadManagerDialog` where selection is needed; the named-pipe intake reuses the same `onArgumentForwarded` path)
 - [x] Review default download directory selection and filename sanitization for user-provided URLs and custom save paths. (`QStandardPaths::DownloadLocation` default; `sanitizeFileName` applied to copper filename and Content-Disposition names)
 
 ## Priority 5: Torrent and media features
@@ -99,16 +99,36 @@ The project is ready for the next milestone when the following are true:
 - [x] Browser extension to desktop integration is stable
 - [x] Torrent/media tools install and run without critical failures
 - [x] Settings and state recovery survive reopen/restart
-- [x] A basic automated regression suite exists for critical flows (22 integration cases + CI extension-lint, all green)
+- [x] A basic automated regression suite exists for critical flows (31 integration cases + CI extension-lint, all green)
 
 All Priority priorities (0-9) are complete as of this pass. Every remaining
-checkmark in this file has been verified by a build, the 22-case integration
+checkmark in this file has been verified by a build, the 31-case integration
 suite, or CI.
+
+## Completed milestone: extension injects through native messaging (IDM model)
+
+- [x] Replaced the extension's `copper://` + localhost HTTP injection with the
+      full IDM model: Chrome/Firefox native-messaging host (`com.copper.dm`) +
+      a desktop-app named-pipe intake (`QLocalServer` `copper-dm`, `PipeServer`).
+- [x] Desktop app reuses the existing `MainWindow::onArgumentForwarded` intake,
+      so magnets, `.torrent` URLs, HTTP(S)/FTP and video links behave exactly as
+      the copper:// path did (including the torrent-dialog routing fix).
+- [x] Extension (`background.js`) now uses `chrome.runtime.sendNativeMessage`;
+      content-script `<all_urls>` + `copper://` navigation removed; version kept
+      at `4.0.0`.
+- [x] `--register-native-extension <browser> <id>` CLI + in-app `register`
+      handshake re-point the Chrome host manifest `allowed_origins` to a loaded
+      extension's `runtime.id`; Firefox startup registration uses the stable
+      gecko.id `copper-download-manager@copper`.
+- [x] CI extension-lint validates the new native-messaging shape; integration
+      suite covers host ping, host->pipe download, and pipe-injected byte-exact
+      completion.
 
 ## Suggested next milestone
 
-This pass completed all defined priorities (0-9) for v0.3.5. The next
-development pass should scope new work (for example: additional download
-sources/protocols, a proper installer (MSI/Inno), macOS/Linux packaging
-verification, or expanded integration coverage) and add corresponding items
-above. See `RELEASE.md` for the QA checklist to run before publishing.
+This pass completed all defined priorities (0-9) and the native-messaging
+injection redesign for v0.3.5. The next development pass should scope new work
+(for example: a proper installer (MSI/Inno) that ships/registers the native
+host, macOS/Linux native-host manifest + packaging verification, Chrome Web
+Store signing key so the packaged extension ID is stable, or expanded
+integration coverage). See `RELEASE.md` for the QA checklist before publishing.

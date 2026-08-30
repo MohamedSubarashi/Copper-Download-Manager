@@ -1,16 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Copper Download Manager",
-  "version": "0.3.5",
+  "version": "4.0.0",
   "description": "Powerful download interceptor and launcher for Copper Download Manager.",
   "permissions": [
     "contextMenus",
     "storage",
     "tabs",
-    "notifications"
-  ],
-  "host_permissions": [
-    "<all_urls>"
+    "notifications",
+    "nativeMessaging"
   ],
   "background": {
     "scripts": ["background.js"]
@@ -25,14 +23,6 @@
       "128": "icons/icon128.png"
     }
   },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["copper-content.js"],
-      "run_at": "document_idle",
-      "all_frames": false
-    }
-  ],
   "browser_specific_settings": {
     "gecko": {
       "id": "copper-download-manager@copper",
@@ -40,7 +30,8 @@
       "data_collection_permissions": {
         "required": [
           "none"
-        ]
+        ],
+        "optional": []
       }
     }
   },

@@ -1,20 +1,28 @@
 const STORAGE_KEY = "copperExtensionEnabled";
-const PING_URL = "http://127.0.0.1:24680/api/ping";
+const HOST = "com.copper.dm";
 
-function pingCopper() {
+// Returns true when the native host responded (and thus the desktop app's pipe
+// intake is reachable). The host also launches the app if it isn't running.
+function sendNativeMessage(message) {
   return new Promise((resolve) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 1200);
-    fetch(PING_URL, { signal: controller.signal, cache: "no-store" })
-      .then((r) => {
-        clearTimeout(timer);
-        resolve(r.ok);
-      })
-      .catch(() => {
-        clearTimeout(timer);
-        resolve(false);
+    try {
+      chrome.runtime.sendNativeMessage(HOST, message, (response) => {
+        const err = chrome.runtime.lastError;
+        if (err || !response) {
+          resolve({ ok: false, error: err ? err.message : "no response" });
+          return;
+        }
+        resolve(response);
       });
+    } catch (e) {
+      resolve({ ok: false, error: e.message });
+    }
   });
+}
+
+async function pingCopper() {
+  const rep = await sendNativeMessage({ action: "ping" });
+  return !!(rep && rep.ok);
 }
 
 function notifyCopperUnreachable() {
@@ -23,14 +31,9 @@ function notifyCopperUnreachable() {
     iconUrl: chrome.runtime.getURL("icons/icon128.png"),
     title: "Copper isn't reachable",
     message:
-      "Copper Download Manager does not appear to be running. Start it, then try again.",
+      "Copper Download Manager could not be reached. Make sure the native host is installed (open Copper, then try again).",
   });
 }
-
-const copperUrlFor = (url, filename = "", path = "") => {
-  const enc = (value) => (value == null ? "" : encodeURIComponent(String(value)));
-  return `copper://download?url=${enc(url)}&filename=${enc(filename)}&path=${enc(path)}`;
-};
 
 function getCurrentEnabledState() {
   return new Promise((resolve) => {
@@ -45,37 +48,27 @@ function setCurrentEnabledState(enabled) {
   chrome.storage.local.set({ [STORAGE_KEY]: enabled });
 }
 
-async function openCopper(url, filename = "", path = "") {
+async function sendToCopper(url, filename = "", path = "") {
   const enabled = await getCurrentEnabledState();
   if (!enabled) {
-    return;
+    return { accepted: false, reason: "disabled" };
   }
-
-  // The copper:// custom protocol only works when the desktop app is running.
-  // Probe its local API first so users get clear feedback instead of a silent
-  // dead protocol launch when Copper isn't installed/started.
-  const reachable = await pingCopper();
-  if (!reachable) {
-    notifyCopperUnreachable();
-    return;
+  const rep = await sendNativeMessage({ action: "download", url, filename, path });
+  if (rep && rep.ok) {
+    return { accepted: true };
   }
-
-  const copperUrl = copperUrlFor(url, filename, path);
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab && tab.id != null) {
-      await chrome.tabs.sendMessage(tab.id, { type: "copper", url: copperUrl });
-      return;
-    }
-  } catch (e) {
-    // Some pages do not allow an injected content script.
-  }
-
-  chrome.tabs.create({ url: copperUrl });
+  return { accepted: false, reason: "unreachable" };
 }
 
-function dispatch(url, filename = "", path = "") {
-  openCopper(url, filename, path);
+async function dispatch(url, filename = "", path = "") {
+  const result = await sendToCopper(url, filename, path);
+  if (result.accepted) {
+    return true;
+  }
+  if (result.reason === "unreachable") {
+    notifyCopperUnreachable();
+  }
+  return false;
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -94,28 +87,41 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.contextMenus.onClicked.addListener((info) => {
+  const filenameOf = (src) => (src || "").split("/").pop().split("?")[0] || "download";
   if (info.menuItemId === "copper-link" && info.linkUrl) {
-    dispatch(info.linkUrl, info.linkUrl.split("/").pop().split("?")[0] || "download");
+    dispatch(info.linkUrl, filenameOf(info.linkUrl));
     return;
   }
-
   if ((info.menuItemId === "copper-image" || info.menuItemId === "copper-video") && info.srcUrl) {
-    dispatch(info.srcUrl, info.srcUrl.split("/").pop().split("?")[0] || "download");
+    dispatch(info.srcUrl, filenameOf(info.srcUrl));
     return;
   }
-
   if (info.menuItemId === "copper-selection" && info.selectionText) {
     const text = info.selectionText.trim();
-    if (text.startsWith("http://") || text.startsWith("https://") || text.startsWith("ftp://") || text.startsWith("magnet:")) {
-      dispatch(text, text.split("/").pop().split("?")[0] || "download");
+    if (/^(https?|ftp|magnet):/i.test(text)) {
+      dispatch(text, filenameOf(text));
     }
   }
 });
 
+// First run against a freshly installed host: report our runtime.id so the app
+// can add it to the Chrome host manifest allowed_origins (load-dependent for
+// unpacked/dev builds, unlike Firefox's stable gecko.id). Best-effort.
+async function registerWithCopper() {
+  try {
+    const id = chrome.runtime.id;
+    if (!id) return;
+    const browser = typeof browser !== "undefined" ? "firefox" : "chrome";
+    await sendNativeMessage({ action: "register", browser, extensionId: id });
+  } catch (e) {
+    // Not fatal; the app already registers Firefox's stable id and Chrome store id.
+  }
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request && request.action === "getStatus") {
-    getCurrentEnabledState().then((enabled) => {
-      sendResponse({ enabled });
+    Promise.all([getCurrentEnabledState(), pingCopper()]).then(([enabled, reachable]) => {
+      sendResponse({ enabled, reachable, extensionId: chrome.runtime.id });
     });
     return true;
   }
@@ -128,14 +134,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request && request.action === "sendUrl") {
-    dispatch(request.url, request.filename || "", request.path || "");
-    sendResponse({ success: true });
+    dispatch(request.url, request.filename || "", request.path || "").then((done) => {
+      sendResponse({ success: done });
+    });
     return true;
   }
 
   if (request && request.action === "openCopper") {
-    chrome.tabs.create({ url: "copper://open" });
-    sendResponse({ success: true });
+    sendNativeMessage({ action: "open" }).then(() => sendResponse({ success: true }));
+    return true;
+  }
+
+  if (request && request.action === "register") {
+    registerWithCopper().then(() => sendResponse({ success: true }));
     return true;
   }
 

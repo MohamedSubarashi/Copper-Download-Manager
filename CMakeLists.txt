@@ -107,6 +107,31 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(${PROJECT_NAME} pthread)
 endif()
 
+# Native messaging host: small Qt Core console executable spawned by the browser
+# to forward extension requests to the desktop app over the named pipe. It must
+# link Core only (no Widgets/GUI) and stay a console subsystem app so stdin/stdout
+# native messaging works when the browser launches it.
+add_executable(copper_native_host nativehost/main.cpp)
+set_target_properties(copper_native_host PROPERTIES
+    WIN32_EXECUTABLE FALSE
+)
+target_include_directories(copper_native_host PRIVATE "${CMAKE_SOURCE_DIR}/include")
+target_link_libraries(copper_native_host Qt6::Core Qt6::Network)
+if(WIN32)
+    target_link_libraries(copper_native_host ws2_32)
+endif()
+
+# Ship the host next to the app exe and into the release folder.
+if(WIN32)
+    set(RELEASE_DIR "${CMAKE_SOURCE_DIR}/installer/release/${PROJECT_VERSION}")
+    add_custom_command(TARGET copper_native_host POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:copper_native_host>" "${RELEASE_DIR}/"
+        COMMENT "Deploying native messaging host to ${RELEASE_DIR}/"
+    )
+endif()
+
+install(TARGETS copper_native_host RUNTIME DESTINATION bin)
+
 install(TARGETS ${PROJECT_NAME}
     BUNDLE DESTINATION .
     RUNTIME DESTINATION bin

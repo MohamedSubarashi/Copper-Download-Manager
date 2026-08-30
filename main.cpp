@@ -8,7 +8,9 @@
 #include "utils/Aria2cManager.h"
 #include "db/DatabaseManager.h"
 #include "core/LocalServer.h"
+#include "core/PipeServer.h"
 #include "core/DownloadManager.h"
+#include "utils/NativeMessaging.h"
 #include <QApplication>
 #include <QDir>
 #include <QDesktopServices>
@@ -117,14 +119,40 @@ int main(int argc, char* argv[]) {
     bool hasUrlArg = false;
     QStringList forwardArgs;
 
+    QString regBrowser;
+    QString regExtensionId;
+
     for (int i = 1; i < argc; i++) {
         QString arg = QString::fromLocal8Bit(argv[i]);
         if (arg == "--minimized") {
             startMinimized = true;
             continue;
         }
+        if (arg == "--register-native-extension" && (i + 2) < argc) {
+            regBrowser = QString::fromLocal8Bit(argv[i + 1]);
+            regExtensionId = QString::fromLocal8Bit(argv[i + 2]);
+            i += 2;
+            hasUrlArg = true;
+            continue;
+        }
         hasUrlArg = true;
         forwardArgs.append(arg);
+    }
+
+    // Handle --register-native-extension <browser> <id> even if an instance is
+    // already running (write the manifest and exit without opening the GUI).
+    if (!regBrowser.isEmpty() && !regExtensionId.isEmpty()) {
+        NativeMessaging::writeHostConfig();
+        QString b = regBrowser.toLower();
+        if (b == "firefox") {
+            NativeMessaging::installManifest("firefox", {regExtensionId});
+        } else {
+            NativeMessaging::installManifest("chrome", {regExtensionId});
+            if (b == "edge") NativeMessaging::installManifest("edge", {regExtensionId});
+        }
+        Logger::instance().info("Registered native-messaging extension '" + regExtensionId +
+                                "' for browser '" + regBrowser + "'");
+        return 0;
     }
 
     if (isRunningInstance()) {
@@ -154,6 +182,19 @@ int main(int argc, char* argv[]) {
     } else {
         Logger::instance().warning("Failed to start local API server on port " + QString::number(port));
     }
+
+    // Named-pipe intake for the browser native-messaging host (IDM model).
+    if (PipeServer::instance().start()) {
+        Logger::instance().info("Native messaging intake (named pipe) started");
+    } else {
+        Logger::instance().warning("Failed to start named pipe intake");
+    }
+
+    // Register the Firefox host manifest on startup (its gecko.id is stable and
+    // known ahead of time). Chrome/Edge is registered when a specific extension
+    // id reports in via the "register" handshake, since its id is load-dependent.
+    NativeMessaging::installManifest("firefox", {NativeMessaging::firefoxExtensionId()});
+    NativeMessaging::writeHostConfig();
 
     QStringList pendingTorrentFiles;
     QStringList pendingMagnetLinks;

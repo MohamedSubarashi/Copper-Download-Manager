@@ -96,6 +96,38 @@ def validate_dir(label, path, is_firefox):
             ok &= check(os.path.isfile(os.path.join(path, ref)),
                         f"icon exists: {ref}")
 
+    # Reference checks for the native-messaging design.
+    perms = manifest.get("permissions") or []
+    ok &= check("nativeMessaging" in perms,
+                "nativeMessaging permission declared (extension talks to the host)")
+    ok &= check("tabs" in perms, "tabs permission declared (popup 'send current page')")
+
+    # All referenced JS files exist on disk.
+    js_refs = []
+    if "scripts" in bg:
+        js_refs.extend(bg["scripts"])
+    elif "service_worker" in bg:
+        js_refs.append(bg["service_worker"])
+    for cs in manifest.get("content_scripts") or []:
+        js_refs.extend(cs.get("js", []))
+    for ref in js_refs:
+        if ref:
+            ok &= check(os.path.isfile(os.path.join(path, ref)),
+                        f"referenced JS exists: {ref}")
+
+    # The background must route through the native host (not copper:// HTTP or
+    # the deprecated localhost ping), so it works without a TCP port or protocol.
+    bg_path = js_refs[0] if js_refs else None
+    if bg_path:
+        with open(os.path.join(path, bg_path), encoding="utf-8") as f:
+            bg_src = f.read()
+        ok &= check("sendNativeMessage" in bg_src,
+                    "background uses sendNativeMessage (native messaging)")
+        ok &= check("copper://" not in bg_src,
+                    "background no longer depends on the copper:// protocol")
+        ok &= check("127.0.0.1:24680" not in bg_src,
+                    "background no longer depends on the localhost ping port")
+
     return ok
 
 
