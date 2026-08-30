@@ -5,6 +5,7 @@
 #include "utils/Aria2cManager.h"
 #include "utils/YtDlpManager.h"
 #include "utils/UrlDetector.h"
+#include "utils/FileNameSanitizer.h"
 #include "db/DatabaseManager.h"
 #include <QFileInfo>
 #include <QUrl>
@@ -66,7 +67,7 @@ int DownloadManager::addDownload(const QString& url, const QString& path, const 
         }
     }
     if (fileName.isEmpty()) fileName = "download_" + QString::number(item.id);
-    item.fileName = fileName;
+    item.fileName = sanitizeFileName(fileName, "download_" + QString::number(item.id));
 
     if (type == "Torrent") {
         item.filePath = path.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) : path;

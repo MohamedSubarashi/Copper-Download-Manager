@@ -13,7 +13,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        qt: ["6.6.3", "6.11.2"]
+        # Note: versions here must be ones aqtinstall can actually fetch from the
+        # official open-source Qt mirror. Qt 6.11.2 (used on the local dev machine)
+        # is NOT published there yet, so it is covered only locally; 6.8.3 is the
+        # current LTS and is guaranteed available.
+        qt: ["6.6.3", "6.8.3"]
         config: [Release, Debug]
     steps:
       - uses: actions/checkout@v4

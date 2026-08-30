@@ -4,6 +4,7 @@
 #include "utils/Logger.h"
 #include "utils/DefaultHandler.h"
 #include "utils/CopperLink.h"
+#include "utils/FileNameSanitizer.h"
 #include "utils/Aria2cManager.h"
 #include "db/DatabaseManager.h"
 #include "core/LocalServer.h"
@@ -174,8 +175,9 @@ int main(int argc, char* argv[]) {
                     } else {
                         QString fullSavePath = cl.path;
                         if (!fullSavePath.isEmpty() && !cl.filename.isEmpty()) {
+                            QString safeName = sanitizeFileName(cl.filename);
                             if (!fullSavePath.endsWith('/') && !fullSavePath.endsWith('\\')) fullSavePath += "/";
-                            fullSavePath += cl.filename;
+                            fullSavePath += safeName;
                         } else if (cl.path.isEmpty()) {
                             fullSavePath.clear(); // use default download dir
                         }

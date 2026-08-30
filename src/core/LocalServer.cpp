@@ -1,6 +1,7 @@
 #include "core/LocalServer.h"
 #include "core/DownloadManager.h"
 #include "utils/Logger.h"
+#include "utils/FileNameSanitizer.h"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -144,9 +145,9 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
             QString fullSavePath = savePath;
             if (!filename.isEmpty() && !savePath.isEmpty()) {
                 if (!savePath.endsWith('/') && !savePath.endsWith('\\')) {
-                    fullSavePath = savePath + "/" + filename;
+                    fullSavePath = savePath + "/" + sanitizeFileName(filename);
                 } else {
-                    fullSavePath = savePath + filename;
+                    fullSavePath = savePath + sanitizeFileName(filename);
                 }
             }
             id = DownloadManager::instance().addDownload(url, fullSavePath, "HTTP");

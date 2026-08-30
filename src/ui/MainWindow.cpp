@@ -5,6 +5,7 @@
 #include "ui/DownloadManagerDialog.h"
 #include "ui/TorrentDetailsDialog.h"
 #include "utils/CopperLink.h"
+#include "utils/FileNameSanitizer.h"
 #include "core/DownloadManager.h"
 #include "core/LocalServer.h"
 #include "db/DatabaseManager.h"
@@ -1038,7 +1039,7 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
                     QString fullSavePath = cl.path;
                     if (!fullSavePath.isEmpty() && !cl.filename.isEmpty()) {
                         if (!fullSavePath.endsWith('/') && !fullSavePath.endsWith('\\')) fullSavePath += "/";
-                        fullSavePath += cl.filename;
+                        fullSavePath += sanitizeFileName(cl.filename);
                     }
                     if (cl.url.contains("youtube.com") || cl.url.contains("youtu.be") ||
                         cl.url.contains("soundcloud.com") || cl.url.contains("vimeo.com")) {

@@ -1,5 +1,6 @@
 #include "core/ChunkedDownloader.h"
 #include "utils/Logger.h"
+#include "utils/FileNameSanitizer.h"
 #include <QUrl>
 #include <QFileInfo>
 #include <QDir>
@@ -51,7 +52,7 @@ QString ChunkedDownloader::extractFilenameFromContentDisposition(const QByteArra
         QRegularExpressionMatch m1v = re1val.match(val);
         if (m1v.hasMatch()) {
             QString decoded = QUrl::fromPercentEncoding(m1v.captured(1).toUtf8());
-            if (!decoded.isEmpty() && !decoded.contains('/') && !decoded.contains('\\')) return decoded;
+            if (!decoded.isEmpty() && !decoded.contains('/') && !decoded.contains('\\')) return sanitizeFileName(decoded);
         }
     }
 
@@ -59,14 +60,14 @@ QString ChunkedDownloader::extractFilenameFromContentDisposition(const QByteArra
     QRegularExpressionMatch m2 = re2.match(cdStr);
     if (m2.hasMatch()) {
         QString name = m2.captured(1).trimmed();
-        if (!name.isEmpty() && !name.contains('/') && !name.contains('\\')) return name;
+        if (!name.isEmpty() && !name.contains('/') && !name.contains('\\')) return sanitizeFileName(name);
     }
 
     QRegularExpression re3("filename=([^;\\s]+)", QRegularExpression::CaseInsensitiveOption);
     QRegularExpressionMatch m3 = re3.match(cdStr);
     if (m3.hasMatch()) {
         QString name = m3.captured(1).trimmed();
-        if (!name.isEmpty() && !name.contains('/') && !name.contains('\\')) return name;
+        if (!name.isEmpty() && !name.contains('/') && !name.contains('\\')) return sanitizeFileName(name);
     }
 
     return {};

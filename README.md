@@ -51,7 +51,7 @@ The release build is automatically deployed to `installer/release/<version>/` (w
 
 ## CI
 
-A GitHub Actions workflow (`.github/workflows/ci.yml`) builds the project in Debug and Release across Qt 6.6.3 and 6.11.2 on Windows, and smoke-checks that the produced executable is a GUI (non-console) application.
+A GitHub Actions workflow (`.github/workflows/ci.yml`) builds the project in Debug and Release across Qt 6.6.3 and 6.8.3 on Windows, and smoke-checks that the produced executable is a GUI (non-console) application. (CI covers the Qt LTS line; the local dev machine additionally uses Qt 6.11.2.)
 
 ## External Tools (Downloaded on Demand)
 
