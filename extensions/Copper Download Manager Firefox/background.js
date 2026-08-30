@@ -1,4 +1,31 @@
 const STORAGE_KEY = "copperExtensionEnabled";
+const PING_URL = "http://127.0.0.1:24680/api/ping";
+
+function pingCopper() {
+  return new Promise((resolve) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1200);
+    fetch(PING_URL, { signal: controller.signal, cache: "no-store" })
+      .then((r) => {
+        clearTimeout(timer);
+        resolve(r.ok);
+      })
+      .catch(() => {
+        clearTimeout(timer);
+        resolve(false);
+      });
+  });
+}
+
+function notifyCopperUnreachable() {
+  chrome.notifications.create({
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+    title: "Copper isn't reachable",
+    message:
+      "Copper Download Manager does not appear to be running. Start it, then try again.",
+  });
+}
 
 const copperUrlFor = (url, filename = "", path = "") => {
   const enc = (value) => (value == null ? "" : encodeURIComponent(String(value)));
@@ -19,12 +46,21 @@ function setCurrentEnabledState(enabled) {
 }
 
 async function openCopper(url, filename = "", path = "") {
-  const copperUrl = copperUrlFor(url, filename, path);
   const enabled = await getCurrentEnabledState();
   if (!enabled) {
     return;
   }
 
+  // The copper:// custom protocol only works when the desktop app is running.
+  // Probe its local API first so users get clear feedback instead of a silent
+  // dead protocol launch when Copper isn't installed/started.
+  const reachable = await pingCopper();
+  if (!reachable) {
+    notifyCopperUnreachable();
+    return;
+  }
+
+  const copperUrl = copperUrlFor(url, filename, path);
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab && tab.id != null) {
