@@ -595,8 +595,11 @@ void MainWindow::onDownloadFinished(int id) {
 }
 
 void MainWindow::onDownloadFailed(int id, const QString& error) {
-    Q_UNUSED(id);
-    Q_UNUSED(error);
+    QString msg = error.trimmed().isEmpty() ? "Download failed" : "Download failed: " + error.trimmed();
+    statusBarWidget->showMessage(msg, 8000);
+    if (trayIcon && trayIcon->isVisible()) {
+        trayIcon->showMessage("Copper Download Manager", msg.left(120), QSystemTrayIcon::Warning, 8000);
+    }
     refreshTable();
 }
 
@@ -630,6 +633,8 @@ void MainWindow::onSidebarFilterChanged() {
 }
 
 void MainWindow::refreshTable() {
+    if (!isVisible()) return;
+
     table->setUpdatesEnabled(false);
     table->setRowCount(0);
 
@@ -1088,7 +1093,7 @@ QColor MainWindow::statusColor(const QString& status) const {
     if (status == "Downloading") return QColor(0, 120, 200);
     if (status == "Paused") return QColor(180, 140, 0);
     if (status == "Queued") return QColor(128, 128, 128);
-    return Qt::white;
+    return palette().color(QPalette::Text);
 }
 
 QIcon MainWindow::fileTypeIcon(const QString& filePath, bool isFolder) const {

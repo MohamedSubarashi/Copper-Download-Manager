@@ -52,8 +52,11 @@ QPalette ThemeManager::getPalette(Theme theme) const {
         palette.setColor(QPalette::Link, QColor(42, 130, 218));
         palette.setColor(QPalette::Highlight, QColor(42, 130, 218));
         palette.setColor(QPalette::HighlightedText, Qt::black);
+        palette.setColor(QPalette::PlaceholderText, QColor(150, 150, 150));
+        palette.setColor(QPalette::Disabled, QPalette::WindowText, QColor(128, 128, 128));
         palette.setColor(QPalette::Disabled, QPalette::Text, QColor(128, 128, 128));
         palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(128, 128, 128));
+        palette.setColor(QPalette::Disabled, QPalette::Highlight, QColor(42, 130, 218));
     } else {
         palette.setColor(QPalette::Window, QColor(240, 240, 240));
         palette.setColor(QPalette::WindowText, Qt::black);
@@ -68,6 +71,7 @@ QPalette ThemeManager::getPalette(Theme theme) const {
         palette.setColor(QPalette::Link, QColor(0, 0, 255));
         palette.setColor(QPalette::Highlight, QColor(0, 120, 215));
         palette.setColor(QPalette::HighlightedText, Qt::white);
+        palette.setColor(QPalette::PlaceholderText, QColor(120, 120, 120));
     }
 
     return palette;

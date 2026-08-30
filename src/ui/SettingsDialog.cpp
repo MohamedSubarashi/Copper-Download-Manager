@@ -159,6 +159,9 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     connect(&YtDlpManager::instance(), &YtDlpManager::installationProgress, this, [this](const QString& status) {
         if (ytdlpVersionLabel) ytdlpVersionLabel->setText("Status: " + status);
     });
+    connect(&YtDlpManager::instance(), &YtDlpManager::errorOccurred, this, [this](const QString& error) {
+        if (ytdlpVersionLabel) ytdlpVersionLabel->setText("Error: " + error);
+    });
 
     QGroupBox* ffmpegGroup = new QGroupBox("ffmpeg");
     QVBoxLayout* ffmpegLayout = new QVBoxLayout(ffmpegGroup);
@@ -223,6 +226,9 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     connect(&Aria2cManager::instance(), &Aria2cManager::installationProgress, this, [this](const QString& status) {
         if (aria2cVersionLabel) aria2cVersionLabel->setText("Status: " + status);
     });
+    connect(&Aria2cManager::instance(), &Aria2cManager::errorOccurred, this, [this](const QString& error) {
+        if (aria2cVersionLabel) aria2cVersionLabel->setText("Error: " + error);
+    });
 
     toolsLayout->addStretch();
     tabWidget->addTab(toolsTab, "Tools");
@@ -232,12 +238,13 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     QVBoxLayout* licensesLayout = new QVBoxLayout(licensesTab);
     QPlainTextEdit* licensesText = new QPlainTextEdit();
     licensesText->setReadOnly(true);
+    QString licenseVersionLine = "COPPER DOWNLOAD MANAGER v" + QCoreApplication::applicationVersion();
     licensesText->setPlainText(
-        "COPPER DOWNLOAD MANAGER v0.2.0\n"
+        licenseVersionLine + "\n"
         "Third-Party Software Notices\n\n"
         "This product includes software developed by third parties.\n\n"
         "--------------------------------------------------\n"
-        "Qt 6.9.3\n"
+        "Qt " + QString(qVersion()) + "\n"
         "--------------------------------------------------\n"
         "License: GNU Lesser General Public License v3.0 (LGPLv3)\n"
         "Copyright (C) The Qt Company Ltd.\n"

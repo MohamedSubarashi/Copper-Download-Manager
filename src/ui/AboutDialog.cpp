@@ -63,6 +63,7 @@ AboutDialog::AboutDialog(QWidget* parent) : QDialog(parent) {
 
     QPushButton* okBtn = new QPushButton("OK", this);
     okBtn->setFixedWidth(100);
+    okBtn->setDefault(true);
     connect(okBtn, &QPushButton::clicked, this, &QDialog::accept);
     mainLayout->addWidget(okBtn, 0, Qt::AlignCenter);
 }

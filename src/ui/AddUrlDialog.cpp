@@ -25,15 +25,21 @@ AddUrlDialog::AddUrlDialog(QWidget* parent) : QDialog(parent) {
     mainLayout->setSpacing(10);
 
     QHBoxLayout* urlLayout = new QHBoxLayout();
-    urlLayout->addWidget(new QLabel("URL:"));
+    QLabel* urlLabel = new QLabel("URL:");
+    urlLayout->addWidget(urlLabel);
     urlEdit = new QLineEdit();
     urlEdit->setPlaceholderText("Enter download URL or paste from clipboard...");
+    urlEdit->setAccessibleName("URL");
+    urlLabel->setBuddy(urlEdit);
     urlLayout->addWidget(urlEdit);
     mainLayout->addLayout(urlLayout);
 
     QHBoxLayout* typeLayout = new QHBoxLayout();
-    typeLayout->addWidget(new QLabel("Type:"));
+    QLabel* typeLabel = new QLabel("Type:");
+    typeLayout->addWidget(typeLabel);
     typeCombo = new QComboBox();
+    typeCombo->setAccessibleName("Type");
+    typeLabel->setBuddy(typeCombo);
     typeCombo->addItem("Auto Detect");
     typeCombo->addItem("Direct Download");
     typeCombo->addItem("yt-dlp Video");
@@ -57,8 +63,11 @@ AddUrlDialog::AddUrlDialog(QWidget* parent) : QDialog(parent) {
     mainLayout->addLayout(formatLayout);
 
     QHBoxLayout* pathLayout = new QHBoxLayout();
-    pathLayout->addWidget(new QLabel("Save to:"));
+    QLabel* pathLabel = new QLabel("Save to:");
+    pathLayout->addWidget(pathLabel);
     pathEdit = new QLineEdit();
+    pathEdit->setAccessibleName("Save to");
+    pathLabel->setBuddy(pathEdit);
     pathEdit->setText(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
     QPushButton* browseBtn = new QPushButton("Browse...");
     connect(browseBtn, &QPushButton::clicked, this, &AddUrlDialog::onBrowse);
@@ -92,7 +101,9 @@ AddUrlDialog::AddUrlDialog(QWidget* parent) : QDialog(parent) {
     QString clipboard = QApplication::clipboard()->text();
     if (!clipboard.isEmpty() && (clipboard.startsWith("http") || clipboard.startsWith("magnet") || clipboard.startsWith("ftp"))) {
         urlEdit->setText(clipboard);
+        statusLabel->setText("Pasted from clipboard");
     }
+    urlEdit->setFocus();
 }
 
 void AddUrlDialog::setUrl(const QString& url) {
@@ -193,7 +204,9 @@ void AddUrlDialog::onAdd() {
 }
 
 void AddUrlDialog::onPaste() {
-    urlEdit->setText(QApplication::clipboard()->text());
+    QString clip = QApplication::clipboard()->text();
+    urlEdit->setText(clip);
+    statusLabel->setText(clip.isEmpty() ? "Clipboard is empty" : "Pasted from clipboard");
 }
 
 void AddUrlDialog::onTypeChanged(int index) {
@@ -214,6 +227,7 @@ void AddUrlDialog::validateUrl() {
     addBtn->setEnabled(valid);
 
     if (valid) {
+        statusLabel->clear();
         UrlType type = UrlDetector::detect(url);
         typeInfoLabel->setText("Detected: " + UrlDetector::typeToString(type));
         QString mode = DatabaseManager::instance().getSetting("downloadTypeFilterMode", "disabled");
@@ -225,5 +239,10 @@ void AddUrlDialog::validateUrl() {
         }
     } else {
         typeInfoLabel->setText("");
+        if (url.isEmpty()) {
+            statusLabel->clear();
+        } else {
+            statusLabel->setText("Please enter a valid URL (http://, https://, ftp://, or magnet:?)");
+        }
     }
 }
