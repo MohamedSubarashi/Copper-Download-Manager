@@ -39,10 +39,10 @@ This list is ordered by impact and should be tackled in sequence for the next de
 
 ## Priority 4: Protocol and desktop integration
 
-- [ ] Formalize and test the copper:// protocol flow for open, create-download, and URL forwarding scenarios.
-- [ ] Register and validate the desktop protocol association on Windows/macOS/Linux where appropriate.
-- [ ] Ensure command-line arguments and protocol calls populate the same download intake path.
-- [ ] Review default download directory selection and filename sanitization for user-provided URLs and custom save paths.
+- [x] Formalize and test the copper:// protocol flow for open, create-download, and URL forwarding scenarios. (end-to-end test added: extension-format `copper://download?url=&filename=&path=` (encodeURIComponent) forwarded to the running app produces a byte-exact HTTP download; `copper://open` and main.cpp/MainWindow intake verified consistent; integration suite now 22 cases)
+- [x] Register and validate the desktop protocol association on Windows/macOS/Linux where appropriate. (`.desktop` for Linux + `MsMimeType`/`x-scheme-handler`; Windows registry registration validated; `autoUpdateRegistryPath()` now repairable — `copper` base key + command always refreshed on startup, heals partial/moved installs even when the app was never formally registered as default)
+- [x] Ensure command-line arguments and protocol calls populate the same download intake path. (both `main.cpp` and `MainWindow::onArgumentForwarded` route magnet/http/copper through the identical `DownloadManager` intake + `DownloadManagerDialog` where selection is needed)
+- [x] Review default download directory selection and filename sanitization for user-provided URLs and custom save paths. (`QStandardPaths::DownloadLocation` default; `sanitizeFileName` applied to copper filename and Content-Disposition names)
 
 ## Priority 5: Torrent and media features
 

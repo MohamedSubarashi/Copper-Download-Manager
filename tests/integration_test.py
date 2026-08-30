@@ -22,6 +22,7 @@ import shutil
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import quote
 
 DEFAULT_PORT = 24680
 
@@ -322,6 +323,44 @@ def main():
                     with open(os.path.join(workdir, "nolength.bin"), "rb") as f:
                         ok = f.read() == chk.encode("utf-8")
                 check("unknown-length download completes byte-exact", ok, str(d))
+            finally:
+                srv.shutdown()
+
+            # 4) copper:// protocol injection: the desktop app must parse a
+            #    copper://download?url=...&filename=...&path=... link (as built
+            #    by the extension with encodeURIComponent) and start the download.
+            srv, sp = _make_file_server(chk, mode="normal")
+            try:
+                enc = lambda v: quote(str(v), safe="")
+                cu_url = (f"copper://download?url={enc(f'http://127.0.0.1:{sp}/file.bin')}"
+                          f"&filename={enc('copper.bin')}"
+                          f"&path={enc(workdir)}")
+                st, _ = http_request(port, "POST", "/api/forward", {"argument": cu_url})
+                check("forward copper:// download -> 200", st == 200, f"status={st}")
+
+                inner_url = f"http://127.0.0.1:{sp}/file.bin"
+
+                def wait_copper_download(timeout=15.0):
+                    deadline = time.time() + timeout
+                    while time.time() < deadline:
+                        _, jl = http_request(port, "GET", "/api/downloads")
+                        matched = [x for x in jl.get("downloads", [])
+                                   if x.get("url") == inner_url]
+                        if matched:
+                            return matched[0]
+                        time.sleep(0.5)
+                    return None
+
+                target = wait_copper_download()
+                ok = target is not None
+                if ok:
+                    d = wait_download_status(port, target["id"], {"Completed", "Failed"})
+                    ok = d is not None and d.get("status") == "Completed"
+                if ok and os.path.isfile(os.path.join(workdir, "copper.bin")):
+                    with open(os.path.join(workdir, "copper.bin"), "rb") as f:
+                        ok = f.read() == chk.encode("utf-8")
+                check("copper:// link creates byte-exact download", ok,
+                      f"url-matched={'yes' if target else 'no'}")
             finally:
                 srv.shutdown()
         finally:

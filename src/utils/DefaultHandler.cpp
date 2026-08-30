@@ -193,8 +193,11 @@ QString DefaultHandler::getRegisteredProtocol() const {
 
 void DefaultHandler::autoUpdateRegistryPath() {
 #ifdef PLATFORM_WINDOWS
-    if (!isRegistered()) return;
-
+    // Always keep the copper:// protocol registration pointing at the current
+    // executable, even if the app was never formally "registered as default" —
+    // this heals partial registrations (e.g. after the exe was moved) so the
+    // copper:// flow keeps working. The "heavier" HTTP/HTTPS/FTP/magnet/ProgId
+    // registrations are only refreshed when a full registration exists.
     QString currentPath = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
     QString quotedCmd = "\"" + currentPath + "\" \"%1\"";
 
@@ -208,6 +211,16 @@ void DefaultHandler::autoUpdateRegistryPath() {
     };
 
     updateCmd("copper");
+    // Also repair the copper protocol's base key if it is missing entirely.
+    QSettings copperIcon("HKEY_CURRENT_USER\\Software\\Classes\\copper", QSettings::NativeFormat);
+    if (copperIcon.value("URL Protocol").toString().isEmpty()) {
+        copperIcon.setValue(".", "URL:Copper Download Manager Protocol");
+        copperIcon.setValue("URL Protocol", "");
+        Logger::instance().info("Re-registered copper:// protocol base key");
+    }
+
+    if (!isRegistered()) return;
+
     updateCmd("CopperHTTP");
     updateCmd("CopperHTTPS");
     updateCmd("CopperFTP");
