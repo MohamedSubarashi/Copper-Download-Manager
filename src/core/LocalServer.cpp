@@ -74,25 +74,48 @@ void LocalServer::handleConnection(QTcpSocket* socket) {
         QString method = requestLine[0];
         QString path = requestLine[1];
 
+        QString origin;
+        for (int i = 1; i < lines.size(); i++) {
+            if (lines[i].startsWith("Origin:", Qt::CaseInsensitive)) {
+                origin = lines[i].mid(7).trimmed();
+                break;
+            }
+        }
+
         QByteArray body;
         int bodyIndex = data.indexOf("\r\n\r\n");
         if (bodyIndex >= 0) {
             body = data.mid(bodyIndex + 4);
         }
 
-        handleRequest(socket, method, path, body);
+        handleRequest(socket, method, path, body, origin);
     });
 
     connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
 }
 
-void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const QString& path, const QByteArray& body) {
+bool LocalServer::isAllowedOrigin(const QString& origin) const {
+    if (origin.isEmpty()) return true;  // non-browser local client (curl, native tests)
+    return origin.startsWith("chrome-extension://") || origin.startsWith("moz-extension://");
+}
+
+void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const QString& path, const QByteArray& body, const QString& origin) {
     Logger::instance().info("LocalServer: " + method + " " + path);
+
+    if (!isAllowedOrigin(origin)) {
+        Logger::instance().warning("LocalServer: rejected request from disallowed origin: " + origin);
+        sendJsonResponse(socket, 403, {{"error", "Forbidden"}});
+        return;
+    }
+
+    QString allowedOrigin = origin.isEmpty() ? QString() : origin;
 
     if (method == "OPTIONS") {
         QByteArray response;
         response += "HTTP/1.1 204 No Content\r\n";
-        response += "Access-Control-Allow-Origin: *\r\n";
+        if (!allowedOrigin.isEmpty()) {
+            response += "Access-Control-Allow-Origin: " + allowedOrigin.toUtf8() + "\r\n";
+        }
         response += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
         response += "Access-Control-Allow-Headers: Content-Type\r\n";
         response += "Access-Control-Max-Age: 3600\r\n";
@@ -108,7 +131,7 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         QJsonObject json;
         json["status"] = "ok";
         json["version"] = QCoreApplication::applicationVersion();
-        sendJsonResponse(socket, 200, json);
+        sendJsonResponse(socket, 200, json, allowedOrigin);
         return;
     }
 
@@ -117,14 +140,14 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         json["name"] = "Copper Download Manager";
         json["version"] = QCoreApplication::applicationVersion();
         json["status"] = "running";
-        sendJsonResponse(socket, 200, json);
+        sendJsonResponse(socket, 200, json, allowedOrigin);
         return;
     }
 
     if (path == "/api/download" && method == "POST") {
         QJsonDocument doc = QJsonDocument::fromJson(body);
         if (!doc.isObject()) {
-            sendJsonResponse(socket, 400, {{"error", "Invalid JSON"}});
+            sendJsonResponse(socket, 400, {{"error", "Invalid JSON"}}, allowedOrigin);
             return;
         }
 
@@ -134,7 +157,11 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         QString savePath = obj["path"].toString();
 
         if (url.isEmpty()) {
-            sendJsonResponse(socket, 400, {{"error", "URL is required"}});
+            sendJsonResponse(socket, 400, {{"error", "URL is required"}}, allowedOrigin);
+            return;
+        }
+        if (!url.startsWith("http") && !url.startsWith("ftp") && !url.startsWith("magnet:?")) {
+            sendJsonResponse(socket, 400, {{"error", "Unsupported URL scheme"}}, allowedOrigin);
             return;
         }
 
@@ -157,7 +184,7 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         response["success"] = true;
         response["id"] = id;
         response["message"] = "Download added successfully";
-        sendJsonResponse(socket, 200, response);
+        sendJsonResponse(socket, 200, response, allowedOrigin);
 
         emit downloadRequested(url, filename, savePath);
         return;
@@ -166,7 +193,7 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
     if (path == "/api/torrent" && method == "POST") {
         QJsonDocument doc = QJsonDocument::fromJson(body);
         if (!doc.isObject()) {
-            sendJsonResponse(socket, 400, {{"error", "Invalid JSON"}});
+            sendJsonResponse(socket, 400, {{"error", "Invalid JSON"}}, allowedOrigin);
             return;
         }
 
@@ -175,7 +202,11 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         QString savePath = obj["path"].toString();
 
         if (url.isEmpty()) {
-            sendJsonResponse(socket, 400, {{"error", "URL is required"}});
+            sendJsonResponse(socket, 400, {{"error", "URL is required"}}, allowedOrigin);
+            return;
+        }
+        if (!url.startsWith("http") && !url.startsWith("magnet:?")) {
+            sendJsonResponse(socket, 400, {{"error", "Unsupported URL scheme"}}, allowedOrigin);
             return;
         }
 
@@ -189,14 +220,14 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         response["success"] = true;
         response["id"] = id;
         response["message"] = "Torrent download added";
-        sendJsonResponse(socket, 200, response);
+        sendJsonResponse(socket, 200, response, allowedOrigin);
         return;
     }
 
     if (path == "/api/forward" && method == "POST") {
         QJsonDocument doc = QJsonDocument::fromJson(body);
         if (!doc.isObject()) {
-            sendJsonResponse(socket, 400, {{"error", "Invalid JSON"}});
+            sendJsonResponse(socket, 400, {{"error", "Invalid JSON"}}, allowedOrigin);
             return;
         }
 
@@ -204,7 +235,7 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         QString argument = obj["argument"].toString();
 
         if (argument.isEmpty()) {
-            sendJsonResponse(socket, 400, {{"error", "Argument is required"}});
+            sendJsonResponse(socket, 400, {{"error", "Argument is required"}}, allowedOrigin);
             return;
         }
 
@@ -214,7 +245,7 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         QJsonObject response;
         response["success"] = true;
         response["message"] = "Argument forwarded";
-        sendJsonResponse(socket, 200, response);
+        sendJsonResponse(socket, 200, response, allowedOrigin);
         return;
     }
 
@@ -239,19 +270,21 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         QJsonObject response;
         response["downloads"] = downloadsArray;
         response["count"] = downloads.size();
-        sendJsonResponse(socket, 200, response);
+        sendJsonResponse(socket, 200, response, allowedOrigin);
         return;
     }
 
-    sendJsonResponse(socket, 404, {{"error", "Not found"}});
+    sendJsonResponse(socket, 404, {{"error", "Not found"}}, allowedOrigin);
 }
 
-void LocalServer::sendJsonResponse(QTcpSocket* socket, int statusCode, const QJsonObject& json) {
+void LocalServer::sendJsonResponse(QTcpSocket* socket, int statusCode, const QJsonObject& json, const QString& origin) {
     QByteArray body = QJsonDocument(json).toJson(QJsonDocument::Compact);
     QByteArray response;
     response += "HTTP/1.1 " + QByteArray::number(statusCode) + " OK\r\n";
     response += "Content-Type: application/json\r\n";
-    response += "Access-Control-Allow-Origin: *\r\n";
+    if (!origin.isEmpty()) {
+        response += "Access-Control-Allow-Origin: " + origin.toUtf8() + "\r\n";
+    }
     response += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
     response += "Access-Control-Allow-Headers: Content-Type\r\n";
     response += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";

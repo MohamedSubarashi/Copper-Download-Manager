@@ -21,8 +21,9 @@ signals:
 private:
     LocalServer();
     void handleConnection(QTcpSocket* socket);
-    void handleRequest(QTcpSocket* socket, const QString& method, const QString& path, const QByteArray& body);
-    void sendJsonResponse(QTcpSocket* socket, int statusCode, const QJsonObject& json);
+    void handleRequest(QTcpSocket* socket, const QString& method, const QString& path, const QByteArray& body, const QString& origin);
+    bool isAllowedOrigin(const QString& origin) const;
+    void sendJsonResponse(QTcpSocket* socket, int statusCode, const QJsonObject& json, const QString& origin = QString());
     void sendHtmlResponse(QTcpSocket* socket, int statusCode, const QString& html);
 
     QTcpServer* server;

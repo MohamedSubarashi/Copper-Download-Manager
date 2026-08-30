@@ -22,7 +22,7 @@ import time
 DEFAULT_PORT = 24680
 
 
-def http_request(port, method, path, body=None, timeout=3.0):
+def http_request(port, method, path, body=None, headers=None, timeout=3.0):
     """Minimal raw-HTTP client (no external deps). Returns (status, parsed_json_or_text)."""
     s = socket.create_connection(("127.0.0.1", port), timeout=timeout)
     payload = body if body is not None else b""
@@ -33,6 +33,8 @@ def http_request(port, method, path, body=None, timeout=3.0):
         f"Host: 127.0.0.1:{port}".encode(),
         b"Connection: close",
     ]
+    for k, v in (headers or {}).items():
+        req_lines.append(f"{k}: {v}".encode())
     if payload:
         req_lines.append(f"Content-Type: application/json".encode())
         req_lines.append(f"Content-Length: {len(payload)}".encode())
@@ -145,6 +147,24 @@ def main():
         # --- /api/download error handling (no URL) ---
         st, j = http_request(port, "POST", "/api/download", {"url": ""})
         check("POST /api/download empty url -> 400", st == 400, f"status={st}")
+
+        # --- Origin/cors hardening ---
+        st, _ = http_request(port, "GET", "/api/version", headers={"Origin": "https://evil.example.com"})
+        check("disallowed Origin (website) -> 403", st == 403, f"status={st}")
+
+        st, _ = http_request(port, "GET", "/api/version", headers={"Origin": "chrome-extension://abcdefghijklmnop"})
+        check("chrome-extension Origin -> 200", st == 200, f"status={st}")
+
+        st, _ = http_request(port, "GET", "/api/version", headers={"Origin": "moz-extension://abcdefghijklmnop"})
+        check("moz-extension Origin -> 200", st == 200, f"status={st}")
+
+        # --- Unsupported URL scheme rejection ---
+        st, j = http_request(port, "POST", "/api/download", {"url": "file:///C:/Windows/notepad.exe"})
+        check("POST /api/download file:// scheme -> 400", st == 400, f"status={st}")
+
+        # --- OPTIONS preflight from allowed origin is answered with echoed origin ---
+        st, _ = http_request(port, "OPTIONS", "/api/download", headers={"Origin": "chrome-extension://abcdefghijklmnop"})
+        check("OPTIONS from allowed Origin -> 204", st == 204, f"status={st}")
 
     finally:
         try:
