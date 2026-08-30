@@ -19,11 +19,17 @@
 #include <QJsonObject>
 #include <QPair>
 
+static int localApiPort() {
+    return DatabaseManager::instance().getSetting("localServerPort", "24680").toInt();
+}
+
 static bool isRunningInstance() {
+    int port = localApiPort();
     QTcpSocket socket;
-    socket.connectToHost("127.0.0.1", 24680);
+    socket.connectToHost("127.0.0.1", port);
     if (!socket.waitForConnected(2000)) return false;
-    socket.write("GET /api/ping HTTP/1.1\r\nHost: 127.0.0.1:24680\r\nConnection: close\r\n\r\n");
+    QString host = "127.0.0.1:" + QString::number(port);
+    socket.write("GET /api/ping HTTP/1.1\r\nHost: " + host.toUtf8() + "\r\nConnection: close\r\n\r\n");
     socket.waitForBytesWritten(2000);
     socket.waitForReadyRead(2000);
     QByteArray response = socket.readAll();
@@ -32,17 +38,19 @@ static bool isRunningInstance() {
 }
 
 static bool sendToRunningInstance(const QString& arg) {
+    int port = localApiPort();
     QTcpSocket socket;
-    socket.connectToHost("127.0.0.1", 24680);
+    socket.connectToHost("127.0.0.1", port);
     if (!socket.waitForConnected(2000)) return false;
 
     QJsonObject obj;
     obj["action"] = "open";
     obj["argument"] = arg;
     QByteArray body = QJsonDocument(obj).toJson(QJsonDocument::Compact);
+    QString host = "127.0.0.1:" + QString::number(port);
 
     QByteArray request = "POST /api/forward HTTP/1.1\r\n"
-                         "Host: 127.0.0.1:24680\r\n"
+                         "Host: " + host.toUtf8() + "\r\n"
                          "Content-Type: application/json\r\n"
                          "Content-Length: " + QByteArray::number(body.size()) + "\r\n"
                          "Connection: close\r\n"
@@ -56,16 +64,18 @@ static bool sendToRunningInstance(const QString& arg) {
 }
 
 static bool sendShowToRunningInstance() {
+    int port = localApiPort();
     QTcpSocket socket;
-    socket.connectToHost("127.0.0.1", 24680);
+    socket.connectToHost("127.0.0.1", port);
     if (!socket.waitForConnected(2000)) return false;
 
     QJsonObject obj;
     obj["argument"] = "show";
     QByteArray body = QJsonDocument(obj).toJson(QJsonDocument::Compact);
+    QString host = "127.0.0.1:" + QString::number(port);
 
     QByteArray request = "POST /api/forward HTTP/1.1\r\n"
-                         "Host: 127.0.0.1:24680\r\n"
+                         "Host: " + host.toUtf8() + "\r\n"
                          "Content-Type: application/json\r\n"
                          "Content-Length: " + QByteArray::number(body.size()) + "\r\n"
                          "Connection: close\r\n"
@@ -118,15 +128,17 @@ int main(int argc, char* argv[]) {
 
     if (isRunningInstance()) {
         if (hasUrlArg) {
-            bool forwarded = false;
+            int forwarded = 0;
             for (const QString& arg : forwardArgs) {
                 if (sendToRunningInstance(arg)) {
-                    forwarded = true;
+                    forwarded++;
                     Logger::instance().info("Forwarded to running instance: " + arg.left(80));
                 }
             }
-            if (!forwarded) {
-                Logger::instance().info("Forwarded arguments to existing instance, exiting");
+            if (forwarded > 0) {
+                Logger::instance().info("Forwarded " + QString::number(forwarded) + " argument(s) to existing instance, exiting");
+            } else {
+                Logger::instance().warning("Instance already running but argument forwarding failed, exiting");
             }
         } else {
             sendShowToRunningInstance();
