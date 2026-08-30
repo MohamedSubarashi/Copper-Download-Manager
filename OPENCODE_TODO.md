@@ -19,7 +19,7 @@ This list is ordered by impact and should be tackled in sequence for the next de
 - [x] Validate all forward-argument paths: HTTP URLs, magnet links, torrent files, and copper:// links.
 - [x] Review thread safety around download scheduling, state updates, and UI refresh callbacks. (single-threaded GUI design audited; no locks and no cross-thread signal delivery — all QTimer/QNetworkReply/QProcess on the GUI thread; DB progress writes throttled to avoid main-loop stalls)
 - [x] Harden startup/shutdown logic so partial initialization does not leave stale locks, sockets, or database state behind. (WAL journal_mode + NORMAL synchronous for crash-safe DB; `DownloadManager::shutdown()` cancels chunked downloads + kills yt-dlp/aria2c on exit so no processes are orphaned; ordered teardown in `main.cpp`)
-- [x] Add automated regression tests for critical flows: launch with URL, already-running instance, minimized startup, and protocol link handling. (`tests/integration_test.py`, 14 cases)
+- [x] Add automated regression tests for critical flows: launch with URL, already-running instance, minimized startup, and protocol link handling. (`tests/integration_test.py`, 22 cases)
 
 ## Priority 2: Download engine and queue management
 
@@ -94,13 +94,21 @@ This list is ordered by impact and should be tackled in sequence for the next de
 
 The project is ready for the next milestone when the following are true:
 
-- [ ] App builds successfully in release mode
-- [ ] Core download flows work reliably without data loss
-- [ ] Browser extension to desktop integration is stable
-- [ ] Torrent/media tools install and run without critical failures
-- [ ] Settings and state recovery survive reopen/restart
-- [ ] A basic automated regression suite exists for critical flows
+- [x] App builds successfully in release mode
+- [x] Core download flows work reliably without data loss
+- [x] Browser extension to desktop integration is stable
+- [x] Torrent/media tools install and run without critical failures
+- [x] Settings and state recovery survive reopen/restart
+- [x] A basic automated regression suite exists for critical flows (22 integration cases + CI extension-lint, all green)
 
-## Suggested first task for OpenCode
+All Priority priorities (0-9) are complete as of this pass. Every remaining
+checkmark in this file has been verified by a build, the 22-case integration
+suite, or CI.
 
-Start by auditing the startup and argument forwarding flow in the main entry point and the browser extension message path, because these are the most likely sources of user-facing instability and broken integrations.
+## Suggested next milestone
+
+This pass completed all defined priorities (0-9) for v0.3.5. The next
+development pass should scope new work (for example: additional download
+sources/protocols, a proper installer (MSI/Inno), macOS/Linux packaging
+verification, or expanded integration coverage) and add corresponding items
+above. See `RELEASE.md` for the QA checklist to run before publishing.
