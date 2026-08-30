@@ -59,6 +59,7 @@ private:
     void onYtDlpFinished(int id);
     void onYtDlpFailed(int id, const QString& error);
     void processSpeedLimit();
+    void applySpeedLimitToDownloaders();
 
     QMap<int, DownloadItem> downloads;
     QMap<int, ChunkedDownloader*> activeChunkedDownloaders;

@@ -21,9 +21,18 @@ ChunkedDownloader::ChunkedDownloader(QObject* parent)
     , speed(0)
     , nam(new QNetworkAccessManager(this))
     , headReply(nullptr)
+    , limitBytesPerSec(0)
+    , throttleBudget(0)
+    , throttleRemaining(0)
+    , drainTimer(new QTimer(this))
+    , throttleActive(false)
 {
     speedTimer = new QTimer(this);
     connect(speedTimer, &QTimer::timeout, this, &ChunkedDownloader::onSpeedTimer);
+
+    drainTimer->setInterval(200);
+    connect(drainTimer, &QTimer::timeout, this, &ChunkedDownloader::onDrainTimer);
+    throttleTimer.start();
 }
 
 ChunkedDownloader::~ChunkedDownloader() {
@@ -116,6 +125,8 @@ void ChunkedDownloader::startDownload(const QString& url, const QString& filePat
     paused = false;
     downloadedBytes = 0;
     totalBytes = 0;
+
+    resetThrottleState();
 
     Logger::instance().info("Starting chunked download: " + url + " -> " + filePath + " (" + QString::number(chunks) + " chunks)");
 
@@ -370,6 +381,26 @@ void ChunkedDownloader::onChunkReadyRead() {
     QNetworkReply* reply = qobject_cast<QNetworkReply*>(sender());
     if (!reply) return;
 
+    if (throttleActive) {
+        refreshThrottleBudget();
+        if (throttleRemaining > 0) {
+            drainAvailableData(throttleRemaining);
+            throttleRemaining = 0;
+        }
+        // If data remains buffered (over the limit), keep the drain timer running.
+        bool buffered = false;
+        for (const ChunkState& chunk : chunks) {
+            if (chunk.reply && chunk.file && chunk.reply->bytesAvailable() > 0) {
+                buffered = true;
+                break;
+            }
+        }
+        if (buffered) {
+            if (!drainTimer->isActive()) drainTimer->start();
+        }
+        return;
+    }
+
     for (ChunkState& chunk : chunks) {
         if (chunk.reply == reply) {
             QByteArray data = reply->readAll();
@@ -519,6 +550,7 @@ void ChunkedDownloader::pause() {
         }
     }
 
+    drainTimer->stop();
     speedTimer->stop();
     Logger::instance().info("Download paused (id: " + QString::number(downloadId) + ")");
 }
@@ -559,6 +591,7 @@ void ChunkedDownloader::cancel() {
     downloading = false;
     paused = false;
     speedTimer->stop();
+    drainTimer->stop();
     cleanupChunks();
     cleanupTempFiles();
 }
@@ -570,5 +603,84 @@ qint64 ChunkedDownloader::getTotalBytes() const { return totalBytes; }
 qint64 ChunkedDownloader::getSpeed() const { return speed; }
 
 void ChunkedDownloader::setSpeedLimit(qint64 bytesPerSecond) {
-    Q_UNUSED(bytesPerSecond);
+    if (bytesPerSecond == limitBytesPerSec) return;
+
+    limitBytesPerSec = qMax<qint64>(0, bytesPerSecond);
+    throttleActive = limitBytesPerSec > 0;
+
+    if (throttleActive) {
+        refreshThrottleBudget();
+    } else {
+        // Unlimited: stop throttling and immediately drain any buffered data.
+        drainTimer->stop();
+        throttleRemaining = 0;
+        drainAvailableData(Q_INT64_C(1) << 62);
+    }
+}
+
+void ChunkedDownloader::refreshThrottleBudget() {
+    if (!throttleActive) return;
+    qint64 elapsedMs = qMax<qint64>(1, throttleTimer.elapsed());
+    // Guard against overflow for absurdly large limits.
+    qint64 allowance = (limitBytesPerSec > Q_INT64_C(0x7FFFFFFF))
+        ? Q_INT64_C(1) << 62
+        : (limitBytesPerSec * elapsedMs) / 1000;
+    if (allowance > throttleRemaining) {
+        throttleRemaining = allowance - throttleRemaining;
+        throttleBudget = throttleRemaining;
+    }
+    throttleTimer.restart();
+}
+
+void ChunkedDownloader::drainAvailableData(qint64 maxBytes) {
+    qint64 budgetLeft = maxBytes;
+    for (ChunkState& chunk : chunks) {
+        if (budgetLeft <= 0) break;
+        if (!chunk.reply || !chunk.file) continue;
+        if (chunk.reply->bytesAvailable() <= 0) continue;
+
+        qint64 toRead = qMin<qint64>(budgetLeft, chunk.reply->bytesAvailable());
+        QByteArray data = chunk.reply->read(toRead);
+        if (data.isEmpty()) continue;
+        chunk.file->write(data);
+        chunk.downloaded += data.size();
+        downloadedBytes += data.size();
+        budgetLeft -= data.size();
+        emit downloadProgress(downloadId, downloadedBytes, totalBytes);
+    }
+}
+
+void ChunkedDownloader::onDrainTimer() {
+    if (!downloading || paused || !throttleActive) {
+        drainTimer->stop();
+        return;
+    }
+
+    refreshThrottleBudget();
+    if (throttleRemaining > 0) {
+        drainAvailableData(throttleRemaining);
+        throttleRemaining = 0;
+    }
+
+    // If any chunk still has buffered data, keep the drain timer running so the
+    // data is consumed across windows. Otherwise stop it.
+    bool buffered = false;
+    for (const ChunkState& chunk : chunks) {
+        if (chunk.reply && chunk.file && chunk.reply->bytesAvailable() > 0) {
+            buffered = true;
+            break;
+        }
+    }
+    if (!buffered) {
+        drainTimer->stop();
+    }
+}
+
+void ChunkedDownloader::resetThrottleState() {
+    limitBytesPerSec = 0;
+    throttleActive = false;
+    throttleRemaining = 0;
+    throttleBudget = 0;
+    drainTimer->stop();
+    throttleTimer.restart();
 }

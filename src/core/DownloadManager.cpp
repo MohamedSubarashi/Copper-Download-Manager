@@ -14,6 +14,7 @@
 #include <QProcess>
 #include <QRegularExpression>
 
+
 DownloadManager::DownloadManager() : nextId(1), maxConcurrent(5), speedLimit(0), speedLimitAccumulator(0) {
     speedLimitTimer = new QTimer(this);
     connect(speedLimitTimer, &QTimer::timeout, this, &DownloadManager::processSpeedLimit);
@@ -636,7 +637,9 @@ void DownloadManager::updateMaxConcurrent(int max) {
 }
 
 void DownloadManager::setSpeedLimit(qint64 bytesPerSecond) {
-    speedLimit = bytesPerSecond;
+    speedLimit = qMax<qint64>(0, bytesPerSecond);
+    Logger::instance().info("Speed limit set to " + QString::number(speedLimit) + " B/s");
+    applySpeedLimitToDownloaders();
 }
 
 qint64 DownloadManager::getSpeedLimit() const {
@@ -822,18 +825,46 @@ void DownloadManager::processSpeedLimit() {
     if (speedLimit <= 0) return;
 
     qint64 totalCurrentSpeed = 0;
+    qint64 activeChunkedCount = 0;
     for (const DownloadItem& item : downloads) {
         if (item.status == "Downloading") {
             totalCurrentSpeed += item.speed;
         }
+    }
+    for (const ChunkedDownloader* dl : activeChunkedDownloaders) {
+        if (dl->isDownloading()) activeChunkedCount++;
+    }
+
+    // Lower hysteresis band: once aggregate speed is comfortably under the limit,
+    // cancel any residual throttling so downloads can run at full speed again.
+    if (totalCurrentSpeed <= (qint64)(speedLimit * 0.8)) {
+        for (ChunkedDownloader* dl : activeChunkedDownloaders) {
+            dl->setSpeedLimit(0);
+        }
+        return;
     }
 
     if (totalCurrentSpeed > speedLimit) {
         double ratio = (double)speedLimit / totalCurrentSpeed;
         for (int id : downloads.keys()) {
             if (downloads[id].status == "Downloading" && activeChunkedDownloaders.contains(id)) {
-                activeChunkedDownloaders[id]->setSpeedLimit((qint64)(downloads[id].speed * ratio));
+                activeChunkedDownloaders[id]->setSpeedLimit(qMax<qint64>(1024, (qint64)(downloads[id].speed * ratio)));
             }
+        }
+    } else if (activeChunkedCount > 0) {
+        // In the hysteresis zone, hold the current caps (do not loosen or tighten).
+    }
+}
+
+void DownloadManager::applySpeedLimitToDownloaders() {
+    for (int id : activeChunkedDownloaders.keys()) {
+        ChunkedDownloader* dl = activeChunkedDownloaders[id];
+        if (speedLimit <= 0) {
+            dl->setSpeedLimit(0);
+        } else if (dl->isDownloading()) {
+            // Reset the downloader to unlimited; the polling processSpeedLimit()
+            // will apply a proportional cap if the aggregate exceeds the limit.
+            dl->setSpeedLimit(0);
         }
     }
 }

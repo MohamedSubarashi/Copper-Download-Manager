@@ -5,6 +5,7 @@
 #include <QString>
 #include <QVector>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QFile>
@@ -48,6 +49,7 @@ private slots:
     void onChunkError(QNetworkReply::NetworkError error);
     void onSpeedTimer();
     void onHeadFinished();
+    void onDrainTimer();
 
 private:
     void setupChunks(qint64 totalSize);
@@ -59,6 +61,9 @@ private:
     QString extractFilenameFromContentDisposition(const QByteArray& header);
     QString extractUrlFromHtml(const QByteArray& html);
     bool isHtmlResponse(QNetworkReply* reply);
+    void refreshThrottleBudget();
+    void drainAvailableData(qint64 maxBytes);
+    void resetThrottleState();
 
     QString downloadUrl;
     QString saveFilePath;
@@ -76,6 +81,13 @@ private:
     QVector<ChunkState> chunks;
     QTimer* speedTimer;
     QNetworkReply* headReply;
+
+    qint64 limitBytesPerSec;
+    QElapsedTimer throttleTimer;
+    qint64 throttleBudget;
+    qint64 throttleRemaining;
+    QTimer* drainTimer;
+    bool throttleActive;
 };
 
 #endif
