@@ -42,8 +42,11 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     QGroupBox* themeGroup = new QGroupBox("Appearance");
     QVBoxLayout* themeBoxLayout = new QVBoxLayout(themeGroup);
     QHBoxLayout* themeLayout = new QHBoxLayout();
-    themeLayout->addWidget(new QLabel("Theme:"));
-    QComboBox* themeCombo = new QComboBox();
+    auto* themeCombo = new QComboBox();
+    QLabel* themeLabel = new QLabel("Theme:");
+    themeLabel->setBuddy(themeCombo);
+    themeLayout->addWidget(themeLabel);
+    themeCombo->setAccessibleName("Theme");
     themeCombo->addItem(QIcon(":/icons/LightMode.png"), "Light");
     themeCombo->addItem(QIcon(":/icons/DarkMode.png"), "Dark");
     themeCombo->addItem(QIcon(":/icons/FollowSystem.png"), "System");
@@ -60,10 +63,14 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     QGroupBox* folderGroup = new QGroupBox("Download Folder");
     QVBoxLayout* folderBoxLayout = new QVBoxLayout(folderGroup);
     QHBoxLayout* folderLayout = new QHBoxLayout();
-    downloadPathEdit = new QLineEdit();
+    QLabel* folderLabel = new QLabel("Folder:");
+    folderLabel->setBuddy(downloadPathEdit = new QLineEdit());
+    folderLayout->addWidget(folderLabel);
+    downloadPathEdit->setAccessibleName("Download folder path");
     downloadPathEdit->setReadOnly(true);
     downloadPathEdit->setText(DatabaseManager::instance().getSetting("downloadPath", QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)));
     QPushButton* browseBtn = new QPushButton("Browse...");
+    browseBtn->setAccessibleName("Browse download folder");
     connect(browseBtn, &QPushButton::clicked, this, &SettingsDialog::onBrowseDownloadPath);
     folderLayout->addWidget(downloadPathEdit);
     folderLayout->addWidget(browseBtn);
@@ -80,8 +87,10 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     QGroupBox* chunksGroup = new QGroupBox("Download Options");
     QVBoxLayout* chunksBoxLayout = new QVBoxLayout(chunksGroup);
     QHBoxLayout* chunkLayout = new QHBoxLayout();
-    chunkLayout->addWidget(new QLabel("Default download chunks:"));
-    chunkCombo = new QComboBox();
+    QLabel* chunkLabel = new QLabel("Default download chunks:");
+    chunkLabel->setBuddy(chunkCombo = new QComboBox());
+    chunkLayout->addWidget(chunkLabel);
+    chunkCombo->setAccessibleName("Default download chunks");
     for (int i : {4, 8, 12, 16, 24, 32}) chunkCombo->addItem(QString::number(i));
     chunkCombo->setCurrentText(DatabaseManager::instance().getSetting("chunks", "16"));
     chunkLayout->addWidget(chunkCombo);
@@ -92,8 +101,10 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     QVBoxLayout* fileTypeFilterLayout = new QVBoxLayout(fileTypeFilterGroup);
 
     QHBoxLayout* filterModeLayout = new QHBoxLayout();
-    filterModeLayout->addWidget(new QLabel("Mode:"));
-    typeFilterModeCombo = new QComboBox();
+    QLabel* filterModeLabel = new QLabel("Mode:");
+    filterModeLabel->setBuddy(typeFilterModeCombo = new QComboBox());
+    filterModeLayout->addWidget(filterModeLabel);
+    typeFilterModeCombo->setAccessibleName("Download type filter mode");
     typeFilterModeCombo->addItem("Disabled", "disabled");
     typeFilterModeCombo->addItem("Include selected types", "include");
     typeFilterModeCombo->addItem("Exclude selected types", "exclude");
@@ -121,8 +132,10 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     QGroupBox* speedGroup = new QGroupBox("Speed Limiter");
     QVBoxLayout* speedBoxLayout = new QVBoxLayout(speedGroup);
     QHBoxLayout* speedLayout = new QHBoxLayout();
-    speedLayout->addWidget(new QLabel("Download speed limit (KB/s, 0 = unlimited):"));
-    speedLimitSpin = new QSpinBox();
+    QLabel* speedLabel = new QLabel("Download speed limit (KB/s, 0 = unlimited):");
+    speedLabel->setBuddy(speedLimitSpin = new QSpinBox());
+    speedLayout->addWidget(speedLabel);
+    speedLimitSpin->setAccessibleName("Download speed limit");
     speedLimitSpin->setRange(0, 1000000);
     speedLimitSpin->setValue(DatabaseManager::instance().getSetting("speedLimit", "0").toInt());
     speedLimitSpin->setSuffix(" KB/s");

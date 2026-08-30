@@ -72,6 +72,7 @@ DownloadManagerDialog::DownloadManagerDialog(SourceType sourceType, const QStrin
     mainLayout->addWidget(progressBar);
 
     fileList = new QListWidget();
+    fileList->setAccessibleName("File list");
     connect(fileList, &QListWidget::itemChanged, this, &DownloadManagerDialog::onItemChanged);
     mainLayout->addWidget(fileList);
 
@@ -84,6 +85,7 @@ DownloadManagerDialog::DownloadManagerDialog(SourceType sourceType, const QStrin
     optionsLayout->addSpacing(20);
 
     trackNumberCheck = new QCheckBox("Add track numbers (001, 002...)");
+    trackNumberCheck->setAccessibleName("Add track numbers");
     trackNumberCheck->setToolTip("Prepend track numbers to filenames.\n"
                                  "Format: 001.VideoTitle.mp4 (for <1000 files), 0001.VideoTitle.mp4 (for 1000+)");
     trackNumberCheck->setChecked(true);
@@ -92,10 +94,13 @@ DownloadManagerDialog::DownloadManagerDialog(SourceType sourceType, const QStrin
     mainLayout->addLayout(optionsLayout);
 
     QHBoxLayout* pathLayout = new QHBoxLayout();
-    pathLayout->addWidget(new QLabel("Save to:"));
-    pathEdit = new QLineEdit();
+    QLabel* saveLabel = new QLabel("Save to:");
+    saveLabel->setBuddy(pathEdit = new QLineEdit());
+    pathLayout->addWidget(saveLabel);
+    pathEdit->setAccessibleName("Save to folder");
     pathEdit->setText(path.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) : path);
     QPushButton* browseBtn = new QPushButton("Browse...");
+    browseBtn->setAccessibleName("Browse save folder");
     connect(browseBtn, &QPushButton::clicked, this, &DownloadManagerDialog::onBrowse);
     pathLayout->addWidget(pathEdit);
     pathLayout->addWidget(browseBtn);

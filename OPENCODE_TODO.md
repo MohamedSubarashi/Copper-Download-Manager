@@ -65,7 +65,7 @@ This list is ordered by impact and should be tackled in sequence for the next de
 - [x] Improve the theme system and ensure dark/light/system modes are consistent. (palette placeholder/disabled roles; palette-safe status colors)
 - [x] Validate Add URL, Download Manager, Settings, and About flows from a user perspective. (Add URL status/feedback + initial focus; tool-install errors live in Settings; stale license version fixed)
 - [x] Clean up inconsistent dialogs and status messaging for failed downloads, tool installation, and config changes.
-- [ ] Improve accessibility and keyboard navigation in key dialogs and actions. (initial work: accessible names/buddies in Add URL, About OK default)
+- [x] Improve accessibility and keyboard navigation in key dialogs and actions. (label buddies + accessible names on theme, folder, chunks, filter-mode, speed-limit controls in Settings; save path, file list, track-number checkbox in Download Manager; stats labels and peer table in Torrent Details; Add URL/About done earlier)
 
 ## Priority 8: Packaging, distribution, and release readiness
 
