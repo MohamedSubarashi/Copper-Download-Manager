@@ -13,28 +13,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Note: versions here must be ones aqtinstall can actually fetch from the
-        # official open-source Qt mirror. Qt 6.11.2 (used on the local dev machine)
-        # is NOT published there yet, so it is covered only locally; 6.8.3 is the
-        # current LTS and is guaranteed available.
-        qt: ["6.6.3", "6.8.3"]
+        # Versions here must (a) be fetchable by aqtinstall from the official
+        # open-source Qt mirror, and (b) link against the MinGW that windows-latest
+        # ships out of the box (GCC 15.2 in C:\mingw64). Qt 6.8.x mingw_64 binaries
+        # are built with GCC 13 and fail to link there (libQt6EntryPoint.a:
+        # "undefined reference to __imp___argc"); Qt 6.6.3 is ABI-compatible and
+        # green. Qt 6.11.2 (used on the local dev machine) is not published on the
+        # mirror, so it is covered only locally.
+        qt: ["6.6.3"]
         config: [Release, Debug]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Qt + MinGW
+      - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ matrix.qt }}
           host: windows
           arch: win64_mingw
           cache: true
-          # The Qt mingw_64 binary packages are built with GCC 13. windows-latest
-          # only ships GCC 15.2 (C:\mingw64), which fails to link
-          # libQt6EntryPoint.a ("undefined reference to __imp___argc"). Install the
-          # matching MinGW 13.1 tool and prepend it to PATH so CMake uses it.
-          tools: 'tools_mingw,qt.tools.win64_mingw1310'
-          add-tools-to-path: true
 
       - name: Configure
         shell: bash
@@ -65,3 +62,31 @@ jobs:
           PY
           echo "Deployed package:"
           ls -la installer/release/0.3.5/ 2>/dev/null | head -40 || true
+
+      - name: Package portable zip (Release only)
+        if: matrix.config == 'Release'
+        shell: bash
+        run: |
+          VER="$(sed -nE 's/^project\([^ ]+ VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)"
+          echo "Packaging version ${VER}"
+          python - "$VER" <<'PY'
+          import sys
+          import zipfile
+          import os
+          ver = sys.argv[1]
+          src = f"installer/release/{ver}"
+          out = f"installer/release/CopperDownloadManager-portable-{ver}.zip"
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+              for root, _, files in os.walk(src):
+                  for f in files:
+                      p = os.path.join(root, f)
+                      z.write(p, os.path.relpath(p, src))
+          print("created", out)
+          PY
+
+      - name: Upload portable artifact (Release only)
+        if: matrix.config == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-download-manager-portable-${{ matrix.qt }}
+          path: installer/release/CopperDownloadManager-portable-*.zip
