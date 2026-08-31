@@ -41,6 +41,10 @@ Aria2cManager::Aria2cManager() : nextId(1), maxConcurrent(3), isDownloading(fals
 }
 
 Aria2cManager::~Aria2cManager() {
+    // Stop the RPC worker thread first (while Qt's event system / network are
+    // still alive) so no request is left in flight during static teardown.
+    shutdownRpcThread();
+
     // The daemon is normally shut down explicitly in main() (shutdownDaemon)
     // while the Qt event system is still alive. This destructor runs during
     // static teardown, AFTER Qt's event loop / QNetworkAccessManager are gone,
@@ -391,7 +395,7 @@ bool Aria2cManager::startDaemonProcess() {
     QThread::msleep(killedStale ? 1200 : 50);
 
     int seedTime = DatabaseManager::instance().getSetting("seedTime", "30").toInt();
-    QString seedStr = QString::number(seedTime == -1 ? 0 : (seedTime <= 0 ? -1 : seedTime));
+    QString seedStr = QString::number(qMax(0, seedTime));
     int maxConc = maxConcurrent;
 
     QStringList args;
@@ -496,8 +500,16 @@ bool Aria2cManager::ensureDaemon() {
             }
             continue;
         }
+        // IMPORTANT: do NOT call QCoreApplication::processEvents() (or use a
+        // QEventLoop) while waiting here. This runs on the GUI thread inside
+        // the add-torrent path (addTorrent -> ensureDaemon). Processing events
+        // reentrantly allows LocalServer socket readyRead/disconnected + their
+        // deleteLater to fire mid-flight, tearing down sockets that still have
+        // queued events -> use-after-free crash in QMetaObject::activate.
+        // The GUI simply freezes briefly (~seconds) during first daemon start,
+        // which is preferable to a crash. RPCs below already block the GUI on a
+        // QWaitCondition (worker thread) and release no events.
         QThread::msleep(500);
-        QCoreApplication::processEvents();
     }
 
     m_daemonStarting = false;
@@ -530,17 +542,68 @@ void Aria2cManager::shutdownDaemon() {
     emit daemonStateChanged(false);
 }
 
+// RPC worker living in the dedicated rpc thread. It owns its own
+// QNetworkAccessManager (created in this thread) so the blocking HTTP request
+// and its internal QEventLoop::exec() run HERE, never on the GUI thread. The
+// result (the full JSON response object, or Undefined on timeout/parse failure)
+// is handed back to Aria2cManager under m_rpcMutex and the waiting condition is
+// awakened.
+class Aria2cManager::RpcWorker : public QObject {
+    Q_OBJECT
+public:
+    RpcWorker(QMutex* mutex, QWaitCondition* cond, bool* ready, QJsonValue* result)
+        : mMutex(mutex), mCond(cond), mReady(ready), mResult(result) {}
+    QNetworkAccessManager* nam = nullptr;
+
+public slots:
+    void doRequest(const QJsonObject& req, int timeoutMs) {
+        if (!nam) nam = new QNetworkAccessManager(this);
+
+        QNetworkRequest request(QUrl("http://127.0.0.1:6800/jsonrpc"));
+        request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+
+        QNetworkReply* reply = nam->post(request, QJsonDocument(req).toJson(QJsonDocument::Compact));
+
+        QEventLoop loop;
+        bool done = false;
+        connect(reply, &QNetworkReply::finished, &loop, [&]() { done = true; loop.quit(); });
+
+        if (timeoutMs > 0) {
+            QTimer::singleShot(timeoutMs, &loop, &QEventLoop::quit);
+        }
+        loop.exec();
+
+        QJsonValue response(QJsonValue::Undefined);
+        if (done) {
+            QByteArray data = reply->readAll();
+            reply->deleteLater();
+            QJsonParseError parseErr;
+            QJsonDocument doc = QJsonDocument::fromJson(data, &parseErr);
+            if (parseErr.error == QJsonParseError::NoError && doc.isObject()) {
+                response = doc.object();
+            }
+        } else {
+            QObject::disconnect(reply, &QNetworkReply::finished, &loop, nullptr);
+            reply->abort();
+            reply->deleteLater();
+        }
+
+        QMutexLocker locker(mMutex);
+        *mResult = response;
+        *mReady = true;
+        mCond->wakeOne();
+    }
+
+private:
+    QMutex* mMutex;
+    QWaitCondition* mCond;
+    bool* mReady;
+    QJsonValue* mResult;
+};
+
 QJsonValue Aria2cManager::rpcResult(const QString& method, const QJsonArray& params, int timeoutMs) {
     if (!isInstalled()) return QJsonValue(QJsonValue::Undefined);
-    // Prevent reentrant RPC calls. rpcResult() runs a nested event loop, so if a
-    // caller inside that loop (e.g. the poll timer) issued another rpcResult, two
-    // nested loops would interleave network replies and a reply aborted/deleted by
-    // the timeout path could be dereferenced after deletion, crashing the app.
-    if (m_rpcInProgress) return QJsonValue(QJsonValue::Undefined);
-    m_rpcInProgress = true;
-
-    QNetworkRequest request(QUrl("http://127.0.0.1:6800/jsonrpc"));
-    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    ensureRpcThread();
 
     QJsonObject req;
     req["jsonrpc"] = "2.0";
@@ -548,36 +611,27 @@ QJsonValue Aria2cManager::rpcResult(const QString& method, const QJsonArray& par
     req["method"] = method;
     req["params"] = params;
 
-    QNetworkReply* reply = nam->post(request, QJsonDocument(req).toJson(QJsonDocument::Compact));
-
-    QEventLoop loop;
-    bool done = false;
-    connect(reply, &QNetworkReply::finished, &loop, [&]() { done = true; loop.quit(); });
-
-    if (timeoutMs > 0) {
-        QTimer::singleShot(timeoutMs, &loop, &QEventLoop::quit);
+    // Submit the RPC to the worker thread, then block on a condition variable.
+    // Because the GUI thread parks without running an event loop, no reentrant
+    // GUI-thread event (LocalServer socket readyRead/disconnected, timers,
+    // deleteLater) can fire mid-RPC, eliminating the use-after-free crashes that
+    // the previous nested QEventLoop::exec() allowed.
+    QMutexLocker locker(&m_rpcMutex);
+    m_rpcReplyReady = false;
+    m_rpcReply = QJsonValue(QJsonValue::Undefined);
+    QMetaObject::invokeMethod(m_rpcWorker, "doRequest", Qt::QueuedConnection,
+                              Q_ARG(QJsonObject, req), Q_ARG(int, timeoutMs));
+    while (!m_rpcReplyReady) {
+        m_rpcCond.wait(&m_rpcMutex);
     }
-    loop.exec();
+    QJsonValue response = m_rpcReply;
+    locker.unlock();
 
-    if (!done) {
-        QObject::disconnect(reply, &QNetworkReply::finished, &loop, nullptr);
-        reply->abort();
-        reply->deleteLater();
-        m_rpcInProgress = false;
+    if (!response.isObject()) {
         return QJsonValue(QJsonValue::Undefined);
     }
 
-    QByteArray data = reply->readAll();
-    reply->deleteLater();
-
-    QJsonParseError parseErr;
-    QJsonDocument doc = QJsonDocument::fromJson(data, &parseErr);
-    if (parseErr.error != QJsonParseError::NoError || !doc.isObject()) {
-        m_rpcInProgress = false;
-        return QJsonValue(QJsonValue::Undefined);
-    }
-
-    QJsonObject obj = doc.object();
+    QJsonObject obj = response.toObject();
     if (obj.contains("error")) {
         QJsonObject errObj = obj.value("error").toObject();
         QString msg = errObj.value("message").toString();
@@ -586,12 +640,32 @@ QJsonValue Aria2cManager::rpcResult(const QString& method, const QJsonArray& par
         // force a port clear + relaunch instead of looping forever against a
         // stale daemon that holds a different secret.
         m_rpcUnauthorized = msg.contains("Unauthorized", Qt::CaseInsensitive);
-        m_rpcInProgress = false;
         return QJsonValue(QJsonValue::Undefined);
     }
     m_rpcUnauthorized = false;
-    m_rpcInProgress = false;
     return obj.value("result");
+}
+
+void Aria2cManager::ensureRpcThread() {
+    if (m_rpcThread) return;
+    // NOTE: not parented to `this`; the thread is deleted explicitly in
+    // shutdownRpcThread() (called from ~Aria2cManager), so a parent would cause
+    // a double free.
+    m_rpcThread = new QThread;
+    m_rpcThread->setObjectName("CopperRpcThread");
+    m_rpcWorker = new RpcWorker(&m_rpcMutex, &m_rpcCond, &m_rpcReplyReady, &m_rpcReply);
+    m_rpcWorker->moveToThread(m_rpcThread);
+    connect(m_rpcThread, &QThread::finished, m_rpcWorker, &QObject::deleteLater);
+    m_rpcThread->start();
+}
+
+void Aria2cManager::shutdownRpcThread() {
+    if (!m_rpcThread) return;
+    m_rpcThread->quit();
+    m_rpcThread->wait(1000);
+    delete m_rpcThread;
+    m_rpcThread = nullptr;
+    m_rpcWorker = nullptr;
 }
 
 QJsonObject Aria2cManager::rpcCall(const QString& method, const QJsonArray& params, int timeoutMs) {
@@ -616,7 +690,7 @@ QJsonObject Aria2cManager::rpcCall(const QString& method, const QJsonArray& para
 
 QString Aria2cManager::seedTimeArg() const {
     int seedTime = DatabaseManager::instance().getSetting("seedTime", "30").toInt();
-    return QString::number(seedTime == -1 ? 0 : (seedTime <= 0 ? -1 : seedTime));
+    return QString::number(qMax(0, seedTime));
 }
 
 static QString resolveCachedTorrent(const QString& magnetOrFile, QString* torrentName) {
@@ -1059,7 +1133,7 @@ void Aria2cManager::removeTrackerFromTorrent(int torrentId, const QString& track
 
 void Aria2cManager::seedTorrent(int torrentId, int seedTimeMinutes) {
     if (!tasks.contains(torrentId) || tasks[torrentId].gid.isEmpty()) return;
-    QString value = QString::number(seedTimeMinutes == -1 ? 0 : (seedTimeMinutes <= 0 ? -1 : seedTimeMinutes));
+    QString value = QString::number(qMax(0, seedTimeMinutes));
     rpcCall("aria2.changeOption", QJsonArray() << ("token:" + m_token) << tasks[torrentId].gid << QJsonObject{{"seed-time", value}});
     Logger::instance().info("Torrent seed-time set: id=" + QString::number(torrentId) + " -> " + value);
 }
@@ -1384,3 +1458,5 @@ void Aria2cManager::fetchTorrentFileList(const QString& torrentPath, std::functi
 
     process->start(getAria2cPath(), args);
 }
+
+#include "Aria2cManager.moc"

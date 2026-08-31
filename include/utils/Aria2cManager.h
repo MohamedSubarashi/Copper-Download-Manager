@@ -9,6 +9,9 @@
 #include <QTimer>
 #include <QSet>
 #include <QJsonObject>
+#include <QJsonValue>
+#include <QMutex>
+#include <QWaitCondition>
 #include <functional>
 #include "utils/PlaylistEntry.h"
 #include "utils/TorrentInfo.h"
@@ -16,6 +19,7 @@
 
 class QNetworkAccessManager;
 class QNetworkReply;
+class QThread;
 
 struct Aria2cTracker {
     QString url;
@@ -164,7 +168,25 @@ public:
     QTimer* pollTimer;
     int pollTick = 0;
     bool m_pollInProgress = false;
-    bool m_rpcInProgress = false;
+
+    // RPC runs on a dedicated worker thread. Previously rpcResult() performed
+    // the JSON-RPC with a nested QEventLoop::exec() on the GUI thread; while
+    // that nested loop ran, reentrant GUI-thread events (LocalServer socket
+    // readyRead/disconnected, timers, deleteLater) fired and tore down objects
+    // that still had queued events, causing use-after-free crashes (access
+    // violation inside QEventLoop / LocalServer::sendJsonResponse). Blocking on
+    // a QWaitCondition processes NO GUI events, so reentrancy is impossible.
+    // These fields are shared with the worker thread and are only touched under
+    // m_rpcMutex.
+    class RpcWorker;
+    RpcWorker* m_rpcWorker = nullptr;
+    QThread* m_rpcThread = nullptr;
+    QMutex m_rpcMutex;
+    QWaitCondition m_rpcCond;
+    bool m_rpcReplyReady = false;
+    QJsonValue m_rpcReply;
+    void ensureRpcThread();
+    void shutdownRpcThread();
 };
 
 #endif

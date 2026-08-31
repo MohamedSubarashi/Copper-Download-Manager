@@ -311,6 +311,8 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
 }
 
 void LocalServer::sendJsonResponse(QTcpSocket* socket, int statusCode, const QJsonObject& json, const QString& origin) {
+    if (!socket) return;
+    if (socket->state() != QAbstractSocket::ConnectedState) return;
     QByteArray body = QJsonDocument(json).toJson(QJsonDocument::Compact);
     QByteArray response;
     response += "HTTP/1.1 " + QByteArray::number(statusCode) + " OK\r\n";
@@ -331,6 +333,8 @@ void LocalServer::sendJsonResponse(QTcpSocket* socket, int statusCode, const QJs
 }
 
 void LocalServer::sendHtmlResponse(QTcpSocket* socket, int statusCode, const QString& html) {
+    if (!socket) return;
+    if (socket->state() != QAbstractSocket::ConnectedState) return;
     QByteArray body = html.toUtf8();
     QByteArray response;
     response += "HTTP/1.1 " + QByteArray::number(statusCode) + " OK\r\n";
