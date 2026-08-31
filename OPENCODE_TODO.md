@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.3.9
+Current version: 0.4.0
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 
@@ -174,6 +174,15 @@ integration coverage). See `RELEASE.md` for the QA checklist before publishing.
 - [x] `validate_extensions.py` updated for the popup-less design (no
       `default_popup`; requires `copper.html`/`copper.js`; checks `action.onClicked`
       and `openStatusTab`); both extensions pass.
+
+## Completed milestone: v0.4.0 (fix download-table selection being cleared)
+
+- [x] **Table selection no longer auto-clears**: `refreshTable()` rebuilt the whole
+      table from scratch every second (the 1s `refreshTimer` did `setRowCount(0)`),
+      which deleted every item and with it the user's selection — so clicking any
+      download deselected it on the next tick. Fixed by capturing the selected
+      download ids before the rebuild and re-selecting their rows afterwards
+      (via `QItemSelectionModel`), preserving single and multi-selection.
 
 ## Completed milestone: v0.3.9 (torrent crash fix + safe handler registration)
 

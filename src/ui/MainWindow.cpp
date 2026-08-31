@@ -26,6 +26,8 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QTimer>
+#include <QSet>
+#include <QItemSelection>
 #include <QMenu>
 #include <QContextMenuEvent>
 #include <QCloseEvent>
@@ -647,6 +649,20 @@ void MainWindow::onSidebarFilterChanged() {
 void MainWindow::refreshTable() {
     if (!isVisible()) return;
 
+    // The table is rebuilt from scratch below (setRowCount(0) deletes every item
+    // and with it the current selection). Because refreshTable() runs ~every
+    // second, any selection the user makes would otherwise be cleared on the next
+    // tick. Remember the selected download ids (stored per-row in Qt::UserRole)
+    // and re-select them once the rows are repopulated.
+    QSet<int> selectedIds;
+    const QList<QTableWidgetItem*> wasSelected = table->selectedItems();
+    for (const QTableWidgetItem* it : wasSelected) {
+        if (it) {
+            int id = it->data(Qt::UserRole).toInt();
+            if (id != 0) selectedIds.insert(id);
+        }
+    }
+
     table->setUpdatesEnabled(false);
     table->setRowCount(0);
 
@@ -879,6 +895,26 @@ void MainWindow::refreshTable() {
     }
 
     table->setUpdatesEnabled(true);
+
+    // Re-apply the selection that existed before the rebuild (see the capture at
+    // the top of this function). Selecting all matching rows in one QItemSelection
+    // update preserves multi-selection without clearing it.
+    if (!selectedIds.isEmpty() && table->rowCount() > 0) {
+        QItemSelection selection;
+        for (int row = 0; row < table->rowCount(); ++row) {
+            QTableWidgetItem* nameItem = table->item(row, 0);
+            if (!nameItem) continue;
+            int id = nameItem->data(Qt::UserRole).toInt();
+            if (selectedIds.contains(id)) {
+                QModelIndex topLeft = table->model()->index(row, 0);
+                QModelIndex bottomRight = table->model()->index(row, table->columnCount() - 1);
+                selection.append(QItemSelectionRange(topLeft, bottomRight));
+            }
+        }
+        if (!selection.isEmpty()) {
+            table->selectionModel()->select(selection, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        }
+    }
 
     activeCountLabel->setText("Active: " + QString::number(activeCount));
     queuedCountLabel->setText("Queued: " + QString::number(queuedCount));
