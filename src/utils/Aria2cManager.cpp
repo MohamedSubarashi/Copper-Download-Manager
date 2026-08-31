@@ -41,7 +41,22 @@ Aria2cManager::Aria2cManager() : nextId(1), maxConcurrent(3), isDownloading(fals
 }
 
 Aria2cManager::~Aria2cManager() {
-    shutdownDaemon();
+    // The daemon is normally shut down explicitly in main() (shutdownDaemon)
+    // while the Qt event system is still alive. This destructor runs during
+    // static teardown, AFTER Qt's event loop / QNetworkAccessManager are gone,
+    // so we must NOT call shutdownDaemon() (it runs a nested event loop and
+    // makes a network request, which crashes). Only hard-kill the child daemon
+    // process here as a last-resort fallback; every other teardown is handled
+    // by the explicit shutdown path.
+    if (m_daemonProcess) {
+        m_daemonProcess->kill();
+        m_daemonProcess->waitForFinished(500);
+        m_daemonProcess = nullptr;
+    }
+    if (pollTimer) {
+        pollTimer->stop();
+    }
+    m_daemonRunning = false;
 }
 
 Aria2cManager& Aria2cManager::instance() {
@@ -517,6 +532,12 @@ void Aria2cManager::shutdownDaemon() {
 
 QJsonValue Aria2cManager::rpcResult(const QString& method, const QJsonArray& params, int timeoutMs) {
     if (!isInstalled()) return QJsonValue(QJsonValue::Undefined);
+    // Prevent reentrant RPC calls. rpcResult() runs a nested event loop, so if a
+    // caller inside that loop (e.g. the poll timer) issued another rpcResult, two
+    // nested loops would interleave network replies and a reply aborted/deleted by
+    // the timeout path could be dereferenced after deletion, crashing the app.
+    if (m_rpcInProgress) return QJsonValue(QJsonValue::Undefined);
+    m_rpcInProgress = true;
 
     QNetworkRequest request(QUrl("http://127.0.0.1:6800/jsonrpc"));
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
@@ -542,6 +563,7 @@ QJsonValue Aria2cManager::rpcResult(const QString& method, const QJsonArray& par
         QObject::disconnect(reply, &QNetworkReply::finished, &loop, nullptr);
         reply->abort();
         reply->deleteLater();
+        m_rpcInProgress = false;
         return QJsonValue(QJsonValue::Undefined);
     }
 
@@ -551,6 +573,7 @@ QJsonValue Aria2cManager::rpcResult(const QString& method, const QJsonArray& par
     QJsonParseError parseErr;
     QJsonDocument doc = QJsonDocument::fromJson(data, &parseErr);
     if (parseErr.error != QJsonParseError::NoError || !doc.isObject()) {
+        m_rpcInProgress = false;
         return QJsonValue(QJsonValue::Undefined);
     }
 
@@ -563,9 +586,11 @@ QJsonValue Aria2cManager::rpcResult(const QString& method, const QJsonArray& par
         // force a port clear + relaunch instead of looping forever against a
         // stale daemon that holds a different secret.
         m_rpcUnauthorized = msg.contains("Unauthorized", Qt::CaseInsensitive);
+        m_rpcInProgress = false;
         return QJsonValue(QJsonValue::Undefined);
     }
     m_rpcUnauthorized = false;
+    m_rpcInProgress = false;
     return obj.value("result");
 }
 
@@ -774,7 +799,7 @@ void Aria2cManager::poll() {
         QJsonArray fields;
         const QStringList keys = {
             "gid","status","totalLength","completedLength","downloadSpeed","uploadSpeed",
-            "connections","numSeeders","seeder","uploadLength","infoHash","dir","errorMessage","announceList"
+            "connections","numSeeders","seeder","uploadLength","infoHash","dir","errorMessage","announceList","files"
         };
         for (const QString& k : keys) fields.append(k);
 
@@ -809,6 +834,22 @@ void Aria2cManager::parseTorrentStatus(int id, const QJsonObject& status) {
     task.connectedPeers = status.value("connections").toInt();
     task.seeds = status.value("numSeeders").toInt();
     task.infoHash = status.value("infoHash").toString();
+
+    // Capture per-file sizes so each file in a torrent can report its own
+    // length/completed length instead of the whole torrent's aggregate total.
+    if (status.contains("files")) {
+        QVector<Aria2FileSize> sizes;
+        QJsonArray files = status.value("files").toArray();
+        for (const QJsonValue& fv : files) {
+            QJsonObject fo = fv.toObject();
+            Aria2FileSize fs;
+            fs.path = fo.value("path").toString();
+            fs.total = fo.value("length").toString().toLongLong();
+            fs.completed = fo.value("completedLength").toString().toLongLong();
+            sizes.append(fs);
+        }
+        if (!sizes.isEmpty()) task.fileSizes = sizes;
+    }
 
     if (status.contains("announceList")) {
         QStringList trackerUrls;
@@ -973,6 +1014,10 @@ QStringList Aria2cManager::getTrackerList(int id) const {
 
 QString Aria2cManager::getGid(int id) const {
     return tasks.contains(id) ? tasks[id].gid : QString();
+}
+
+QVector<Aria2FileSize> Aria2cManager::getFileSizes(int id) const {
+    return tasks.contains(id) ? tasks[id].fileSizes : QVector<Aria2FileSize>();
 }
 
 void Aria2cManager::addTrackers(int torrentId, const QStringList& trackers) {

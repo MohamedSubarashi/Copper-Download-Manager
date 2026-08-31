@@ -23,6 +23,13 @@ struct Aria2cTracker {
     int index = -1;
 };
 
+// One file inside a torrent, as reported by aria2's tellStatus "files" array.
+struct Aria2FileSize {
+    QString path;
+    qint64 total = 0;
+    qint64 completed = 0;
+};
+
 struct Aria2cDownloadTask {
     int id = 0;
     QString url;             // magnet / torrent path
@@ -47,6 +54,7 @@ struct Aria2cDownloadTask {
     int seeds = 0;
     QStringList trackers;
     QVector<PeerInfo> peers;
+    QVector<Aria2FileSize> fileSizes;   // per-file length/completedLength/path
 };
 
 class Aria2cManager : public QObject {
@@ -92,6 +100,7 @@ public:
     QStringList getTrackers(int id) const;
     QStringList getTrackerList(int id) const;
     QString getGid(int id) const;
+    QVector<Aria2FileSize> getFileSizes(int id) const;
 
     // Tracker / seed / control
     void addTrackers(int torrentId, const QStringList& trackers);
@@ -155,6 +164,7 @@ public:
     QTimer* pollTimer;
     int pollTick = 0;
     bool m_pollInProgress = false;
+    bool m_rpcInProgress = false;
 };
 
 #endif

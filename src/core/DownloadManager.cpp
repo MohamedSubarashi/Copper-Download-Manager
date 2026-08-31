@@ -346,6 +346,7 @@ void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries,
                 int lastChildId = downloads[parentItem.id].childIds.last();
                 if (downloads.contains(lastChildId)) {
                     downloads[lastChildId].status = "Downloading";
+                    downloads[lastChildId].totalSize = entry.fileSizeBytes;
                     emit statusChanged(lastChildId, "Downloading");
                 }
             }
@@ -367,17 +368,31 @@ void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries,
                 downloads[id].uploadedSize = Aria2cManager::instance().getUploadedBytes(ariaId);
                 downloads[id].infoHash = Aria2cManager::instance().getInfoHash(ariaId);
                 downloads[id].trackers = Aria2cManager::instance().getTrackerList(ariaId);
-                for (int cid : downloads[id].childIds) {
-                    if (downloads.contains(cid)) {
-                        downloads[cid].downloadedSize = downloaded;
-                        downloads[cid].totalSize = total;
-                        downloads[cid].progress = downloads[id].progress;
+                {
+                    QVector<Aria2FileSize> fileSizes = Aria2cManager::instance().getFileSizes(ariaId);
+                    QMap<QString, Aria2FileSize> fileMap;
+                    for (const Aria2FileSize& fs : fileSizes) {
+                        fileMap.insert(QFileInfo(fs.path).fileName(), fs);
+                    }
+                    for (int cid : downloads[id].childIds) {
+                        if (!downloads.contains(cid)) continue;
                         downloads[cid].speed = spd;
                         downloads[cid].connectedPeers = downloads[id].connectedPeers;
                         downloads[cid].leechers = downloads[id].leechers;
                         downloads[cid].seeds = downloads[id].seeds;
                         downloads[cid].uploadSpeed = downloads[id].uploadSpeed;
                         downloads[cid].uploadedSize = downloads[id].uploadedSize;
+                        auto it = fileMap.constFind(downloads[cid].fileName);
+                        if (it != fileMap.constEnd()) {
+                            downloads[cid].totalSize = it->total;
+                            downloads[cid].downloadedSize = it->completed;
+                            downloads[cid].progress = it->total > 0 ? (double)it->completed / it->total * 100.0 : 0;
+                        } else {
+                            double childProg = qBound(0.0, downloads[id].progress, 100.0);
+                            if (downloads[cid].totalSize <= 0) downloads[cid].totalSize = total;
+                            downloads[cid].downloadedSize = childProg <= 0 ? 0 : (qint64)(downloads[cid].totalSize * childProg / 100.0);
+                            downloads[cid].progress = childProg;
+                        }
                     }
                 }
                 emit downloadProgress(id, downloaded, total);
@@ -606,17 +621,31 @@ void DownloadManager::resumeDownload(int id) {
                 downloads[id].uploadedSize = Aria2cManager::instance().getUploadedBytes(ariaId);
                 downloads[id].infoHash = Aria2cManager::instance().getInfoHash(ariaId);
                 downloads[id].trackers = Aria2cManager::instance().getTrackerList(ariaId);
-                for (int cid : downloads[id].childIds) {
-                    if (downloads.contains(cid)) {
-                        downloads[cid].downloadedSize = downloaded;
-                        downloads[cid].totalSize = total;
-                        downloads[cid].progress = downloads[id].progress;
+                {
+                    QVector<Aria2FileSize> fileSizes = Aria2cManager::instance().getFileSizes(ariaId);
+                    QMap<QString, Aria2FileSize> fileMap;
+                    for (const Aria2FileSize& fs : fileSizes) {
+                        fileMap.insert(QFileInfo(fs.path).fileName(), fs);
+                    }
+                    for (int cid : downloads[id].childIds) {
+                        if (!downloads.contains(cid)) continue;
                         downloads[cid].speed = spd;
                         downloads[cid].connectedPeers = downloads[id].connectedPeers;
                         downloads[cid].leechers = downloads[id].leechers;
                         downloads[cid].seeds = downloads[id].seeds;
                         downloads[cid].uploadSpeed = downloads[id].uploadSpeed;
                         downloads[cid].uploadedSize = downloads[id].uploadedSize;
+                        auto it = fileMap.constFind(downloads[cid].fileName);
+                        if (it != fileMap.constEnd()) {
+                            downloads[cid].totalSize = it->total;
+                            downloads[cid].downloadedSize = it->completed;
+                            downloads[cid].progress = it->total > 0 ? (double)it->completed / it->total * 100.0 : 0;
+                        } else {
+                            double childProg = qBound(0.0, downloads[id].progress, 100.0);
+                            if (downloads[cid].totalSize <= 0) downloads[cid].totalSize = total;
+                            downloads[cid].downloadedSize = childProg <= 0 ? 0 : (qint64)(downloads[cid].totalSize * childProg / 100.0);
+                            downloads[cid].progress = childProg;
+                        }
                     }
                 }
                 emit downloadProgress(id, downloaded, total);
