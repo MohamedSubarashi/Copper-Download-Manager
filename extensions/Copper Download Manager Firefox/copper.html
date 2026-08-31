@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Copper Download Manager</title>
+  <link rel="stylesheet" href="copper.css">
+</head>
+<body>
+  <main class="card">
+    <header class="brand">
+      <img src="icons/icon128.png" alt="" class="logo">
+      <h1>Copper Download Manager</h1>
+      <p class="tagline">Continue downloads in the desktop app.</p>
+    </header>
+
+    <section id="status-unknown" class="panel" hidden>
+      <h2>Checking installation&hellip;</h2>
+      <p>Contacting the Copper native host&hellip;</p>
+    </section>
+
+    <section id="status-ready" class="panel" hidden>
+      <h2>Copper is installed and ready</h2>
+      <p>Downloads launched from the browser will be handed off to the desktop app automatically.</p>
+      <div class="actions">
+        <button id="btn-open" class="primary">Open Copper</button>
+      </div>
+    </section>
+
+    <section id="status-not-installed" class="panel" hidden>
+      <h2><span class="warn">&#9888;</span> Copper isn&rsquo;t installed</h2>
+      <p>
+        To capture downloads from your browser, install the Copper Download Manager desktop app,
+        then restart your browser.
+      </p>
+      <div class="actions">
+        <a id="btn-download" class="primary" href="https://github.com/MohamedSubarashi/Copper-Download-Manager/releases" target="_blank" rel="noopener">Download Copper</a>
+      </div>
+      <p class="hint">After installing, open the app once so it can register the browser host, then reload this page.</p>
+      <div class="actions">
+        <button id="btn-recheck">Check again</button>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <button id="btn-toggle" title="Enable or disable browser capture"></button>
+      <span id="toggle-label"></span>
+    </footer>
+  </main>
+  <script src="copper.js"></script>
+</body>
+</html>

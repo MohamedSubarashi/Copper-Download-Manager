@@ -1,8 +1,10 @@
 const STORAGE_KEY = "copperExtensionEnabled";
 const HOST = "com.copper.dm";
+const STATUS_PAGE = "copper.html";
 
-// Returns true when the native host responded (and thus the desktop app's pipe
-// intake is reachable). The host also launches the app if it isn't running.
+// Sends a JSON message to the native host over native messaging. The host
+// forwards it to the desktop app over the named pipe and, if the app isn't
+// running, launches it first (IDM-style on-demand launch).
 function sendNativeMessage(message) {
   return new Promise((resolve) => {
     try {
@@ -20,6 +22,18 @@ function sendNativeMessage(message) {
   });
 }
 
+// Whether the desktop program is genuinely absent: either the native host
+// could not be reached at all (host not installed/registered), or the host is
+// present but reports the app executable was not found.
+function isNotInstalledReply(rep) {
+  if (!rep || rep.ok === undefined) return true;
+  if (rep.ok) return false;
+  const msg = (rep.error || "").toLowerCase();
+  return msg.includes("not found") || msg.includes("not installed");
+}
+
+// True when the program is installed and the app is reachable (the host also
+// launches it if it isn't running).
 async function pingCopper() {
   const rep = await sendNativeMessage({ action: "ping" });
   return !!(rep && rep.ok);
@@ -33,6 +47,16 @@ function notifyCopperUnreachable() {
     message:
       "Copper Download Manager could not be reached. Make sure the native host is installed (open Copper, then try again).",
   });
+}
+
+// Open the bundled status page. When the program is not installed, pass a
+// query flag so the page shows the 'not installed' instructions immediately.
+function openStatusTab(notInstalled) {
+  let url = chrome.runtime.getURL(STATUS_PAGE);
+  if (notInstalled) {
+    url += "?status=not-installed";
+  }
+  chrome.tabs.create({ url });
 }
 
 function getCurrentEnabledState() {
@@ -51,21 +75,27 @@ function setCurrentEnabledState(enabled) {
 async function sendToCopper(url, filename = "", path = "") {
   const enabled = await getCurrentEnabledState();
   if (!enabled) {
-    return { accepted: false, reason: "disabled" };
+    return { accepted: false, notInstalled: false };
   }
   const rep = await sendNativeMessage({ action: "download", url, filename, path });
   if (rep && rep.ok) {
-    return { accepted: true };
+    return { accepted: true, notInstalled: false };
   }
-  return { accepted: false, reason: "unreachable" };
+  return { accepted: false, notInstalled: isNotInstalledReply(rep) };
 }
 
+// Route a URL to Copper. On success, the download is handed to the app. If the
+// program is not installed, open the 'not installed' page instead of silently
+// failing.
 async function dispatch(url, filename = "", path = "") {
   const result = await sendToCopper(url, filename, path);
   if (result.accepted) {
     return true;
   }
-  if (result.reason === "unreachable") {
+  if (result.notInstalled) {
+    openStatusTab(true);
+  } else {
+    // Installed but transiently unreachable: alert the user.
     notifyCopperUnreachable();
   }
   return false;
@@ -104,6 +134,11 @@ chrome.contextMenus.onClicked.addListener((info) => {
   }
 });
 
+// No popup (IDM-style): the toolbar button opens the status page.
+chrome.action.onClicked.addListener(() => {
+  openStatusTab(false);
+});
+
 // First run against a freshly installed host: report our runtime.id so the app
 // can add it to the Chrome host manifest allowed_origins (load-dependent for
 // unpacked/dev builds, unlike Firefox's stable gecko.id). Best-effort.
@@ -121,7 +156,7 @@ async function registerWithCopper() {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request && request.action === "getStatus") {
     Promise.all([getCurrentEnabledState(), pingCopper()]).then(([enabled, reachable]) => {
-      sendResponse({ enabled, reachable, extensionId: chrome.runtime.id });
+      sendResponse({ enabled, reachable, installed: reachable, extensionId: chrome.runtime.id });
     });
     return true;
   }
@@ -141,7 +176,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request && request.action === "openCopper") {
-    sendNativeMessage({ action: "open" }).then(() => sendResponse({ success: true }));
+    // The host's "ping" ensures the desktop app is running (launching it on
+    // demand if needed), so it doubles as "open Copper".
+    pingCopper().then((running) => sendResponse({ success: running }));
     return true;
   }
 

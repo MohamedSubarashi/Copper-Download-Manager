@@ -152,3 +152,25 @@ integration coverage). See `RELEASE.md` for the QA checklist before publishing.
       the partial data.
 - [x] Integration suite expanded to **35** cases (added auto-resume after app
       restart) and all pass against the deployed 0.3.6 exe.
+
+## Completed milestone: extension redesign (IDM-style) — extension v4.0.2
+
+- [x] **Popup-less, IDM-style extension**: the toolbar popup was removed. Clicking
+      the toolbar opens a bundled status page (`copper.html`) instead.
+- [x] **Install detection + "not installed" tab**: the background now distinguishes
+      "program installed" from "program absent". When the native host cannot be
+      reached (not registered) or reports "Copper Download Manager not found",
+      a download attempt opens a new tab (`copper.html?status=not-installed`)
+      explaining that the app isn't installed, with a download link and a
+      re-check button — instead of just a background notification.
+- [x] **On-demand launch**: when Copper is installed but not running, the native
+      host auto-launches it in the background and forwards the download silently.
+- [x] Status page reads install/capture state via `chrome.runtime.sendMessage`
+      (`getStatus`), offers "Open Copper", an enable/disable toggle, and a
+      "Check again" action.
+- [x] Shared files (`background.js`, `copper.html`, `copper.css`, `copper.js`)
+      kept byte-identical across Chrome and Firefox; manifests differ only in the
+      intended MV3 shape. Version bumped to `4.0.2`.
+- [x] `validate_extensions.py` updated for the popup-less design (no
+      `default_popup`; requires `copper.html`/`copper.js`; checks `action.onClicked`
+      and `openStatusTab`); both extensions pass.

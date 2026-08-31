@@ -7,8 +7,9 @@ Checks (offline, no external deps):
   * The background entry matches the target browser shape:
         Chrome  -> "service_worker"
         Firefox -> "scripts"
-  * A toolbar "action" with a default_popup is declared (the popup UI must be
-        reachable via the toolbar button).
+  * Popup-less IDM-style toolbar: no action.default_popup; the bundled
+        copper.html status page exists and the background routes toolbar clicks
+        to it via chrome.action.onClicked.
   * Firefox declares browser_specific_settings.gecko with an extension id and a
         data_collection_permissions block required:["none"] (the extension does
         not transmit data externally, so "none" is the honest declaration).
@@ -68,13 +69,16 @@ def validate_dir(label, path, is_firefox):
     else:
         ok &= check("service_worker" in bg, "Chrome background uses 'service_worker'")
 
-    # Toolbar popup must be reachable.
+    # IDM-style: no popup. The toolbar button opens the bundled status page and
+    # downloads are handed to the native host, so we require the status page and
+    # confirm the background routes toolbar clicks to it.
     action = manifest.get("action", {})
     popup = action.get("default_popup", "")
-    ok &= check(bool(popup), "action.default_popup is declared")
-    if popup:
-        ok &= check(os.path.isfile(os.path.join(path, popup)),
-                    f"popup file exists: {popup}")
+    ok &= check(not popup, "popup-less extension (no action.default_popup)")
+    ok &= check(os.path.isfile(os.path.join(path, "copper.html")),
+                "status page exists: copper.html")
+    ok &= check(os.path.isfile(os.path.join(path, "copper.js")),
+                "status page script exists: copper.js")
 
     # Firefox-specific release requirements.
     if is_firefox:
@@ -127,6 +131,10 @@ def validate_dir(label, path, is_firefox):
                     "background no longer depends on the copper:// protocol")
         ok &= check("127.0.0.1:24680" not in bg_src,
                     "background no longer depends on the localhost ping port")
+        ok &= check("action.onClicked" in bg_src,
+                    "toolbar click opens status page (action.onClicked)")
+        ok &= check("openStatusTab" in bg_src,
+                    "background opens the bundled status/install page")
 
     return ok
 
