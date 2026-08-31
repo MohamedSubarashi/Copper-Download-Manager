@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.3.7
+Current version: 0.3.9
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 
@@ -174,6 +174,32 @@ integration coverage). See `RELEASE.md` for the QA checklist before publishing.
 - [x] `validate_extensions.py` updated for the popup-less design (no
       `default_popup`; requires `copper.html`/`copper.js`; checks `action.onClicked`
       and `openStatusTab`); both extensions pass.
+
+## Completed milestone: v0.3.9 (torrent crash fix + safe handler registration)
+
+- [x] **Torrent-add access-violation crash fixed**: the app hard-crashed
+      (execute-at-0x0 inside Qt's event loop) during the first aria2 poll ticks
+      after a torrent/magnet was added. Root cause was reentrant `poll()`: the
+      1s `pollTimer` fired inside a nested `QEventLoop::exec()` during a blocking
+      RPC call. Added a reentrancy guard (`m_pollInProgress` in
+      `Aria2cManager::poll()`). Verified against the real magnet via `/api/torrent`
+      (no crash) and a 6-add stress run (no crash).
+- [x] **Crash backtrace logger**: `main.cpp` now installs a top-level exception
+      filter that writes a `[CRASH]` module+offset backtrace to `copper.log`
+      (kernel32-only, no extra link libs) so any future fault is diagnosable
+      without a debugger.
+- [x] **LocalServer body-buffering fix**: `/api/download` and `/api/torrent`
+      rejected valid POSTs with `400 "Invalid JSON"` when the body arrived in a
+      later TCP packet. The connection now buffers until the full Content-Length
+      body has been received before dispatching.
+- [x] **Safe handler registration**: Copper no longer registers itself as a
+      handler for `http`, `https`, or `ftp` (those belong to the browser / a
+      dedicated FTP client). It now claims only its own schemes (`magnet`,
+      `copper://`) plus the `.torrent` file association. Unregister and the
+      auto-update-paths refresh clean up any stale HTTP/HTTPS/FTP ProgIds from
+      older versions. `getRegisteredProtocol()` and the Settings dialog message
+      updated accordingly.
+- [x] Deployed/validated against the 0.3.9 exe; 35/35 integration tests pass.
 
 ## Completed milestone: v0.3.7 (multi-delete fix)
 

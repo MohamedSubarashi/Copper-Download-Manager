@@ -69,7 +69,7 @@ jobs:
           assert subsystem == 2, "expected GUI subsystem, got console"
           PY
           echo "Deployed package:"
-          ls -la installer/release/0.3.7/ 2>/dev/null | head -40 || true
+          ls -la installer/release/0.3.9/ 2>/dev/null | head -40 || true
 
       - name: Package portable zip (Release only)
         if: matrix.config == 'Release'

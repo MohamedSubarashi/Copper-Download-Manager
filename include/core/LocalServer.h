@@ -4,6 +4,8 @@
 #include <QObject>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QHash>
+#include <QByteArray>
 
 class LocalServer : public QObject {
     Q_OBJECT
@@ -25,6 +27,12 @@ private:
     bool isAllowedOrigin(const QString& origin) const;
     void sendJsonResponse(QTcpSocket* socket, int statusCode, const QJsonObject& json, const QString& origin = QString());
     void sendHtmlResponse(QTcpSocket* socket, int statusCode, const QString& html);
+
+    struct ConnState {
+        QByteArray buffer;
+        bool processed = false;
+    };
+    QHash<QTcpSocket*, ConnState> m_conns;
 
     QTcpServer* server;
     int serverPort;

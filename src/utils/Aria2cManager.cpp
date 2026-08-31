@@ -745,6 +745,14 @@ int Aria2cManager::addTorrentWithSelection(const QString& magnetOrFile, const QS
 
 void Aria2cManager::poll() {
     if (tasks.isEmpty()) return;
+    // Reentrancy guard: every RPC call below runs a nested QEventLoop::exec(),
+    // so the 1s pollTimer can fire again and re-enter poll() while an earlier
+    // iteration is mid-relay. That reentrancy lets downloadProgress/finished and
+    // the resulting GUI updates (QTableWidget/QMetaObject dispatch) interleave
+    // with the modal torrent-add dialog and caused an access violation (call at
+    // address 0). Skip the nested tick entirely.
+    if (m_pollInProgress) return;
+    m_pollInProgress = true;
     if (!m_daemonRunning) {
         // attempt to restart once
         if (!m_daemonStarting) {
@@ -753,6 +761,7 @@ void Aria2cManager::poll() {
             m_daemonStarting = false;
             if (ok) m_daemonRunning = true;
         }
+        m_pollInProgress = false;
         return;
     }
 
@@ -784,6 +793,7 @@ void Aria2cManager::poll() {
             emit torrentStateUpdated(id);
         }
     }
+    m_pollInProgress = false;
 }
 
 void Aria2cManager::parseTorrentStatus(int id, const QJsonObject& status) {

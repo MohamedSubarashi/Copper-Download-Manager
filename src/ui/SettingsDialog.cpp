@@ -503,13 +503,12 @@ void SettingsDialog::onRegisterDefaultHandler() {
     handlerStatusLabel->setText("Registered as default downloader");
     QMessageBox::information(this, "Register as Default Downloader",
         "Copper Download Manager has been registered as a capable handler for:\n"
-        "HTTP, HTTPS, FTP, Magnet, and copper:// protocols.\n\n"
-        "Windows Default Apps settings will now open.\n\n"
-        "To complete setup:\n"
-        "1. In Default Apps, find 'Web browser' or 'HTTP'\n"
-        "2. Click it and select 'Copper Download Manager'\n"
-        "3. Repeat for HTTPS if desired\n\n"
-        "Copper Download Manager will now appear in the list of available apps.");
+        "Magnet and copper:// protocols, plus .torrent files.\n\n"
+        "It is intentionally NOT registered for HTTP, HTTPS, or FTP:\n"
+        "- http/https links stay with your browser\n"
+        "- ftp stays with your dedicated FTP client\n\n"
+        "Windows Default Apps settings will now open so you can choose Copper\n"
+        "for magnet links and .torrent files if you wish.");
 }
 
 void SettingsDialog::onUnregisterDefaultHandler() {

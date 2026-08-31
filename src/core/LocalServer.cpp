@@ -55,11 +55,39 @@ int LocalServer::getPort() const {
 }
 
 void LocalServer::handleConnection(QTcpSocket* socket) {
+    // The client can send headers and body in separate TCP packets, so we must
+    // buffer the request until the complete body (per Content-Length) has
+    // arrived before handing it to the handler. Without this, a POST whose body
+    // arrives in a later packet is seen with an empty body and rejected as
+    // "Invalid JSON".
     connect(socket, &QTcpSocket::readyRead, this, [this, socket]() {
-        QByteArray data = socket->readAll();
-        QString request = QString::fromUtf8(data);
+        ConnState& state = m_conns[socket];
+        state.buffer += socket->readAll();
 
-        QStringList lines = request.split("\r\n");
+        if (state.processed) return;
+        if (!state.buffer.contains("\r\n\r\n")) return;
+
+        int headerEnd = state.buffer.indexOf("\r\n\r\n");
+        QByteArray header = state.buffer.left(headerEnd);
+
+        qint64 contentLength = -1;
+        QString headerText = QString::fromLatin1(header);
+        for (const QString& line : headerText.split("\r\n")) {
+            if (line.startsWith("Content-Length:", Qt::CaseInsensitive)) {
+                bool ok = false;
+                contentLength = line.mid(15).trimmed().toLongLong(&ok);
+                if (!ok) contentLength = -1;
+                break;
+            }
+        }
+
+        qint64 bodyAvailable = state.buffer.size() - headerEnd - 4;
+        if (bodyAvailable < contentLength) return;
+
+        state.processed = true;
+
+        QString request = headerText;
+        QStringList lines = headerText.split("\r\n");
         if (lines.isEmpty()) {
             socket->disconnectFromHost();
             return;
@@ -83,15 +111,20 @@ void LocalServer::handleConnection(QTcpSocket* socket) {
         }
 
         QByteArray body;
-        int bodyIndex = data.indexOf("\r\n\r\n");
-        if (bodyIndex >= 0) {
-            body = data.mid(bodyIndex + 4);
+        if (headerEnd >= 0) {
+            body = state.buffer.mid(headerEnd + 4);
+            if (contentLength >= 0) {
+                body = body.left(contentLength);
+            }
         }
 
         handleRequest(socket, method, path, body, origin);
     });
 
-    connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
+    connect(socket, &QTcpSocket::disconnected, this, [this, socket]() {
+        m_conns.remove(socket);
+        socket->deleteLater();
+    });
 }
 
 bool LocalServer::isAllowedOrigin(const QString& origin) const {

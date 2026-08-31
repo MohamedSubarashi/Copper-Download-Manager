@@ -154,6 +154,7 @@ public:
     QNetworkReply* activeReply;
     QTimer* pollTimer;
     int pollTick = 0;
+    bool m_pollInProgress = false;
 };
 
 #endif

@@ -1,4 +1,4 @@
-COPPER DOWNLOAD MANAGER v0.3.7
+COPPER DOWNLOAD MANAGER v0.3.9
 Third-Party Software Notices
 
 This product includes software developed by third parties.

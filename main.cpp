@@ -21,6 +21,86 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPair>
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+
+// --- Crash backtrace logging ----------------------------------------------
+// Hooks the top-level exception filter so any unhandled access violation logs a
+// module+offset backtrace to copper.log before Windows terminates the process.
+// This lets us capture the exact (module, RVA) of the crashing call chain for
+// hard-to-reproduce faults (e.g. the torrent-add access violation) without a
+// debugger. Uses only kernel32/ntdll so no extra link libraries are needed.
+#ifdef _WIN32
+#include <windows.h>
+extern "C" typedef USHORT (WINAPI *RtlCaptureStackBackTraceFn)(ULONG, ULONG, PVOID*, PULONG);
+
+namespace {
+
+void crashLog(const char* msg) {
+    const char* path = getenv("APPDATA");
+    if (!path) return;
+    char full[1024];
+    std::snprintf(full, sizeof(full), "%s\\Copper\\Copper Download Manager\\copper.log", path);
+    FILE* f = fopen(full, "a");
+    if (!f) return;
+    fprintf(f, "[CRASH] %s\n", msg);
+    fclose(f);
+}
+
+void crashResolveFrame(void* addr) {
+    // Resolve module base + RVA using only kernel32 APIs (no dbghelp link lib).
+    char baseName[128] = "<unknown>";
+    void* base = addr;
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(addr, &mbi, sizeof(mbi)) && mbi.AllocationBase) {
+        base = mbi.AllocationBase;
+        char fullPath[512];
+        DWORD got = GetModuleFileNameA((HMODULE)mbi.AllocationBase, fullPath, sizeof(fullPath));
+        if (got > 0 && got < sizeof(fullPath)) {
+            const char* slash = strrchr(fullPath, '\\');
+            const char* nm = slash ? slash + 1 : fullPath;
+            std::snprintf(baseName, sizeof(baseName), "%s", nm);
+        }
+    }
+    char out[512];
+    std::snprintf(out, sizeof(out), "    %s+0x%llx", baseName,
+                  (unsigned long long)((unsigned char*)addr - (unsigned char*)base));
+    crashLog(out);
+}
+
+LONG WINAPI TopLevelExceptionFilter(EXCEPTION_POINTERS* ep) {
+    EXCEPTION_RECORD* er = ep->ExceptionRecord;
+    char hdr[256];
+    std::snprintf(hdr, sizeof(hdr), "Unhandled exception: code=0x%08lx at 0x%p",
+                  (unsigned long)er->ExceptionCode, (void*)er->ExceptionAddress);
+    crashLog(hdr);
+
+    if (er->ExceptionCode == 0xC0000005 && er->NumberParameters >= 2) {
+        char av[256];
+        std::snprintf(av, sizeof(av),
+                      "Access violation: type=0x%llx address=0x%llx (call target 0x%llx)",
+                      (unsigned long long)er->ExceptionInformation[0],
+                      (unsigned long long)er->ExceptionInformation[1],
+                      (unsigned long long)er->ExceptionAddress);
+        crashLog(av);
+    }
+
+    // Capture the backtrace of the faulting thread from within the filter.
+    static RtlCaptureStackBackTraceFn RtlCaptureStackBackTrace =
+        (RtlCaptureStackBackTraceFn)GetProcAddress(GetModuleHandleA("ntdll.dll"),
+                                                   "RtlCaptureStackBackTrace");
+    crashLog("Backtrace (module+offset):");
+    if (RtlCaptureStackBackTrace) {
+        void* frames[48] = {};
+        USHORT n = RtlCaptureStackBackTrace(0, 48, frames, nullptr);
+        for (USHORT i = 0; i < n; i++) crashResolveFrame(frames[i]);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+} // namespace
+#endif // _WIN32
 
 static int localApiPort() {
     return DatabaseManager::instance().getSetting("localServerPort", "24680").toInt();
@@ -92,9 +172,13 @@ static bool sendShowToRunningInstance() {
 }
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(TopLevelExceptionFilter);
+#endif
+
     QApplication app(argc, argv);
     app.setApplicationName("Copper Download Manager");
-    app.setApplicationVersion("0.3.7");
+    app.setApplicationVersion("0.3.9");
     app.setOrganizationName("Copper");
 
     Logger::instance().info("========================================");

@@ -52,12 +52,26 @@ void DefaultHandler::registerAsDefault() {
         icon.setValue(".", "\"" + appPath + "\",0");
     };
 
-    registerProgId("CopperHTTP", "Copper Download Manager HTTP");
-    registerProgId("CopperHTTPS", "Copper Download Manager HTTPS");
-    registerProgId("CopperFTP", "Copper Download Manager FTP");
+    // Copper only claims the schemes it genuinely owns. http/https are left to
+    // the browser (they must never be hijacked globally), and ftp belongs to a
+    // dedicated FTP client. Copper registers only its own protocols (magnet,
+    // copper://) plus the .torrent file association.
     registerProgId("CopperMagnet", "Copper Download Manager Magnet");
     registerProgId("CopperCopper", "Copper Download Manager");
     registerProgId("CopperTorrent", "Copper Download Manager Torrent File");
+
+    // Self-heal: older Copper versions (<=0.3.8) wrongly registered Copper as a
+    // global handler for http/https/ftp. Registering again removes those stale
+    // ProgIds so the browser and dedicated FTP clients are restored.
+    auto removeStaleProgId = [](const QString& progId) {
+        QSettings cmd("HKEY_CURRENT_USER\\Software\\Classes\\" + progId + "\\shell\\open\\command", QSettings::NativeFormat);
+        cmd.remove("");
+        QSettings cls("HKEY_CURRENT_USER\\Software\\Classes\\" + progId, QSettings::NativeFormat);
+        cls.remove("");
+    };
+    removeStaleProgId("CopperHTTP");
+    removeStaleProgId("CopperHTTPS");
+    removeStaleProgId("CopperFTP");
 
     // Register right-click "Open with Copper" for .torrent files
     QSettings torrentOpen("HKEY_CURRENT_USER\\Software\\Classes\\CopperTorrent\\shell\\open", QSettings::NativeFormat);
@@ -78,11 +92,11 @@ void DefaultHandler::registerAsDefault() {
     caps.setValue("ApplicationDescription", "High-speed download manager with chunked downloads, torrent support, and yt-dlp integration");
 
     QSettings urlAssoc("HKEY_CURRENT_USER\\" + capBase + "\\UrlAssociations", QSettings::NativeFormat);
-    urlAssoc.setValue("http", "CopperHTTP");
-    urlAssoc.setValue("https", "CopperHTTPS");
-    urlAssoc.setValue("ftp", "CopperFTP");
     urlAssoc.setValue("magnet", "CopperMagnet");
     urlAssoc.setValue("copper", "CopperCopper");
+    urlAssoc.remove("http");
+    urlAssoc.remove("https");
+    urlAssoc.remove("ftp");
 
     QSettings fileAssoc("HKEY_CURRENT_USER\\" + capBase + "\\FileAssociations", QSettings::NativeFormat);
     fileAssoc.setValue(".torrent", "CopperTorrent");
@@ -114,7 +128,7 @@ void DefaultHandler::registerAsDefault() {
         file.write("Exec=" + appPath.toUtf8() + " %u\n");
         file.write("Icon=copper-download\n");
         file.write("Categories=Network;\n");
-        file.write("MimeType=x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/magnet;x-scheme-handler/copper;\n");
+        file.write("MimeType=x-scheme-handler/magnet;x-scheme-handler/copper;\n");
         file.write("Terminal=false\n");
         file.close();
     }
@@ -142,12 +156,14 @@ void DefaultHandler::unregisterAsDefault() {
         QSettings cls("HKEY_CURRENT_USER\\Software\\Classes\\" + progId, QSettings::NativeFormat);
         cls.remove("");
     };
-    removeProgId("CopperHTTP");
-    removeProgId("CopperHTTPS");
-    removeProgId("CopperFTP");
     removeProgId("CopperMagnet");
     removeProgId("CopperCopper");
     removeProgId("CopperTorrent");
+    // Remove any stale HTTP/HTTPS/FTP ProgIds left over from older versions that
+    // incorrectly registered Copper as a global web link / FTP handler.
+    removeProgId("CopperHTTP");
+    removeProgId("CopperHTTPS");
+    removeProgId("CopperFTP");
 
     // Remove .torrent file association and context menu
     QSettings torrentExt("HKEY_CURRENT_USER\\Software\\Classes\\.torrent", QSettings::NativeFormat);
@@ -188,7 +204,7 @@ bool DefaultHandler::isRegistered() {
 }
 
 QString DefaultHandler::getRegisteredProtocol() const {
-    return "copper, http, https, ftp, magnet";
+    return "copper, magnet";
 }
 
 void DefaultHandler::autoUpdateRegistryPath() {
@@ -196,8 +212,8 @@ void DefaultHandler::autoUpdateRegistryPath() {
     // Always keep the copper:// protocol registration pointing at the current
     // executable, even if the app was never formally "registered as default" —
     // this heals partial registrations (e.g. after the exe was moved) so the
-    // copper:// flow keeps working. The "heavier" HTTP/HTTPS/FTP/magnet/ProgId
-    // registrations are only refreshed when a full registration exists.
+    // copper:// flow keeps working. The "heavier" magnet/ProgId registrations
+    // are only refreshed when a full registration exists.
     QString currentPath = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
     QString quotedCmd = "\"" + currentPath + "\" \"%1\"";
 
@@ -221,9 +237,6 @@ void DefaultHandler::autoUpdateRegistryPath() {
 
     if (!isRegistered()) return;
 
-    updateCmd("CopperHTTP");
-    updateCmd("CopperHTTPS");
-    updateCmd("CopperFTP");
     updateCmd("CopperMagnet");
     updateCmd("CopperCopper");
     updateCmd("CopperTorrent");
