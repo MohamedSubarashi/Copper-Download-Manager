@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.4.0
+Current version: 0.4.5
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 
@@ -219,3 +219,19 @@ integration coverage). See `RELEASE.md` for the QA checklist before publishing.
       past the end of the rebuilt table and be skipped — so selecting many
       "complete" downloads and deleting them left the last one(s) behind.
 - [x] Deployed/validated against the 0.3.7 exe; 35/35 integration tests pass.
+
+## Completed milestone: v0.4.5 (per-file torrent progress + aria2 stability)
+
+- [x] **Per-file torrent progress**: aria2's `tellStatus` `files` array is now
+      parsed into per-file length/completedLength (`Aria2FileSize`, exposed via
+      `getFileSizes()`). Each torrent child download reports its own size and
+      progress (matched by basename), instead of inheriting the parent's
+      aggregate percentage — so a multi-file torrent shows accurate per-file
+      progress.
+- [x] **Aria2cManager teardown safety**: the destructor no longer calls
+      `shutdownDaemon()` (which ran a nested event loop + network request after
+      Qt teardown and crashed at static-exit); it now only hard-kills the child
+      daemon and stops the poll timer.
+- [x] **RPC reentrancy guard**: added `m_rpcInProgress` so a poll firing inside
+      a nested RPC event loop cannot interleave/delete replies and crash.
+- [x] Version bumped to 0.4.5 and deployed to `installer/release/0.4.5/`.
