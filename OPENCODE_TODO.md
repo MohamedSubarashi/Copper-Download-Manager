@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.3.6
+Current version: 0.3.7
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 
@@ -174,3 +174,13 @@ integration coverage). See `RELEASE.md` for the QA checklist before publishing.
 - [x] `validate_extensions.py` updated for the popup-less design (no
       `default_popup`; requires `copper.html`/`copper.js`; checks `action.onClicked`
       and `openStatusTab`); both extensions pass.
+
+## Completed milestone: v0.3.7 (multi-delete fix)
+
+- [x] **Delete-selection fix**: the Delete button (and Delete key / context menu)
+      now gathers every selected download id before removing any, then removes
+      them all by id. Previously it re-read the table inside the delete loop;
+      because each removal rebuilt the table, the later selected rows could point
+      past the end of the rebuilt table and be skipped — so selecting many
+      "complete" downloads and deleting them left the last one(s) behind.
+- [x] Deployed/validated against the 0.3.7 exe; 35/35 integration tests pass.

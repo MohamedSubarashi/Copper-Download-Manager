@@ -461,21 +461,29 @@ void MainWindow::onDeleteSelected() {
 
     if (reply != QMessageBox::Yes) return;
 
+    // Collect the ids up front. Each removeDownload() emits downloadRemoved,
+    // which rebuilds the table, so re-reading row indices (or even the table
+    // items) inside the loop could skip remaning selections. Gather every id
+    // first, expand folder parents so their children are removed too, then
+    // remove them all by id.
+    QSet<int> idsToRemove;
     for (int row : rows) {
         QTableWidgetItem* idItem = table->item(row, 0);
-        if (idItem) {
-            int id = idItem->data(Qt::UserRole).toInt();
-            DownloadItem dlItem = DownloadManager::instance().getDownload(id);
-            if (dlItem.isFolder && !dlItem.childIds.isEmpty()) {
-                expandedGroups.remove(id);
-                for (int cid : dlItem.childIds) {
-                    DownloadManager::instance().removeDownload(cid);
-                }
-            }
-            DownloadManager::instance().removeDownload(id);
+        if (!idItem) continue;
+        int id = idItem->data(Qt::UserRole).toInt();
+        idsToRemove.insert(id);
+        DownloadItem dlItem = DownloadManager::instance().getDownload(id);
+        if (dlItem.isFolder) {
+            expandedGroups.remove(id);
+            for (int cid : dlItem.childIds) idsToRemove.insert(cid);
         }
     }
+
+    for (int id : idsToRemove) {
+        DownloadManager::instance().removeDownload(id);
+    }
 }
+
 
 void MainWindow::onOpenFile() {
     QTableWidgetItem* idItem = table->item(table->currentRow(), 0);

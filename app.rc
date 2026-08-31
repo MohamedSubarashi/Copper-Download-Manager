@@ -23,12 +23,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Copper"
             VALUE "FileDescription", "Copper Download Manager"
-            VALUE "FileVersion", "0.3.6"
+            VALUE "FileVersion", "0.3.7"
             VALUE "InternalName", "CopperDownloadManager"
             VALUE "LegalCopyright", "Copyright (C) 2026 Mohamed Subarashi"
             VALUE "OriginalFilename", "CopperDownloadManager.exe"
             VALUE "ProductName", "Copper Download Manager"
-            VALUE "ProductVersion", "0.3.6"
+            VALUE "ProductVersion", "0.3.7"
         END
     END
     BLOCK "VarFileInfo"
