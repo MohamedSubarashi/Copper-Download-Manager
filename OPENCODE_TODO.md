@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.3.5
+Current version: 0.3.6
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 
@@ -132,3 +132,23 @@ injection redesign for v0.3.5. The next development pass should scope new work
 host, macOS/Linux native-host manifest + packaging verification, Chrome Web
 Store signing key so the packaged extension ID is stable, or expanded
 integration coverage). See `RELEASE.md` for the QA checklist before publishing.
+
+## Completed milestone: v0.3.6 (torrent RPC fix, User-Agent, HTTP auto-resume)
+
+- [x] **Torrent RPC `Unauthorized` fix**: a stale aria2c daemon surviving on port
+      6800 with an old RPC token rejected every jsonrpc call. Now the token is
+      persisted in settings (`aria2Token`) and reused across launches; an
+      Unauthorized response forces a port-kill + daemon relaunch (max 2).
+- [x] **Configurable User-Agent**: new `userAgent` setting (Settings -> Downloads),
+      default Mozilla-compatible UA. Applied to chunked HTTP/FTP downloads,
+      `.torrent` metadata fetch, and yt-dlp (`--user-agent`).
+- [x] **HTTP auto-resume across sessions**: interrupted chunked downloads are
+      rehydrated from the DB on launch and resumed from their partial `.chunk`
+      files via Range headers. Partial chunks + a `<id>.resume.json` sidecar are
+      kept on shutdown/cancel, and written during active progress so even a hard
+      crash can be resumed. `DownloadManager::restoreFromDatabase()` re-adds
+      interrupted transfers (torrent/yt-dlp via `resumeDownload`, HTTP via
+      `createChunkedDownloaderFor(..., resume)`); user cancel/removal discards
+      the partial data.
+- [x] Integration suite expanded to **35** cases (added auto-resume after app
+      restart) and all pass against the deployed 0.3.6 exe.

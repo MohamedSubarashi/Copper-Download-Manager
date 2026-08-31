@@ -25,11 +25,16 @@ DownloadManager::DownloadManager() : nextId(1), maxConcurrent(5), speedLimit(0),
     if (maxId >= nextId) {
         nextId = maxId + 1;
     }
-    DatabaseManager::instance().resetStaleDownloads();
 
     connect(&YtDlpManager::instance(), &YtDlpManager::downloadProgress, this, &DownloadManager::onYtDlpProgress);
     connect(&YtDlpManager::instance(), &YtDlpManager::downloadFinished, this, &DownloadManager::onYtDlpFinished);
     connect(&YtDlpManager::instance(), &YtDlpManager::downloadFailed, this, &DownloadManager::onYtDlpFailed);
+
+    // Restore interrupted downloads once the event loop is running (after the
+    // window and its signal connections exist) so resumed transfers show up in
+    // the UI. Previously resetStaleDownloads() blindly marked every in-flight
+    // item as Failed, which prevented any resume after a restart.
+    QTimer::singleShot(0, this, &DownloadManager::restoreFromDatabase);
 }
 
 DownloadManager::~DownloadManager() {
@@ -120,26 +125,7 @@ int DownloadManager::addDownload(const QString& url, const QString& path, const 
 
     if (activeCount < maxConcurrent) {
         if (type == "HTTP" || type == "HTTPS" || type == "FTP") {
-            ChunkedDownloader* downloader = new ChunkedDownloader(this);
-
-            connect(downloader, &ChunkedDownloader::downloadProgress, this, &DownloadManager::onChunkProgress);
-            connect(downloader, &ChunkedDownloader::downloadFinished, this, &DownloadManager::onChunkFinished);
-            connect(downloader, &ChunkedDownloader::downloadFailed, this, &DownloadManager::onChunkFailed);
-            connect(downloader, &ChunkedDownloader::speedUpdated, this, [this, id](qint64 spd) {
-                onChunkSpeed(id, spd);
-            });
-            connect(downloader, &ChunkedDownloader::filePathChanged, this, [this](int id, const QString& newPath) {
-                if (downloads.contains(id)) {
-                    downloads[id].filePath = newPath;
-                    downloads[id].fileName = QFileInfo(newPath).fileName();
-                    Logger::instance().info("Download path updated: id=" + QString::number(id) + " -> " + newPath);
-                }
-            });
-
-            activeChunkedDownloaders[id] = downloader;
-            downloads[id].status = "Downloading";
-            downloader->startDownload(url, item.filePath, chunks, id);
-            emit statusChanged(id, "Downloading");
+            createChunkedDownloaderFor(id, false);
         } else if (type == "YtDlp") {
             downloads[id].status = "Downloading";
             YtDlpManager::instance().startDownload(url, item.filePath, id);
@@ -195,6 +181,120 @@ int DownloadManager::addDownload(const QString& url, const QString& path, const 
     }
 
     return id;
+}
+
+void DownloadManager::createChunkedDownloaderFor(int id, bool resumeFromSaved) {
+    if (!downloads.contains(id)) return;
+    DownloadItem& item = downloads[id];
+
+    ChunkedDownloader* downloader = new ChunkedDownloader(this);
+
+    connect(downloader, &ChunkedDownloader::downloadProgress, this, &DownloadManager::onChunkProgress);
+    connect(downloader, &ChunkedDownloader::downloadFinished, this, &DownloadManager::onChunkFinished);
+    connect(downloader, &ChunkedDownloader::downloadFailed, this, &DownloadManager::onChunkFailed);
+    connect(downloader, &ChunkedDownloader::speedUpdated, this, [this, id](qint64 spd) {
+        onChunkSpeed(id, spd);
+    });
+    connect(downloader, &ChunkedDownloader::filePathChanged, this, [this](int id, const QString& newPath) {
+        if (downloads.contains(id)) {
+            downloads[id].filePath = newPath;
+            downloads[id].fileName = QFileInfo(newPath).fileName();
+            Logger::instance().info("Download path updated: id=" + QString::number(id) + " -> " + newPath);
+        }
+    });
+
+    activeChunkedDownloaders[id] = downloader;
+    downloads[id].status = "Downloading";
+
+    bool resumed = false;
+    if (resumeFromSaved) {
+        QJsonObject state = ChunkedDownloader::readPersistedState(id);
+        if (!state.isEmpty()) {
+            int savedChunks = state.value("chunks").toInt(item.chunks);
+            qint64 savedTotal = state.value("totalBytes").toString().toLongLong();
+            bool savedRange = state.value("supportsRange").toBool();
+            downloader->resumeFromState(item.url, item.filePath, savedChunks, savedTotal, savedRange, id);
+            resumed = true;
+        }
+    }
+    if (!resumed) {
+        downloader->startDownload(item.url, item.filePath, item.chunks, id);
+    }
+    emit statusChanged(id, "Downloading");
+}
+
+void DownloadManager::restoreFromDatabase() {
+    QVector<DownloadItem> all = DatabaseManager::instance().getAllDownloads();
+    if (all.isEmpty()) return;
+
+    Logger::instance().info("Restoring " + QString::number(all.size()) + " download(s) from database");
+
+    QHash<int, QVector<int>> children;
+    for (const DownloadItem& item : all) {
+        if (item.parentId >= 0) children[item.parentId].append(item.id);
+    }
+    downloads.clear();
+    for (const DownloadItem& item : all) {
+        DownloadItem copy = item;
+        copy.childIds = children.value(item.id);
+        downloads[item.id] = copy;
+    }
+
+    const QStringList interrupted = {"Downloading", "Queued", "Paused", "Resuming"};
+    QVector<int> startOrder;
+
+    for (DownloadItem& item : downloads) {
+        if (item.parentId != -1) continue;  // children mirror their folder parent
+        if (!interrupted.contains(item.status)) continue;
+
+        bool isHttp = item.type == "HTTP" || item.type == "HTTPS" || item.type == "FTP";
+        if (isHttp) {
+            if (item.totalSize > 0 && QFile::exists(item.filePath) && QFileInfo(item.filePath).size() >= item.totalSize) {
+                item.status = "Completed";
+                for (int cid : item.childIds) {
+                    if (downloads.contains(cid)) downloads[cid].status = "Completed";
+                }
+                DatabaseManager::instance().updateDownload(item);
+                continue;
+            }
+            if (!ChunkedDownloader::hasPersistedData(item.id)) {
+                item.status = "Failed";
+                item.error = "Download interrupted and cannot be resumed (no partial data available).";
+                DatabaseManager::instance().updateDownload(item);
+                emit statusChanged(item.id, "Failed");
+                continue;
+            }
+        }
+
+        // Interrupted and resumable: queue it; start below up to maxConcurrent.
+        item.status = "Queued";
+        DatabaseManager::instance().updateDownload(item);
+        startOrder.append(item.id);
+    }
+
+    int started = 0;
+    for (int id : startOrder) {
+        if (started >= maxConcurrent) break;
+        if (!downloads.contains(id)) continue;
+        DownloadItem& item = downloads[id];
+        bool isHttp = item.type == "HTTP" || item.type == "HTTPS" || item.type == "FTP";
+        if (isHttp) {
+            createChunkedDownloaderFor(id, true);
+        } else {
+            // Torrent / YtDlp: go through resumeDownload, which re-adds the
+            // torrent to aria2 (resuming via its .aria2 control file) or
+            // restarts yt-dlp. resumeDownload accepts Queued status.
+            resumeDownload(id);
+        }
+        started++;
+    }
+
+    // Force one table refresh so persisted history + resumed items are shown.
+    if (!all.isEmpty()) {
+        emit downloadAdded(all.first().id, all.first().filePath, all.first().type, all.first().isFolder);
+    }
+
+    Logger::instance().info("Download restore finished, started " + QString::number(started) + " transfer(s)");
 }
 
 void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries, const QString& path, const QString& type, bool useTrackNumbers, const QString& audioFormat, const QString& torrentSourceUrl, const QString& folderName) {
@@ -406,25 +506,7 @@ void DownloadManager::addChildDownload(int parentId, const QString& url, const Q
 
     if (activeCount < maxConcurrent) {
         if (type == "HTTP" || type == "HTTPS" || type == "FTP") {
-            ChunkedDownloader* downloader = new ChunkedDownloader(this);
-            connect(downloader, &ChunkedDownloader::downloadProgress, this, &DownloadManager::onChunkProgress);
-            connect(downloader, &ChunkedDownloader::downloadFinished, this, &DownloadManager::onChunkFinished);
-            connect(downloader, &ChunkedDownloader::downloadFailed, this, &DownloadManager::onChunkFailed);
-            connect(downloader, &ChunkedDownloader::speedUpdated, this, [this, id = child.id](qint64 spd) {
-                onChunkSpeed(id, spd);
-            });
-            connect(downloader, &ChunkedDownloader::filePathChanged, this, [this](int id, const QString& newPath) {
-                if (downloads.contains(id)) {
-                    downloads[id].filePath = newPath;
-                    downloads[id].fileName = QFileInfo(newPath).fileName();
-                    Logger::instance().info("Download path updated: id=" + QString::number(id) + " -> " + newPath);
-                }
-            });
-
-            activeChunkedDownloaders[child.id] = downloader;
-            downloads[child.id].status = "Downloading";
-            downloader->startDownload(url, path, child.chunks, child.id);
-            emit statusChanged(child.id, "Downloading");
+            createChunkedDownloaderFor(child.id, false);
         } else if (type == "YtDlp") {
             downloads[child.id].status = "Downloading";
             YtDlpManager::instance().startDownload(url, path, child.id, audioFormat);
@@ -477,22 +559,9 @@ void DownloadManager::resumeDownload(int id) {
     if (activeChunkedDownloaders.contains(id)) {
         activeChunkedDownloaders[id]->resume();
     } else if (item.type == "HTTP" || item.type == "HTTPS" || item.type == "FTP") {
-        ChunkedDownloader* downloader = new ChunkedDownloader(this);
-        connect(downloader, &ChunkedDownloader::downloadProgress, this, &DownloadManager::onChunkProgress);
-        connect(downloader, &ChunkedDownloader::downloadFinished, this, &DownloadManager::onChunkFinished);
-        connect(downloader, &ChunkedDownloader::downloadFailed, this, &DownloadManager::onChunkFailed);
-        connect(downloader, &ChunkedDownloader::speedUpdated, this, [this, id](qint64 spd) {
-            onChunkSpeed(id, spd);
-        });
-        connect(downloader, &ChunkedDownloader::filePathChanged, this, [this](int id, const QString& newPath) {
-            if (downloads.contains(id)) {
-                downloads[id].filePath = newPath;
-                downloads[id].fileName = QFileInfo(newPath).fileName();
-                Logger::instance().info("Download path updated: id=" + QString::number(id) + " -> " + newPath);
-            }
-        });
-        activeChunkedDownloaders[id] = downloader;
-        downloader->startDownload(item.url, item.filePath, item.chunks, id);
+        // Prefer continuing from the partial .chunk data of a crashed/previous
+        // session; otherwise start from scratch.
+        createChunkedDownloaderFor(id, ChunkedDownloader::hasPersistedData(id));
     } else if (item.type == "YtDlp") {
         if (YtDlpManager::instance().isRunning(id)) {
             YtDlpManager::instance().resumeDownload(id);
@@ -602,6 +671,7 @@ void DownloadManager::cancelDownload(int id) {
 
     if (activeChunkedDownloaders.contains(id)) {
         activeChunkedDownloaders[id]->cancel();
+        activeChunkedDownloaders[id]->discardPartialData();
         activeChunkedDownloaders[id]->deleteLater();
         activeChunkedDownloaders.remove(id);
     }
@@ -751,6 +821,11 @@ void DownloadManager::onChunkProgress(int id, qint64 downloaded, qint64 total) {
     if (it == lastProgressToDbMs.constEnd() || now - it.value() >= 500) {
         DatabaseManager::instance().updateDownloadProgress(id, downloaded, total, downloads[id].progress);
         lastProgressToDbMs[id] = now;
+        // Keep the resume sidecar fresh so a hard crash still leaves enough
+        // metadata (url/chunk layout) to continue this download after restart.
+        if (activeChunkedDownloaders.contains(id) && total > 0) {
+            activeChunkedDownloaders[id]->persistResumeState();
+        }
     }
 
     emit downloadProgress(id, downloaded, total);

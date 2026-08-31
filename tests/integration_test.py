@@ -82,6 +82,14 @@ def wait_for_ready(port, timeout=30.0):
     return False
 
 
+def _pick_free_port():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
+
+
 # ---------------------------------------------------------------------------
 # Range-aware local file servers to exercise the chunked download engine.
 # ---------------------------------------------------------------------------
@@ -89,7 +97,8 @@ def wait_for_ready(port, timeout=30.0):
 def _make_file_server(payload, mode="normal", chunk_bits=""):
     """mode: 'normal' (full ranges + Content-Length), _
            'truncate' (server closes range connections early to simulate a dropped link),
-           'nolength' (no Content-Length, forces the unknown-size path)."""
+           'nolength' (no Content-Length, forces the unknown-size path),
+           'slow' (full ranges but trickle data so a download can be interrupted mid-way)."""
     payload = payload.encode("utf-8") if isinstance(payload, str) else payload
 
     class Handler(BaseHTTPRequestHandler):
@@ -134,7 +143,14 @@ def _make_file_server(payload, mode="normal", chunk_bits=""):
                 self.send_header("Content-Range", f"bytes {start}-{end}/{len(payload)}")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
-                self.wfile.write(data)
+                if mode == "slow":
+                    # Trickle so a test can observe partial progress and interrupt.
+                    for i in range(0, len(data), 8192):
+                        self.wfile.write(data[i:i + 8192])
+                        self.wfile.flush()
+                        time.sleep(0.01)
+                else:
+                    self.wfile.write(data)
                 return
 
             data = payload
@@ -530,6 +546,70 @@ def main():
                         check("pipe-injected download completes byte-exact", ok, str(d))
                 finally:
                     nm_srv.shutdown()
+
+            # 7) Auto-resume of an interrupted HTTP download after app restart.
+            #    Start a slow download, interrupt the process mid-transfer, then
+            #    relaunch and verify the partial .chunk data is used to continue
+            #    from the saved offset rather than restarting from scratch.
+            res_payload = "DLRESUME-" + ("z" * 2_000_000)  # ~2MB, trickled slowly
+            res_bin = os.path.join(workdir, "resume.bin")
+            res_mid = None
+            interrupted = False
+            srv, sp = _make_file_server(res_payload, mode="slow")
+            try:
+                res_url = f"http://127.0.0.1:{sp}/resume.bin"
+                st, res_mid = add_download(res_url, "resume.bin", workdir)
+                check("add resume download -> 200", st == 200, f"status={st}")
+
+                # Wait until the engine has committed a non-trivial amount of
+                # partial data (progress moving but far from complete).
+                deadline = time.time() + 60
+                partial_seen = False
+                while time.time() < deadline:
+                    _, jl = http_request(port, "GET", "/api/downloads")
+                    d = find_download(jl, res_mid)
+                    if d is not None:
+                        prog = d.get("progress") or 0
+                        if 0 < prog < 80 and d.get("status") == "Downloading":
+                            partial_seen = True
+                            break
+                    time.sleep(0.5)
+                check("resume download shows partial progress", partial_seen,
+                      f"mid={res_mid}")
+
+                # Persist the DB/progress sidecar one more time so the resume
+                # state is fresh, then hard-kill the app (not a graceful shutdown).
+                time.sleep(1.5)
+                proc.kill()
+                try:
+                    proc.wait(timeout=10)
+                except Exception:
+                    pass
+                interrupted = True
+            finally:
+                # Only keep the server for the relaunch if we actually interrupted.
+                if not interrupted:
+                    srv.shutdown()
+
+            if interrupted:
+                try:
+                    # Relaunch. The app binds a fixed LocalServer port
+                    # (DEFAULT_PORT); the killed instance has released it, so the
+                    # fresh instance rebinds and restore resumes the download.
+                    port = DEFAULT_PORT
+                    proc = launch()
+                    ok = wait_for_ready(port, timeout=40)
+                    check("app relaunches after interrupt", ok, f"port={port}")
+                    if ok:
+                        d = wait_download_status(port, res_mid, {"Completed", "Failed"}, timeout=120)
+                        final_ok = d is not None and d.get("status") == "Completed"
+                        if final_ok and os.path.isfile(res_bin):
+                            with open(res_bin, "rb") as f:
+                                final_ok = f.read() == res_payload.encode("utf-8")
+                        check("interrupted download resumes and completes byte-exact",
+                              final_ok, f"status={d.get('status') if d else None}")
+                finally:
+                    srv.shutdown()
 
         finally:
             shutil.rmtree(workdir, ignore_errors=True)

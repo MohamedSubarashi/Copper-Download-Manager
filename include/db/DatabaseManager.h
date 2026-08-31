@@ -23,6 +23,7 @@ public:
     void resetStaleDownloads();
     void saveSetting(const QString& key, const QString& value);
     QString getSetting(const QString& key, const QString& defaultValue = "");
+    QString getUserAgent();
 
 private:
     DatabaseManager();

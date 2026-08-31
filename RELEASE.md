@@ -44,10 +44,11 @@ Run the full integration suite against the deployed exe:
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `N passed, 0 failed` (31 cases as of v0.3.5). The suite covers
+Expected result: `N passed, 0 failed` (35 cases as of v0.3.6). The suite covers
 launch/intake, single-instance, protocol forwarding, chunked/truncated/
-unknown-length downloads, the copper:// flow, .torrent injection, and the
-native-messaging host -> named-pipe injection (ping + byte-exact download).
+unknown-length downloads, the copper:// flow, .torrent injection, the
+native-messaging host -> named-pipe injection (ping + byte-exact download), and
+auto-resume of an interrupted HTTP download after an app restart.
 
 Extension manifest validation (offline, run in CI and locally):
 

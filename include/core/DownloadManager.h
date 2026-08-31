@@ -33,6 +33,7 @@ public:
     void setSpeedLimit(qint64 bytesPerSecond);
     qint64 getSpeedLimit() const;
     void addChildDownload(int parentId, const QString& url, const QString& path, const QString& type, const QString& audioFormat = "mp4");
+    void restoreFromDatabase();
     void shutdown();
 
 signals:
@@ -53,6 +54,7 @@ private:
 
     void startNextQueued();
     void updateAggregateProgress(int parentId);
+    void createChunkedDownloaderFor(int id, bool resumeFromSaved);
     void onChunkProgress(int id, qint64 downloaded, qint64 total);
     void onChunkFinished(int id);
     void onChunkFailed(int id, const QString& error);

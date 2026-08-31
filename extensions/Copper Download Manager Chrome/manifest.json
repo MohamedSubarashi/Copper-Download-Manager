@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Copper Download Manager",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "Powerful download interceptor and launcher for Copper Download Manager.",
   "permissions": [
     "contextMenus",
@@ -15,7 +15,6 @@
   },
   "action": {
     "default_title": "Copper Download Manager",
-    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

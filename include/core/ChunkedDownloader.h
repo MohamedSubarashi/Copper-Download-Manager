@@ -9,6 +9,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QFile>
+#include <QJsonObject>
 
 struct ChunkState {
     int index = 0;
@@ -28,15 +29,25 @@ public:
     ~ChunkedDownloader();
 
     void startDownload(const QString& url, const QString& filePath, int chunks = 16, int downloadId = 0);
+    void resumeFromState(const QString& url, const QString& filePath, int chunks, qint64 totalSize, bool range, int downloadId);
     void pause();
     void resume();
     void cancel();
+    void discardPartialData();
     bool isDownloading() const;
     bool isPaused() const;
     qint64 getDownloadedBytes() const;
     qint64 getTotalBytes() const;
     qint64 getSpeed() const;
     void setSpeedLimit(qint64 bytesPerSecond);
+
+    // Persists the metadata needed to resume this download after an app
+    // restart (url, target path, chunk count, total size, range support).
+    void persistResumeState() const;
+    // Returns true when a previous session left resumable .chunk data on disk.
+    static bool hasPersistedData(int downloadId);
+    // Reads the saved resume metadata for a download id (empty object if absent).
+    static QJsonObject readPersistedState(int downloadId);
 
 signals:
     void downloadProgress(int id, qint64 downloaded, qint64 total);
@@ -56,10 +67,12 @@ private slots:
 
 private:
     void setupChunks(qint64 totalSize);
+    void startChunkRequests(const QString& url, const QString& filePath, int id);
     void mergeChunks();
     void cleanupChunks();
     void cleanupTempFiles();
     QString chunkFilePath(int index);
+    QString resumeStatePath() const;
     void checkFallbackReply(QNetworkReply* reply);
     QString extractFilenameFromContentDisposition(const QByteArray& header);
     QString extractUrlFromHtml(const QByteArray& html);

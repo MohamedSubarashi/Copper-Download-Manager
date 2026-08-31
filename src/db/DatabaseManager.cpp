@@ -290,3 +290,12 @@ QString DatabaseManager::getSetting(const QString& key, const QString& defaultVa
     }
     return defaultValue;
 }
+
+QString DatabaseManager::getUserAgent() {
+    QString ua = getSetting("userAgent", "");
+    if (ua.trimmed().isEmpty()) {
+        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 CopperDownloadManager/" + QString::fromLatin1("0.3.6");
+    }
+    return ua.trimmed();
+}
+

@@ -25,7 +25,16 @@
 #include <QSet>
 
 Aria2cManager::Aria2cManager() : nextId(1), maxConcurrent(3), isDownloading(false), nam(new QNetworkAccessManager(this)), activeReply(nullptr) {
-    m_token = "copper-" + QString::number(QRandomGenerator::global()->generate()) + QString::number(QRandomGenerator::global()->generate());
+    // Use a persistent RPC secret persisted across sessions. A per-process random
+    // token caused endless "aria2 RPC ... Unauthorized" loops: if an old daemon
+    // survived on port 6800 (its socket lingering after a restart), its secret
+    // differed from the freshly generated one, so every aria2.getVersion during
+    // daemon startup was rejected with "Unauthorized" and downloads never started.
+    m_token = DatabaseManager::instance().getSetting("aria2Token", QString());
+    if (m_token.isEmpty()) {
+        m_token = "copper-" + QString::number(QRandomGenerator::global()->generate()) + QString::number(QRandomGenerator::global()->generate());
+        DatabaseManager::instance().saveSetting("aria2Token", m_token);
+    }
     pollTimer = new QTimer(this);
     connect(pollTimer, &QTimer::timeout, this, &Aria2cManager::poll);
     pollTimer->setInterval(1000);
@@ -428,7 +437,8 @@ bool Aria2cManager::ensureDaemon() {
     }
 
     // Wait for RPC availability
-    for (int i = 0; i < 60; i++) {
+    int unauthorizedRestarts = 0;
+    for (int i = 0; i < 90; i++) {
         // If the daemon process exited during startup (e.g. it failed to bind
         // the port before the stale holder was fully cleared), restart it once.
         if (!m_daemonProcess) {
@@ -447,6 +457,29 @@ bool Aria2cManager::ensureDaemon() {
             Logger::instance().info("aria2c RPC daemon ready");
             emit daemonStateChanged(true);
             return true;
+        }
+        // If the responder on port 6800 is a stale daemon holding a different
+        // secret (reported as "Unauthorized"), kill everything on the port and
+        // relaunch once. The loop would otherwise spin for the remaining
+        // iterations against the wrong daemon and never recover, leaving every
+        // torrent stuck at 0% ("Unauthorized" added to Downloads).
+        if (m_rpcUnauthorized && unauthorizedRestarts < 2) {
+            unauthorizedRestarts++;
+            Logger::instance().warning("aria2c RPC Unauthorized; forcing daemon restart to clear stale secret holder");
+            if (m_daemonProcess) {
+                m_daemonProcess->kill();
+                m_daemonProcess->waitForFinished(1000);
+                m_daemonProcess->deleteLater();
+                m_daemonProcess = nullptr;
+            }
+            killProcessOnTcpPort(6800);
+            m_daemonRunning = false;
+            if (!startDaemonProcess()) {
+                m_daemonStarting = false;
+                emit errorOccurred("Failed to restart aria2c daemon after Unauthorized");
+                return false;
+            }
+            continue;
         }
         QThread::msleep(500);
         QCoreApplication::processEvents();
@@ -524,9 +557,15 @@ QJsonValue Aria2cManager::rpcResult(const QString& method, const QJsonArray& par
     QJsonObject obj = doc.object();
     if (obj.contains("error")) {
         QJsonObject errObj = obj.value("error").toObject();
-        Logger::instance().error("aria2 RPC " + method + " error: " + errObj.value("message").toString());
+        QString msg = errObj.value("message").toString();
+        Logger::instance().error("aria2 RPC " + method + " error: " + msg);
+        // Record whether the failure was a secret mismatch so ensureDaemon can
+        // force a port clear + relaunch instead of looping forever against a
+        // stale daemon that holds a different secret.
+        m_rpcUnauthorized = msg.contains("Unauthorized", Qt::CaseInsensitive);
         return QJsonValue(QJsonValue::Undefined);
     }
+    m_rpcUnauthorized = false;
     return obj.value("result");
 }
 
@@ -1050,7 +1089,7 @@ void Aria2cManager::downloadTorrentFile(const QString& url, std::function<void(c
     QString dest = tmpDir + "/" + fileName;
 
     QNetworkRequest req{QUrl(url)};
-    req.setRawHeader("User-Agent", "Copper Download Manager");
+    req.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
     QNetworkReply* reply = nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [reply, callback, dest, url]() {
         reply->deleteLater();

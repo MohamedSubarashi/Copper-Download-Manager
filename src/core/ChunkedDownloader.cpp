@@ -1,6 +1,7 @@
 #include "core/ChunkedDownloader.h"
 #include "utils/Logger.h"
 #include "utils/FileNameSanitizer.h"
+#include "db/DatabaseManager.h"
 #include <QUrl>
 #include <QFileInfo>
 #include <QDir>
@@ -8,6 +9,10 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QDateTime>
+#include <QDirIterator>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
 #include <algorithm>
 
 ChunkedDownloader::ChunkedDownloader(QObject* parent)
@@ -143,7 +148,7 @@ void ChunkedDownloader::startDownload(const QString& url, const QString& filePat
     QDir().mkpath(QFileInfo(filePath).absolutePath());
 
     QNetworkRequest request{QUrl{url}};
-    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CopperDownloadManager/1.0");
+    request.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
 
     headReply = nam->head(request);
@@ -159,7 +164,7 @@ void ChunkedDownloader::onHeadFinished() {
         headReply = nullptr;
 
         QNetworkRequest request{QUrl{downloadUrl}};
-        request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CopperDownloadManager/1.0");
+        request.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
 
         QNetworkReply* fallbackReply = nam->get(request);
@@ -332,7 +337,7 @@ void ChunkedDownloader::setupChunks(qint64 totalSize) {
         chunk.file = file;
 
         QNetworkRequest request{QUrl{downloadUrl}};
-        request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CopperDownloadManager/1.0");
+        request.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
 
         QNetworkReply* reply = nam->get(request);
@@ -370,7 +375,7 @@ void ChunkedDownloader::setupChunks(qint64 totalSize) {
         chunk.file = file;
 
         QNetworkRequest request{QUrl{downloadUrl}};
-        request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CopperDownloadManager/1.0");
+        request.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
         QString rangeHeader = "bytes=" + QByteArray::number(chunk.startByte) + "-" + QByteArray::number(chunk.endByte);
         request.setRawHeader("Range", rangeHeader.toUtf8());
@@ -536,8 +541,24 @@ void ChunkedDownloader::onSpeedTimer() {
 }
 
 void ChunkedDownloader::mergeChunks() {
+    // Close any open chunk handles first (resume path can merge while files are open).
+    for (ChunkState& chunk : chunks) {
+        if (chunk.file) {
+            chunk.file->close();
+            chunk.file->deleteLater();
+            chunk.file = nullptr;
+        }
+    }
+
     if (chunks.size() == 1) {
-        QFile::rename(chunkFilePath(0), saveFilePath);
+        QFile::remove(saveFilePath);
+        if (!QFile::rename(chunkFilePath(0), saveFilePath)) {
+            if (!QFile::copy(chunkFilePath(0), saveFilePath)) {
+                Logger::instance().error("Cannot finalize download file: " + saveFilePath);
+            }
+            QFile::remove(chunkFilePath(0));
+        }
+        cleanupTempFiles();
         return;
     }
 
@@ -581,6 +602,7 @@ void ChunkedDownloader::cleanupTempFiles() {
     for (int i = 0; i < totalChunks; i++) {
         QFile::remove(chunkFilePath(i));
     }
+    QFile::remove(resumeStatePath());
 }
 
 QString ChunkedDownloader::chunkFilePath(int index) {
@@ -603,6 +625,7 @@ void ChunkedDownloader::pause() {
     drainTimer->stop();
     speedTimer->stop();
     hangTimer->stop();
+    persistResumeState();
     Logger::instance().info("Download paused (id: " + QString::number(downloadId) + ")");
 }
 
@@ -622,7 +645,7 @@ void ChunkedDownloader::resume() {
     for (ChunkState& chunk : chunks) {
         if (chunk.reply == nullptr && chunk.downloaded < (chunk.endByte - chunk.startByte + 1)) {
             QNetworkRequest request{QUrl{downloadUrl}};
-            request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CopperDownloadManager/1.0");
+            request.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
             request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
 
             qint64 resumeFrom = chunk.startByte + chunk.downloaded;
@@ -648,6 +671,106 @@ void ChunkedDownloader::resume() {
     Logger::instance().info("Download resumed (id: " + QString::number(downloadId) + ")");
 }
 
+void ChunkedDownloader::resumeFromState(const QString& url, const QString& filePath, int numChunks, qint64 totalSize, bool range, int id) {
+    Logger::instance().info("Resuming interrupted download from saved chunks (id: " + QString::number(id) + ")");
+
+    downloadUrl = url;
+    saveFilePath = filePath;
+    totalChunks = numChunks;
+    downloadId = id;
+    totalBytes = totalSize;
+    supportsRange = range;
+    downloading = true;
+    paused = false;
+    cancelled = false;
+    lastActivityMs = QDateTime::currentMSecsSinceEpoch();
+
+    resetThrottleState();
+
+    // If the target already exists and is complete, this download finished
+    // before the app stopped; just report it done and drop the stale state.
+    if (QFile::exists(saveFilePath) && totalBytes > 0 && QFileInfo(saveFilePath).size() >= totalBytes) {
+        cleanupTempFiles();
+        QFile::remove(resumeStatePath());
+        emit downloadProgress(id, totalBytes, totalBytes);
+        emit downloadFinished(id);
+        downloading = false;
+        return;
+    }
+
+    if (!supportsRange || totalBytes <= 0) {
+        Logger::instance().info("Server does not support resume after restart, restarting (id: " + QString::number(id) + ")");
+        startDownload(downloadUrl, saveFilePath, totalChunks, downloadId);
+        return;
+    }
+
+    QDir().mkpath(QFileInfo(saveFilePath).absolutePath());
+
+    qint64 chunkSize = totalBytes / totalChunks;
+    if (chunkSize < 1024) {
+        totalChunks = 1;
+        chunkSize = totalBytes;
+    }
+
+    downloadedBytes = 0;
+    for (int i = 0; i < totalChunks; i++) {
+        ChunkState chunk;
+        chunk.index = i;
+        chunk.startByte = i * chunkSize;
+        chunk.endByte = (i == totalChunks - 1) ? (totalBytes - 1) : ((i + 1) * chunkSize - 1);
+
+        // Recover how much of this chunk was written before the app stopped and
+        // reopen the file in append so new data continues where it left off.
+        chunk.downloaded = 0;
+        QFileInfo fi(chunkFilePath(i));
+        if (fi.exists()) {
+            chunk.downloaded = qBound<qint64>(0, fi.size(), chunk.endByte - chunk.startByte + 1);
+        }
+        downloadedBytes += chunk.downloaded;
+
+        QFile* file = new QFile(chunkFilePath(i));
+        if (!file->open(QIODevice::WriteOnly | QIODevice::Append)) {
+            emit downloadFailed(downloadId, "Cannot open chunk file for resume: " + chunkFilePath(i));
+            cleanupChunks();
+            downloading = false;
+            return;
+        }
+        chunk.file = file;
+
+        if (chunk.downloaded < (chunk.endByte - chunk.startByte + 1)) {
+            QNetworkRequest request{QUrl{downloadUrl}};
+            request.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
+            request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+
+            qint64 resumeFrom = chunk.startByte + chunk.downloaded;
+            QString rangeHeader = "bytes=" + QByteArray::number(resumeFrom) + "-" + QByteArray::number(chunk.endByte);
+            request.setRawHeader("Range", rangeHeader.toUtf8());
+
+            QNetworkReply* reply = nam->get(request);
+            chunk.reply = reply;
+
+            connect(reply, &QNetworkReply::readyRead, this, &ChunkedDownloader::onChunkReadyRead);
+            connect(reply, &QNetworkReply::finished, this, &ChunkedDownloader::onChunkFinished);
+            connect(reply, &QNetworkReply::errorOccurred, this, &ChunkedDownloader::onChunkError);
+        }
+
+        chunks.append(chunk);
+    }
+
+    if (downloadedBytes >= totalBytes) {
+        // All chunks were already fully written; just merge and finish.
+        mergeChunks();
+        emit downloadProgress(downloadId, totalBytes, totalBytes);
+        emit downloadFinished(downloadId);
+        downloading = false;
+        return;
+    }
+
+    speedTimer->start(1000);
+    hangTimer->start();
+    emit downloadProgress(downloadId, downloadedBytes, totalBytes);
+}
+
 void ChunkedDownloader::cancel() {
     downloading = false;
     paused = false;
@@ -656,7 +779,63 @@ void ChunkedDownloader::cancel() {
     drainTimer->stop();
     hangTimer->stop();
     cleanupChunks();
+    // Do NOT delete the partial .chunk files here: they are the resume data for
+    // a subsequent app session. Explicit removal happens in discardPartialData()
+    // (user cancel/remove) or after a completed merge (cleanupTempFiles).
+    persistResumeState();
+}
+
+void ChunkedDownloader::discardPartialData() {
     cleanupTempFiles();
+    QFile::remove(resumeStatePath());
+}
+
+void ChunkedDownloader::persistResumeState() const {
+    if (downloadId <= 0) return;
+    // Nothing to resume for a completed transfer: its chunk files are already
+    // merged/removed, and a stale state file would make a future restore think
+    // there is resumable data.
+    if (totalBytes > 0 && downloadedBytes >= totalBytes) return;
+    if (totalBytes > 0 && QFile::exists(saveFilePath) && QFileInfo(saveFilePath).size() >= totalBytes) return;
+
+    QJsonObject state;
+    state["url"] = downloadUrl;
+    state["filePath"] = saveFilePath;
+    state["chunks"] = totalChunks;
+    state["totalBytes"] = QString::number(totalBytes);
+    state["supportsRange"] = supportsRange;
+    state["downloaded"] = QString::number(downloadedBytes);
+
+    QFile f(resumeStatePath());
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
+    f.write(QJsonDocument(state).toJson(QJsonDocument::Compact));
+    f.close();
+}
+
+bool ChunkedDownloader::hasPersistedData(int downloadId) {
+    QString tempDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/temp";
+    QDir().mkpath(tempDir);
+    if (!QFile::exists(tempDir + "/" + QString::number(downloadId) + ".resume.json")) return false;
+    QDirIterator it(tempDir, QStringList() << QString::number(downloadId) + "_*.chunk", QDir::Files);
+    return it.hasNext();
+}
+
+QJsonObject ChunkedDownloader::readPersistedState(int downloadId) {
+    QJsonObject empty;
+    QString tempDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/temp";
+    QFile f(tempDir + "/" + QString::number(downloadId) + ".resume.json");
+    if (!f.open(QIODevice::ReadOnly)) return empty;
+    QByteArray data = f.readAll();
+    f.close();
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(data, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return empty;
+    return doc.object();
+}
+
+QString ChunkedDownloader::resumeStatePath() const {
+    QString tempDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/temp";
+    return tempDir + "/" + QString::number(downloadId) + ".resume.json";
 }
 
 void ChunkedDownloader::onHangTimer() {

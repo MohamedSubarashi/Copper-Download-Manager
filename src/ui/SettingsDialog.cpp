@@ -143,6 +143,23 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     speedBoxLayout->addLayout(speedLayout);
     downloadsLayout->addWidget(speedGroup);
 
+    QGroupBox* uaGroup = new QGroupBox("User-Agent");
+    QVBoxLayout* uaLayout = new QVBoxLayout(uaGroup);
+    QHBoxLayout* uaRow = new QHBoxLayout();
+    QLabel* uaLabel = new QLabel("User-Agent:");
+    uaLabel->setBuddy(userAgentEdit = new QLineEdit());
+    uaRow->addWidget(uaLabel);
+    userAgentEdit->setAccessibleName("Custom User-Agent for downloads");
+    userAgentEdit->setPlaceholderText("Leave blank for the default browser-like User-Agent");
+    userAgentEdit->setText(DatabaseManager::instance().getSetting("userAgent", ""));
+    uaRow->addWidget(userAgentEdit);
+    uaLayout->addLayout(uaRow);
+    QLabel* uaHint = new QLabel("Sent with HTTP(S) download and metadata requests. Some servers require a browser-like User-Agent.");
+    uaHint->setWordWrap(true);
+    uaHint->setStyleSheet("color: gray; font-size: 11px;");
+    uaLayout->addWidget(uaHint);
+    downloadsLayout->addWidget(uaGroup);
+
     downloadsLayout->addStretch();
     tabWidget->addTab(downloadsTab, "Downloads");
 
@@ -513,6 +530,7 @@ void SettingsDialog::onSave() {
     DatabaseManager::instance().saveSetting("speedLimit", QString::number(speedLimitSpin->value()));
     DatabaseManager::instance().saveSetting("seedTime", QString::number(seedTimeCombo->currentData().toInt()));
     DatabaseManager::instance().saveSetting("downloadTypeFilterMode", typeFilterModeCombo->currentData().toString());
+    DatabaseManager::instance().saveSetting("userAgent", userAgentEdit->text().trimmed());
 
     QStringList selectedFilters;
     for (QCheckBox* check : typeFilterChecks) {

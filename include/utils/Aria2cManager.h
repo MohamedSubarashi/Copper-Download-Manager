@@ -147,6 +147,7 @@ public:
     bool isDownloading;
     bool m_daemonRunning = false;
     bool m_daemonStarting = false;
+    bool m_rpcUnauthorized = false;
     QString m_token;
     QProcess* m_daemonProcess = nullptr;
     QNetworkAccessManager* nam;

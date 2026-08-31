@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Copper Download Manager",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "Powerful download interceptor and launcher for Copper Download Manager.",
   "permissions": [
     "contextMenus",
@@ -11,7 +11,9 @@
     "nativeMessaging"
   ],
   "background": {
-    "scripts": ["background.js"]
+    "scripts": [
+      "background.js"
+    ]
   },
   "action": {
     "default_title": "Copper Download Manager",
@@ -30,8 +32,7 @@
       "data_collection_permissions": {
         "required": [
           "none"
-        ],
-        "optional": []
+        ]
       }
     }
   },

@@ -2,7 +2,7 @@
 // handle winver.h's WINAPI_FAMILY_PARTITION macro guards. Every constant below
 // is a literal number, so the header is unnecessary.
 
-1 ICON "Assets\\app.ico"
+1 ICON "Assets/app.ico"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 0,3,5,0
@@ -23,12 +23,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Copper"
             VALUE "FileDescription", "Copper Download Manager"
-            VALUE "FileVersion", "0.3.5"
+            VALUE "FileVersion", "0.3.6"
             VALUE "InternalName", "CopperDownloadManager"
             VALUE "LegalCopyright", "Copyright (C) 2026 Mohamed Subarashi"
             VALUE "OriginalFilename", "CopperDownloadManager.exe"
             VALUE "ProductName", "Copper Download Manager"
-            VALUE "ProductVersion", "0.3.5"
+            VALUE "ProductVersion", "0.3.6"
         END
     END
     BLOCK "VarFileInfo"

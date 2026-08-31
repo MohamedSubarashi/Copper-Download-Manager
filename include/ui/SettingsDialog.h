@@ -48,6 +48,7 @@ private:
     QLabel* handlerStatusLabel;
     QSpinBox* speedLimitSpin;
     QComboBox* seedTimeCombo;
+    QLineEdit* userAgentEdit;
 };
 
 #endif

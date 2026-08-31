@@ -1,6 +1,7 @@
 #include "utils/YtDlpManager.h"
 #include "utils/Logger.h"
 #include "utils/FfmpegManager.h"
+#include "db/DatabaseManager.h"
 #include <QStandardPaths>
 #include <QDir>
 #include <QFile>
@@ -214,6 +215,7 @@ void YtDlpManager::startDownload(const QString& url, const QString& outputPath, 
     args << "--newline";
     args << "--no-warnings";
     args << "--progress";
+    args << "--user-agent" << DatabaseManager::instance().getUserAgent();
 
     bool needsFfmpeg = true;
     if (format == "mp3") {
