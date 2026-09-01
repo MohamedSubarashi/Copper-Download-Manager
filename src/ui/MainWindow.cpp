@@ -7,6 +7,7 @@
 #include "ui/DownloadItemDelegate.h"
 #include "utils/CopperLink.h"
 #include "utils/FileNameSanitizer.h"
+#include "utils/UrlDetector.h"
 #include "core/DownloadManager.h"
 #include "core/LocalServer.h"
 #include "core/PipeServer.h"
@@ -1089,8 +1090,8 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
             }
         }
     } else if (arg.startsWith("http://") || arg.startsWith("https://") || arg.startsWith("ftp://")) {
-        if (arg.contains("youtube.com") || arg.contains("youtu.be") ||
-            arg.contains("soundcloud.com") || arg.contains("vimeo.com")) {
+        UrlType detected = UrlDetector::detect(arg);
+        if (detected == UrlPlaylist || detected == UrlYtDlp) {
             DownloadManager::instance().addDownload(arg, "", "YtDlp");
         } else {
             DownloadManager::instance().addDownload(arg, "", "HTTP");
@@ -1131,14 +1132,16 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
                         fullSavePath += sanitizeFileName(cl.filename);
                     }
                     // format=mp3 forces the yt-dlp path: the app extracts the audio
-                    // stream (needs FFmpeg). Everything else uses the conventional
-                    // YtDlp-for-video-sites / HTTP-for-direct-links split.
+                    // stream (needs FFmpeg). playlist-mp4/playlist-mp3 start a full
+                    // yt-dlp playlist download (whole playlist as video or audio).
+                    // Everything else uses UrlDetector to route between yt-dlp and HTTP.
                     bool wantMp3 = cl.format.compare("mp3", Qt::CaseInsensitive) == 0;
-                    if (wantMp3 ||
-                        cl.url.contains("youtube.com") || cl.url.contains("youtu.be") ||
-                        cl.url.contains("soundcloud.com") || cl.url.contains("vimeo.com")) {
-                        DownloadManager::instance().addDownload(cl.url, fullSavePath, "YtDlp", 16,
-                            wantMp3 ? "mp3" : "mp4");
+                    bool wantPlaylist = cl.format.startsWith("playlist-", Qt::CaseInsensitive);
+                    bool wantPlaylistMp3 = cl.format.compare("playlist-mp3", Qt::CaseInsensitive) == 0;
+                    if (wantMp3 || wantPlaylist ||
+                        UrlDetector::isYtDlpUrl(cl.url) || UrlDetector::isPlaylistUrl(cl.url)) {
+                        QString audioFmt = wantMp3 || wantPlaylistMp3 ? "mp3" : "mp4";
+                        DownloadManager::instance().addDownload(cl.url, fullSavePath, "YtDlp", 16, audioFmt);
                     } else {
                         DownloadManager::instance().addDownload(cl.url, fullSavePath, "HTTP");
                     }

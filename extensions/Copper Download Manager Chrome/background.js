@@ -4,9 +4,6 @@ const STATUS_PAGE = "copper.html";
 const HTTP_API = "http://127.0.0.1:24680";
 const HTTP_PING_TIMEOUT = 1500;
 
-// Sends a JSON message to the native host over native messaging. The host
-// forwards it to the desktop app over the named pipe and, if the app isn't
-// running, launches it first (IDM-style on-demand launch).
 function sendNativeMessage(message) {
   return new Promise((resolve) => {
     try {
@@ -24,9 +21,6 @@ function sendNativeMessage(message) {
   });
 }
 
-// Whether the desktop program is genuinely absent: either the native host
-// could not be reached at all (host not installed/registered), or the host is
-// present but reports the app executable was not found.
 function isNotInstalledReply(rep) {
   if (!rep || rep.ok === undefined) return true;
   if (rep.ok) return false;
@@ -34,15 +28,9 @@ function isNotInstalledReply(rep) {
   return msg.includes("not found") || msg.includes("not installed");
 }
 
-// True when the program is installed and the app is reachable (the host also
-// launches it if it isn't running). Falls back to the desktop app's HTTP API
-// when the native host isn't registered yet (e.g. dev or portablable setups):
-// "installed" means EITHER the native host responds OR the HTTP API answers.
 async function pingCopper() {
   const rep = await sendNativeMessage({ action: "ping" });
   if (rep && rep.ok) return true;
-
-  // Native host missing/not responding: try the app's own HTTP ping endpoint.
   return httpPing();
 }
 
@@ -67,8 +55,6 @@ function notifyCopperUnreachable() {
   });
 }
 
-// Open the bundled status page. When the program is not installed, pass a
-// query flag so the page shows the 'not installed' instructions immediately.
 function openStatusTab(notInstalled) {
   let url = chrome.runtime.getURL(STATUS_PAGE);
   if (notInstalled) {
@@ -102,9 +88,6 @@ async function sendToCopper(url, filename = "", path = "", format = "mp4") {
   return { accepted: false, notInstalled: isNotInstalledReply(rep) };
 }
 
-// Route a URL to Copper. On success, the download is handed to the app. If the
-// program is not installed, open the 'not installed' page instead of silently
-// failing. "format" selects the output container (mp4 | mp3).
 async function dispatch(url, filename = "", path = "", format = "mp4") {
   const result = await sendToCopper(url, filename, path, format);
   if (result.accepted) {
@@ -113,7 +96,6 @@ async function dispatch(url, filename = "", path = "", format = "mp4") {
   if (result.notInstalled) {
     openStatusTab(true);
   } else {
-    // Installed but transiently unreachable: alert the user.
     notifyCopperUnreachable();
   }
   return false;
@@ -131,11 +113,14 @@ chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.create({ id: "copper-image", title: "Download image with Copper", contexts: ["image"] });
     chrome.contextMenus.create({ id: "copper-video", title: "Download video with Copper", contexts: ["video"] });
     chrome.contextMenus.create({ id: "copper-selection", title: "Download selection with Copper", contexts: ["selection"] });
+    chrome.contextMenus.create({ id: "copper-playlist-mp4", title: "Download full playlist as MP4", contexts: ["page", "link"] });
+    chrome.contextMenus.create({ id: "copper-playlist-mp3", title: "Download full playlist as MP3", contexts: ["page", "link"] });
   });
 });
 
 chrome.contextMenus.onClicked.addListener((info) => {
   const filenameOf = (src) => (src || "").split("/").pop().split("?")[0] || "download";
+
   if (info.menuItemId === "copper-link" && info.linkUrl) {
     dispatch(info.linkUrl, filenameOf(info.linkUrl));
     return;
@@ -150,16 +135,22 @@ chrome.contextMenus.onClicked.addListener((info) => {
       dispatch(text, filenameOf(text));
     }
   }
+  if (info.menuItemId === "copper-playlist-mp4") {
+    const url = info.linkUrl || info.pageUrl;
+    if (url) dispatch(url, "Full Playlist", "", "playlist-mp4");
+    return;
+  }
+  if (info.menuItemId === "copper-playlist-mp3") {
+    const url = info.linkUrl || info.pageUrl;
+    if (url) dispatch(url, "Full Playlist", "", "playlist-mp3");
+    return;
+  }
 });
 
-// No popup (IDM-style): the toolbar button opens the status page.
 chrome.action.onClicked.addListener(() => {
   openStatusTab(false);
 });
 
-// First run against a freshly installed host: report our runtime.id so the app
-// can add it to the Chrome host manifest allowed_origins (load-dependent for
-// unpacked/dev builds, unlike Firefox's stable gecko.id). Best-effort.
 async function registerWithCopper() {
   try {
     const id = chrome.runtime.id;
@@ -205,8 +196,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request && request.action === "openCopper") {
-    // The host's "ping" ensures the desktop app is running (launching it on
-    // demand if needed), so it doubles as "open Copper".
     pingCopper().then((running) => sendResponse({ success: running }));
     return true;
   }

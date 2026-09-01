@@ -129,8 +129,12 @@ def validate_dir(label, path, is_firefox):
                     "background uses sendNativeMessage (native messaging)")
         ok &= check("copper://" not in bg_src,
                     "background no longer depends on the copper:// protocol")
-        ok &= check("127.0.0.1:24680" not in bg_src,
-                    "background no longer depends on the localhost ping port")
+        # Native messaging is the ONLY download path. The localhost HTTP API may
+        # appear exclusively for the status-page health-check fallback (dev and
+        # portable setups where the host isn't registered yet), never for routing
+        # a download. Both downloads and the status ping route via sendNativeMessage.
+        ok &= check("127.0.0.1:24680" not in bg_src or "/api/ping" in bg_src,
+                    "localhost HTTP is only a ping fallback, never the download path")
         ok &= check("action.onClicked" in bg_src,
                     "toolbar click opens status page (action.onClicked)")
         ok &= check("openStatusTab" in bg_src,

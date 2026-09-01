@@ -2,6 +2,7 @@
 #include "core/DownloadManager.h"
 #include "utils/Logger.h"
 #include "utils/FileNameSanitizer.h"
+#include "utils/UrlDetector.h"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -188,6 +189,7 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         QString url = obj["url"].toString();
         QString filename = obj["filename"].toString();
         QString savePath = obj["path"].toString();
+        QString format = obj["format"].toString();
 
         if (url.isEmpty()) {
             sendJsonResponse(socket, 400, {{"error", "URL is required"}}, allowedOrigin);
@@ -210,8 +212,21 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
                     fullSavePath = savePath + sanitizeFileName(filename);
                 }
             }
-            id = DownloadManager::instance().addDownload(url, fullSavePath, "HTTP");
+            // Route video/playlist sites through yt-dlp (honoring the requested
+            // mp4/mp3/playlist format); everything else uses the HTTP engine.
+            bool wantMp3 = format.compare("mp3", Qt::CaseInsensitive) == 0;
+            bool wantPlaylistMp3 = format.compare("playlist-mp3", Qt::CaseInsensitive) == 0;
+            if (wantMp3 || format.startsWith("playlist-", Qt::CaseInsensitive) ||
+                UrlDetector::isYtDlpUrl(url) || UrlDetector::isPlaylistUrl(url)) {
+                id = DownloadManager::instance().addDownload(url, fullSavePath, "YtDlp", 16,
+                    (wantMp3 || wantPlaylistMp3) ? "mp3" : "mp4");
+            } else {
+                id = DownloadManager::instance().addDownload(url, fullSavePath, "HTTP");
+            }
         }
+
+        // Raise the main window so the new download is immediately visible.
+        emit argumentForwarded("show");
 
         QJsonObject response;
         response["success"] = true;

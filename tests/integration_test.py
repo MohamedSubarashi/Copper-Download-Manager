@@ -493,6 +493,28 @@ def main():
                 except OSError:
                     pass
 
+            # 5b) Playlist/video URL routing: a YouTube playlist injected with
+            #     format=playlist-mp3 must route to the yt-dlp engine (type
+            #     "YtDlp"), NOT the plain HTTP engine. yt-dlp is not installed in
+            #     the test environment, so the download fails fast with a clear
+            #     "yt-dlp not installed" state instead of downloading the HTML.
+            playlist_url = "https://www.youtube.com/playlist?list=PLitPtest123"
+            st, j = http_request(port, "POST", "/api/download", {
+                "url": playlist_url,
+                "filename": "MyPlaylist",
+                "path": workdir,
+                "format": "playlist-mp3",
+            })
+            check("add playlist download -> 200", st == 200, f"status={st}")
+            pid = j.get("id") if isinstance(j, dict) else None
+            d = wait_download_status(port, pid, {"Failed", "Completed"}, timeout=30.0)
+            check("playlist URL routed to yt-dlp engine",
+                  d is not None and d.get("type") == "YtDlp",
+                  f"type={d.get('type') if d else None}")
+            check("playlist without yt-dlp fails clearly",
+                  d is not None and d.get("status") == "Failed",
+                  f"status={d.get('status') if d else None}")
+
             # 6) Native-messaging host -> named pipe injection (the IDM model).
             #    The host exe sits next to the app exe and forwards a browser
             #    native-messaging message to the app over the QLocalServer pipe.

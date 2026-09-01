@@ -1,13 +1,14 @@
 // IDM-style media detection bar for Copper Download Manager (content script).
-// Runs on http(s) pages in the top frame only. Handy.scans for <video>/<audio>
-// elements and direct media links, then shows a small floating bar with
-// Download buttons that hand the media URL to the extension background, which
-// routes it to the desktop app (native host first, HTTP API as fallback).
+// Runs on http(s) pages in the top frame only. Scans for <video>/<audio>
+// elements and direct media links, detects playlists on known sites, then shows
+// a small floating bar with Download buttons that hand the media URL to the
+// extension background, which routes it to the desktop app (native host first,
+// HTTP API as fallback).
 
 (() => {
   "use strict";
 
-  if (window.top !== window.self) return; // avoid duplicated bars from iframes
+  if (window.top !== window.self) return;
 
   const JSON_OK = (v) => !v || v === undefined || v === null || v === "";
 
@@ -20,7 +21,8 @@
     "dlive.tv",
   ];
 
-  const media = new Map(); // url -> { url, kind, ext, title }
+  const media = new Map();
+  let playlistInfo = null; // { url, title } when a playlist is detected
 
   function normalizeUrl(raw) {
     try {
@@ -30,7 +32,6 @@
     }
   }
 
-  // Returns { kind, ext } when the URL path ends in a media extension.
   function mediaShape(url) {
     if (!url) return null;
     const noQuery = url.split("#")[0].split("?")[0].toLowerCase();
@@ -59,15 +60,49 @@
     media.set(norm, { url: norm, kind: shape.kind, ext: shape.ext, title: filenameOf(norm) });
   }
 
-  // Whether this page is a known yt-dlp site (e.g. YouTube). For those, offer
-  // the page URL itself so the desktop app can resolve the best stream.
   function isYtDlpPage() {
     const host = location.hostname.toLowerCase();
     return YTDLP_HOSTS.some((h) => host === h || host.endsWith("." + h));
   }
 
+  // Detect whether the current page is a playlist on a known site.
+  function detectPlaylist() {
+    const host = location.hostname.toLowerCase();
+    const href = location.href;
+    const params = new URLSearchParams(location.search);
+
+    // YouTube playlists
+    if (host.includes("youtube.com") || host.includes("youtu.be")) {
+      if (params.has("list")) {
+        const title = (document.title || "").replace(/ - YouTube$/, "").trim() || "YouTube Playlist";
+        return { url: href, title };
+      }
+    }
+
+    // SoundCloud sets
+    if (host.includes("soundcloud.com") && href.includes("/sets/")) {
+      const title = (document.title || "").replace(/ \| SoundCloud$/, "").trim() || "SoundCloud Set";
+      return { url: href, title };
+    }
+
+    // Spotify playlists (will be handled by yt-dlp on the app side)
+    if (host.includes("spotify.com") && href.includes("/playlist")) {
+      const title = (document.title || "").replace(/ - Spotify$/, "").trim() || "Spotify Playlist";
+      return { url: href, title };
+    }
+
+    // Apple Music playlists
+    if (host.includes("music.apple.com") && href.includes("/playlist")) {
+      const title = (document.title || "").replace(/ - Apple Music$/, "").trim() || "Apple Music Playlist";
+      return { url: href, title };
+    }
+
+    return null;
+  }
+
   function collect() {
     media.clear();
+    playlistInfo = null;
 
     for (const el of document.querySelectorAll("video, audio")) {
       if (el.currentSrc) addMedia(el.currentSrc);
@@ -80,7 +115,10 @@
       addMedia(a.href || a.href);
     }
 
-    if (media.size === 0 && isYtDlpPage()) {
+    // Detect playlists on known sites
+    playlistInfo = detectPlaylist();
+
+    if (media.size === 0 && isYtDlpPage() && !playlistInfo) {
       media.set(location.href, {
         url: location.href,
         kind: "video",
@@ -97,7 +135,9 @@
   let lastKey = "";
 
   function mediaKey() {
-    return Array.from(media.values()).map((m) => m.url).join("|");
+    const parts = Array.from(media.values()).map((m) => m.url);
+    if (playlistInfo) parts.push("playlist:" + playlistInfo.url);
+    return parts.join("|");
   }
 
   function injectStyles() {
@@ -126,7 +166,7 @@
         padding: 0 4px; border-radius: 4px;
       }
       #copperDmBar .cdm-close:hover { color: #fff; background: rgba(255,255,255,.08); }
-      #copperDmBar .cdm-items { max-height: 260px; overflow-y: auto; }
+      #copperDmBar .cdm-items { max-height: 320px; overflow-y: auto; }
       #copperDmBar .cdm-row {
         display: flex; align-items: center; gap: 8px;
         padding: 7px 10px; border-top: 1px solid #3c4043;
@@ -144,10 +184,21 @@
       #copperDmBar .cdm-btn:hover { background: #b5571a; }
       #copperDmBar .cdm-btn.cdm-audio { background: #1a73e8; }
       #copperDmBar .cdm-btn.cdm-audio:hover { background: #1765cc; }
+      #copperDmBar .cdm-btn.cdm-playlist { background: #7b1fa2; }
+      #copperDmBar .cdm-btn.cdm-playlist:hover { background: #6a1b9a; }
+      #copperDmBar .cdm-btn.cdm-playlist-audio { background: #0277bd; }
+      #copperDmBar .cdm-btn.cdm-playlist-audio:hover { background: #01579b; }
       #copperDmBar .cdm-btn.cdm-muted { background: #5f6368; }
       #copperDmBar .cdm-btn.cdm-muted:hover { background: #3c4043; }
       #copperDmBar .cdm-empty {
         padding: 12px; color: #9aa0a6; text-align: center;
+      }
+      #copperDmBar .cdm-separator {
+        border: none; border-top: 1px solid #5f6368; margin: 0 10px;
+      }
+      #copperDmBar .cdm-playlist-label {
+        padding: 7px 10px 2px; color: #b39ddb; font-size: 11px;
+        font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
       }
     `;
     document.documentElement.appendChild(style);
@@ -188,17 +239,71 @@
   }
 
   function render() {
-    if (!barRoot || closed || media.size === 0) {
+    if (!barRoot || closed || (media.size === 0 && !playlistInfo)) {
       hideBar();
       return;
     }
     const key = mediaKey();
-    if (key === lastKey) return; // unchanged; keep existing rows
+    if (key === lastKey) return;
     lastKey = key;
 
     const itemsEl = barRoot.querySelector(".cdm-items");
     itemsEl.textContent = "";
 
+    const send = (url, filename, format) => {
+      try {
+        chrome.runtime.sendMessage(
+          { action: "sendUrl", url, filename, format },
+          () => { void chrome.runtime.lastError; }
+        );
+      } catch (e) { /* noop */ }
+    };
+
+    // Playlist section (shown first when detected)
+    if (playlistInfo) {
+      const label = document.createElement("div");
+      label.className = "cdm-playlist-label";
+      label.textContent = "Playlist Detected";
+      itemsEl.appendChild(label);
+
+      const row = document.createElement("div");
+      row.className = "cdm-row";
+
+      const name = document.createElement("span");
+      name.className = "cdm-name";
+      name.textContent = playlistInfo.title;
+      name.title = playlistInfo.url;
+      row.appendChild(name);
+
+      const actions = document.createElement("span");
+      actions.className = "cdm-actions";
+
+      const mp4 = document.createElement("button");
+      mp4.className = "cdm-btn cdm-playlist";
+      mp4.textContent = "Playlist MP4";
+      mp4.title = "Download entire playlist as video (MP4)";
+      mp4.addEventListener("click", () => send(playlistInfo.url, playlistInfo.title, "playlist-mp4"));
+      actions.appendChild(mp4);
+
+      const mp3 = document.createElement("button");
+      mp3.className = "cdm-btn cdm-playlist-audio";
+      mp3.textContent = "Playlist MP3";
+      mp3.title = "Download entire playlist as audio (MP3)";
+      mp3.addEventListener("click", () => send(playlistInfo.url, playlistInfo.title, "playlist-mp3"));
+      actions.appendChild(mp3);
+
+      row.appendChild(actions);
+      itemsEl.appendChild(row);
+
+      // Add separator if there are also individual media items
+      if (media.size > 0) {
+        const sep = document.createElement("hr");
+        sep.className = "cdm-separator";
+        itemsEl.appendChild(sep);
+      }
+    }
+
+    // Individual media items
     const shown = Array.from(media.values()).slice(0, 4);
     const extra = media.size - shown.length;
 
@@ -215,22 +320,11 @@
       const actions = document.createElement("span");
       actions.className = "cdm-actions";
 
-      const send = (format) => {
-        try {
-          chrome.runtime.sendMessage(
-            { action: "sendUrl", url: item.url, filename: item.title, format: format },
-            () => { void chrome.runtime.lastError; }
-          );
-        } catch (e) { /* noop */ }
-      };
-
-      // Video: offer both the raw video (MP4) and an extracted audio (MP3),
-      // IDM-style. Audio sources only get the MP3 option.
       if (item.kind === "video") {
         const mp4 = document.createElement("button");
         mp4.className = "cdm-btn";
         mp4.textContent = "Download MP4";
-        mp4.addEventListener("click", () => send("mp4"));
+        mp4.addEventListener("click", () => send(item.url, item.title, "mp4"));
         actions.appendChild(mp4);
       }
 
@@ -240,7 +334,7 @@
       mp3.title = item.kind === "audio"
         ? "Download the audio file"
         : "Extract MP3 audio (requires FFmpeg)";
-      mp3.addEventListener("click", () => send("mp3"));
+      mp3.addEventListener("click", () => send(item.url, item.title, "mp3"));
       actions.appendChild(mp3);
 
       row.appendChild(actions);
@@ -265,12 +359,11 @@
   function init() {
     if (closed || barRoot) return;
     collect();
-    if (media.size === 0) return;
+    if (media.size === 0 && !playlistInfo) return;
     buildBar();
     render();
   }
 
-  // Re-scan periodically for lazy-loaded / dynamically added media.
   setInterval(() => { if (closed) return; init(); }, 2500);
 
   chrome.runtime.sendMessage({ action: "getStatus" }, (resp) => {

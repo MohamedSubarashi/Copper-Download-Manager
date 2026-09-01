@@ -5,6 +5,7 @@
 #include "utils/DefaultHandler.h"
 #include "utils/CopperLink.h"
 #include "utils/FileNameSanitizer.h"
+#include "utils/UrlDetector.h"
 #include "utils/Aria2cManager.h"
 #include "db/DatabaseManager.h"
 #include "core/LocalServer.h"
@@ -178,7 +179,7 @@ int main(int argc, char* argv[]) {
 
     QApplication app(argc, argv);
     app.setApplicationName("Copper Download Manager");
-    app.setApplicationVersion("0.5.1");
+    app.setApplicationVersion("0.5.3");
     app.setOrganizationName("Copper");
 
     Logger::instance().info("========================================");
@@ -384,8 +385,8 @@ int main(int argc, char* argv[]) {
     }
 
     for (const QString& url : pendingHttpUrls) {
-        if (url.contains("youtube.com") || url.contains("youtu.be") ||
-            url.contains("soundcloud.com") || url.contains("vimeo.com")) {
+        UrlType detected = UrlDetector::detect(url);
+        if (detected == UrlPlaylist || detected == UrlYtDlp) {
             QString savePath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
             DownloadManagerDialog dialog(SourceVideo, url, savePath, &w);
             if (dialog.exec() == QDialog::Accepted) {
@@ -407,8 +408,7 @@ int main(int argc, char* argv[]) {
     for (const QPair<QString, QString>& pair : pendingCopperDownloads) {
         const QString& url = pair.first;
         const QString& savePath = pair.second;
-        if (url.contains("youtube.com") || url.contains("youtu.be") ||
-            url.contains("soundcloud.com") || url.contains("vimeo.com")) {
+        if (UrlDetector::isYtDlpUrl(url) || UrlDetector::isPlaylistUrl(url)) {
             DownloadManager::instance().addDownload(url, "", "YtDlp");
         } else {
             DownloadManager::instance().addDownload(url, savePath, "HTTP");
