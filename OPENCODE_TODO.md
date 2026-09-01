@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.4.5
+Current version: 0.5.3
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 
@@ -99,11 +99,33 @@ The project is ready for the next milestone when the following are true:
 - [x] Browser extension to desktop integration is stable
 - [x] Torrent/media tools install and run without critical failures
 - [x] Settings and state recovery survive reopen/restart
-- [x] A basic automated regression suite exists for critical flows (31 integration cases + CI extension-lint, all green)
+- [x] A basic automated regression suite exists for critical flows (38 integration cases + CI extension-lint, all green)
 
 All Priority priorities (0-9) are complete as of this pass. Every remaining
-checkmark in this file has been verified by a build, the 31-case integration
+checkmark in this file has been verified by a build, the 38-case integration
 suite, or CI.
+
+## Completed milestone: v0.5.3 (full playlist downloads + vivid multi-type intake)
+
+- [x] **Extension playlist download (v5.2.0)**: playlist detection in `copper-bar.js`
+      (YouTube `list=` param, SoundCloud `/sets/`, Spotify `/playlist`, Apple Music
+      `/playlist`) shows a "Playlist Detected" bar with **Playlist MP4** / **Playlist MP3**
+      buttons; `background.js` adds right-click menu items "Download full playlist as
+      MP4/MP3". The full playlist URL + `format=playlist-mp4/playlist-mp3` is handed to
+      the desktop app and yt-dlp downloads the whole playlist natively (no `--no-playlist`).
+- [x] **Vivid multi-type intake**: every intake channel (CLI args, `copper://download`
+      links, `/api/download` HTTP API, native-messaging pipe) now routes via
+      `UrlDetector` instead of the old 4-domain hardcode (youtube/youtu.be/soundcloud/
+      vimeo), so **all** sites yt-dlp supports (Dailymotion, Twitch, TikTok, Reddit, etc.)
+      hit the yt-dlp engine instead of being chunked as raw HTML. The API also honors
+      `format` (mp3 / mp4 / playlist-mp3 / playlist-mp4) and emits `argumentForwarded("show")`
+      so the app window raises on every browser-initiated download (HTTP, video, playlist,
+      magnet, torrent).
+- [x] Version bumped to 0.5.3 (CMake, `main.cpp`, `app.rc`, DB User-Agent,
+      THIRD-PARTY-NOTICES, CI) and deployed to `installer/release/0.5.3/`.
+- [x] Integration suite expanded to **38** cases (playlist URL routed to YtDlp type, clear
+      failure without yt-dlp); all pass against the 0.5.3 exe.
+- [x] Added `installer/CopperDownloadManager.iss` (Inno Setup) for future MSI/EXE packaging.
 
 ## Completed milestone: extension injects through native messaging (IDM model)
 
@@ -126,11 +148,12 @@ suite, or CI.
 
 ## Suggested next milestone
 
-This pass completed all defined priorities (0-9) and the native-messaging
-injection redesign for v0.3.5. The next development pass should scope new work
-(for example: a proper installer (MSI/Inno) that ships/registers the native
-host, macOS/Linux native-host manifest + packaging verification, Chrome Web
-Store signing key so the packaged extension ID is stable, or expanded
+This pass completed all defined priorities (0-9), the native-messaging
+injection redesign (v0.3.5), and the v0.5.3 playlist + vivid-intake milestone.
+The next development pass should scope new work (for example: build and QA the
+Inno Setup installer (`installer/CopperDownloadManager.iss`) including native-host
+registration, macOS/Linux native-host manifest + packaging verification, Chrome
+Web Store signing key so the packaged extension ID is stable, or expanded
 integration coverage). See `RELEASE.md` for the QA checklist before publishing.
 
 ## Completed milestone: v0.3.6 (torrent RPC fix, User-Agent, HTTP auto-resume)
