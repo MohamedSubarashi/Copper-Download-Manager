@@ -4,6 +4,7 @@
 #include "ui/AboutDialog.h"
 #include "ui/DownloadManagerDialog.h"
 #include "ui/TorrentDetailsDialog.h"
+#include "ui/DownloadItemDelegate.h"
 #include "utils/CopperLink.h"
 #include "utils/FileNameSanitizer.h"
 #include "core/DownloadManager.h"
@@ -182,6 +183,9 @@ void MainWindow::setupUI() {
     table->setContextMenuPolicy(Qt::CustomContextMenu);
     table->setDragDropMode(QAbstractItemView::NoDragDrop);
     table->setShowGrid(false);
+
+    // Draw a live progress bar in the Progress column (IDM-style) for every row.
+    table->setItemDelegateForColumn(3, new DownloadItemDelegate(table));
 
     rightLayout->addWidget(table);
     splitter->addWidget(rightWidget);
@@ -588,6 +592,30 @@ void MainWindow::onDownloadProgress(int id, qint64 downloaded, qint64 total) {
     downloadTotalMap[id] = total;
 
     DownloadItem item = DownloadManager::instance().getDownload(id);
+
+    // Live-update the visible row(s) for this download so the progress bar and size
+    // column move smoothly between the (1s) full-table refreshes. Rows are located by
+    // the download id stored in column 0's Qt::UserRole.
+    double pct = total > 0 ? (double)downloaded / total * 100.0 : 0.0;
+    for (int row = 0; row < table->rowCount(); row++) {
+        QTableWidgetItem* nameItem = table->item(row, 0);
+        if (nameItem && nameItem->data(Qt::UserRole).toInt() == id) {
+            QTableWidgetItem* progressItem = table->item(row, 3);
+            if (progressItem) {
+                progressItem->setData(Qt::DisplayRole, (int)pct);
+                progressItem->setData(Qt::UserRole + 1, pct);
+            }
+            QTableWidgetItem* sizeItem = table->item(row, 1);
+            if (sizeItem) sizeItem->setText(formatSize(total));
+            QTableWidgetItem* etaItem = table->item(row, 5);
+            if (etaItem) {
+                qint64 remaining = total - downloaded;
+                qint64 speed = item.speed > 0 ? item.speed : 1;
+                etaItem->setText(formatEta(remaining, speed));
+            }
+        }
+    }
+
     if (item.type == "Torrent" && (item.connectedPeers > 0 || item.seeds > 0)) {
         for (int row = 0; row < table->rowCount(); row++) {
             QTableWidgetItem* nameItem = table->item(row, 0);

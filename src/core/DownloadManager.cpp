@@ -873,6 +873,17 @@ void DownloadManager::onChunkFinished(int id) {
     item.completedAt = QDateTime::currentDateTime();
     item.speed = 0;
 
+    // Detect the actual file size even when the server never supplied a
+    // Content-Length (chunked/streaming responses). The merged file on disk is the
+    // source of truth for the real size.
+    if (!item.filePath.isEmpty()) {
+        qint64 onDisk = QFileInfo(item.filePath).size();
+        if (onDisk > 0) {
+            item.totalSize = onDisk;
+            item.downloadedSize = onDisk;
+        }
+    }
+
     if (activeChunkedDownloaders.contains(id)) {
         activeChunkedDownloaders[id]->deleteLater();
         activeChunkedDownloaders.remove(id);
@@ -942,6 +953,17 @@ void DownloadManager::onYtDlpFinished(int id) {
     item.progress = 100.0;
     item.completedAt = QDateTime::currentDateTime();
     item.speed = 0;
+
+    // Completions that lack a parsed total size (e.g. yt-dlp never emitted a
+    // "NN% of XXMiB" line) still know the truth: the size of the file written to
+    // disk. Reflect that as the actual file size.
+    if (!item.filePath.isEmpty()) {
+        qint64 onDisk = QFileInfo(item.filePath).size();
+        if (onDisk > 0) {
+            item.downloadedSize = onDisk;
+            item.totalSize = onDisk;
+        }
+    }
 
     DatabaseManager::instance().updateDownload(item);
     Logger::instance().info("yt-dlp download completed: " + QString::number(id));

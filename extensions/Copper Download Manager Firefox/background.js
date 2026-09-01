@@ -1,6 +1,8 @@
 const STORAGE_KEY = "copperExtensionEnabled";
 const HOST = "com.copper.dm";
 const STATUS_PAGE = "copper.html";
+const HTTP_API = "http://127.0.0.1:24680";
+const HTTP_PING_TIMEOUT = 1500;
 
 // Sends a JSON message to the native host over native messaging. The host
 // forwards it to the desktop app over the named pipe and, if the app isn't
@@ -33,10 +35,26 @@ function isNotInstalledReply(rep) {
 }
 
 // True when the program is installed and the app is reachable (the host also
-// launches it if it isn't running).
+// launches it if it isn't running). Falls back to the desktop app's HTTP API
+// when the native host isn't registered yet (e.g. dev or portablable setups):
+// "installed" means EITHER the native host responds OR the HTTP API answers.
 async function pingCopper() {
   const rep = await sendNativeMessage({ action: "ping" });
-  return !!(rep && rep.ok);
+  if (rep && rep.ok) return true;
+
+  // Native host missing/not responding: try the app's own HTTP ping endpoint.
+  return httpPing();
+}
+
+function httpPing() {
+  return new Promise((resolve) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HTTP_PING_TIMEOUT);
+    fetch(`${HTTP_API}/api/ping`, { signal: controller.signal, cache: "no-store" })
+      .then((res) => resolve(res.ok))
+      .catch(() => resolve(false))
+      .finally(() => clearTimeout(timer));
+  });
 }
 
 function notifyCopperUnreachable() {
@@ -156,7 +174,18 @@ async function registerWithCopper() {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request && request.action === "getStatus") {
     Promise.all([getCurrentEnabledState(), pingCopper()]).then(([enabled, reachable]) => {
-      sendResponse({ enabled, reachable, installed: reachable, extensionId: chrome.runtime.id });
+      try {
+        sendResponse({ enabled, reachable, installed: reachable, extensionId: chrome.runtime.id });
+      } catch (e) { /* noop */ }
+    });
+    return true;
+  }
+
+  if (request && request.action === "getAppInstalled") {
+    pingCopper().then((installed) => {
+      try {
+        sendResponse({ installed });
+      } catch (e) { /* noop */ }
     });
     return true;
   }

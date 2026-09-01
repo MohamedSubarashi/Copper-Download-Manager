@@ -121,18 +121,15 @@ QString UrlDetector::detectContentCategory(const QString& url) {
     return "other";
 }
 
-bool UrlDetector::isAllowedByDownloadType(const QString& url, const QString& mode, const QStringList& selectedFilters) {
-    if (selectedFilters.isEmpty()) {
+bool UrlDetector::isAllowedByDownloadType(const QString& url, const QHash<QString, QString>& modes) {
+    if (modes.isEmpty()) {
         return true;
     }
 
     QString category = detectContentCategory(url);
-    if (mode == "include") {
-        return selectedFilters.contains(category) || selectedFilters.contains("all");
-    }
-    if (mode == "exclude") {
-        return !selectedFilters.contains(category) || selectedFilters.contains("all");
-    }
+    QString mode = modes.value(category, "disabled");
+    if (mode == "allow") return true;
+    if (mode == "block") return false;
     return true;
 }
 

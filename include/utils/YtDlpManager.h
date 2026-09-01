@@ -5,6 +5,7 @@
 #include <QString>
 #include <QMap>
 #include <QProcess>
+#include <QTimer>
 #include <functional>
 #include <QVector>
 #include "utils/PlaylistEntry.h"
@@ -40,8 +41,11 @@ private:
     QString getToolsDir();
     void startBinaryDownload(const QString& url, const QString& fileName);
     void processYtDlpOutput(int id);
+    void armStallWatchdog(int id);
+    void stopStallWatchdog(int id);
 
     QMap<int, QProcess*> activeProcesses;
+    QMap<int, QTimer*> stallTimers;
     bool isDownloading;
     QNetworkAccessManager* nam;
     QNetworkReply* activeReply;

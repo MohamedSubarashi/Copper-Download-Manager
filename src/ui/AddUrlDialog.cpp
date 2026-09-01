@@ -114,10 +114,14 @@ void AddUrlDialog::onAdd() {
     QString url = urlEdit->text().trimmed();
     if (url.isEmpty()) return;
 
-    QString mode = DatabaseManager::instance().getSetting("downloadTypeFilterMode", "disabled");
-    QStringList selected = DatabaseManager::instance().getSetting("downloadTypeFilterTypes", "all").split(';', Qt::SkipEmptyParts);
-    if (mode == "include" || mode == "exclude") {
-        if (!UrlDetector::isAllowedByDownloadType(url, mode, selected)) {
+    QHash<QString, QString> modes;
+    QStringList savedModes = DatabaseManager::instance().getSetting("downloadTypeFilterModes", "").split(';', Qt::SkipEmptyParts);
+    for (const QString& entry : savedModes) {
+        int sep = entry.indexOf('=');
+        if (sep > 0) modes[entry.left(sep)] = entry.mid(sep + 1);
+    }
+    if (!modes.isEmpty()) {
+        if (!UrlDetector::isAllowedByDownloadType(url, modes)) {
             QMessageBox::warning(this, "Blocked by filter",
                 "This URL type is filtered out by your current download-type settings.\n\nChange the filter in Settings > Downloads to allow it.");
             return;
@@ -231,10 +235,14 @@ void AddUrlDialog::validateUrl() {
         statusLabel->clear();
         UrlType type = UrlDetector::detect(url);
         typeInfoLabel->setText("Detected: " + UrlDetector::typeToString(type));
-        QString mode = DatabaseManager::instance().getSetting("downloadTypeFilterMode", "disabled");
-        QStringList selected = DatabaseManager::instance().getSetting("downloadTypeFilterTypes", "all").split(';', Qt::SkipEmptyParts);
-        if (mode == "include" || mode == "exclude") {
-            if (!UrlDetector::isAllowedByDownloadType(url, mode, selected)) {
+        QHash<QString, QString> modes;
+        QStringList savedModes = DatabaseManager::instance().getSetting("downloadTypeFilterModes", "").split(';', Qt::SkipEmptyParts);
+        for (const QString& entry : savedModes) {
+            int sep = entry.indexOf('=');
+            if (sep > 0) modes[entry.left(sep)] = entry.mid(sep + 1);
+        }
+        if (!modes.isEmpty()) {
+            if (!UrlDetector::isAllowedByDownloadType(url, modes)) {
                 typeInfoLabel->setText(typeInfoLabel->text() + " | Filtered by type settings");
             }
         }

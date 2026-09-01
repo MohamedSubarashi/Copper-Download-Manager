@@ -3,6 +3,7 @@
 
 #include <QDialog>
 #include <QVector>
+#include <QHash>
 
 class QTabWidget;
 class QLineEdit;
@@ -39,8 +40,7 @@ private:
     QTabWidget* tabWidget;
     QLineEdit* downloadPathEdit;
     QComboBox* chunkCombo;
-    QComboBox* typeFilterModeCombo;
-    QVector<QCheckBox*> typeFilterChecks;
+    QHash<QString, QComboBox*> typeFilterModeCombos;
     QPlainTextEdit* defaultTrackerEdit;
     QLabel* ytdlpVersionLabel;
     QLabel* ffmpegVersionLabel;

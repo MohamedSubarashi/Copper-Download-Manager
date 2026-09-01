@@ -2,6 +2,7 @@
 #define URLDETECTOR_H
 
 #include <QString>
+#include <QHash>
 
 enum UrlType {
     UrlUnknown,
@@ -19,7 +20,7 @@ public:
     static bool isTorrentUrl(const QString& url);
     static bool isYtDlpUrl(const QString& url);
     static QString detectContentCategory(const QString& url);
-    static bool isAllowedByDownloadType(const QString& url, const QString& mode, const QStringList& selectedFilters);
+    static bool isAllowedByDownloadType(const QString& url, const QHash<QString, QString>& modes);
     static QString typeToString(UrlType type);
 };
 

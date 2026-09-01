@@ -241,25 +241,54 @@ void YtDlpManager::startDownload(const QString& url, const QString& outputPath, 
 
     Logger::instance().info("Starting yt-dlp download: " + url + " (format: " + format + ")");
 
-    // yt-dlp writes --progress lines to stderr when stdout is not a TTY.
+    // Drain BOTH stdout and stderr. yt-dlp routes its --progress lines to stderr when
+    // stdout is not a TTY, but it writes a large volume of other informational/merge
+    // output to stdout. If stdout is never read, the OS pipe buffer fills and yt-dlp
+    // blocks writing to stdout, which hangs the current download and stalls the freed
+    // queue (the "stops after N files" bug). processYtDlpOutput() swallows stdout.
+    connect(process, &QProcess::readyReadStandardOutput, this, [this, downloadId]() {
+        if (!activeProcesses.contains(downloadId)) return;
+        processYtDlpOutput(downloadId);
+    });
     connect(process, &QProcess::readyReadStandardError, this, [this, downloadId]() {
         if (!activeProcesses.contains(downloadId)) return;
         processYtDlpOutput(downloadId);
     });
 
+    // Stall watchdog: if a child produces no output for a long stretch it is almost
+    // certainly hung (e.g. unable to recover from a transient network wait). Force-fail
+    // it so the queued playlist advances instead of stalling forever.
+    armStallWatchdog(downloadId);
+
     connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, [this, downloadId](int exitCode, QProcess::ExitStatus) {
         if (!activeProcesses.contains(downloadId)) return;
+
+        stopStallWatchdog(downloadId);
+
+        // Drain any remaining buffered stdout/stderr before emitting so trailing
+        // progress/output lines are captured (especially useful for error messages).
+        processYtDlpOutput(downloadId);
+        QProcess* done = activeProcesses.value(downloadId);
+        QString tail = QString();
+        if (done) {
+            tail = QString::fromUtf8(done->readAllStandardOutput()).trimmed();
+            QString tailErr = QString::fromUtf8(done->readAllStandardError()).trimmed();
+            if (tailErr.isEmpty()) tailErr = tail;
+            else if (!tail.isEmpty()) tailErr = tailErr + "\n" + tail;
+            tail = tailErr;
+        }
 
         if (exitCode == 0) {
             Logger::instance().info("yt-dlp download finished: " + QString::number(downloadId));
             emit downloadFinished(downloadId);
         } else {
-            QString err = QString::fromUtf8(activeProcesses[downloadId]->readAllStandardError());
+            QString err = tail;
+            if (err.isEmpty()) err = QString("yt-dlp exited with code %1").arg(exitCode);
             Logger::instance().error("yt-dlp download failed: " + err);
             emit downloadFailed(downloadId, err);
         }
 
-        activeProcesses[downloadId]->deleteLater();
+        if (done) done->deleteLater();
         activeProcesses.remove(downloadId);
     });
 
@@ -269,8 +298,13 @@ void YtDlpManager::startDownload(const QString& url, const QString& outputPath, 
 void YtDlpManager::processYtDlpOutput(int id) {
     if (!activeProcesses.contains(id)) return;
     QProcess* process = activeProcesses[id];
-    process->setReadChannel(QProcess::StandardError);
 
+    // Any activity (data arriving on either channel) means the child is alive, so
+    // re-arm the stall watchdog.
+    armStallWatchdog(id);
+
+    // Parse --progress lines from stderr.
+    process->setReadChannel(QProcess::StandardError);
     while (process->canReadLine()) {
         QString line = QString::fromUtf8(process->readLine()).trimmed();
 
@@ -291,6 +325,52 @@ void YtDlpManager::processYtDlpOutput(int id) {
             qint64 downloaded = (qint64)((percent / 100.0) * totalBytes);
             emit downloadProgress(id, downloaded, totalBytes);
         }
+    }
+
+    // Drain all remaining stdout (and any partial stderr) so the OS pipe buffers never
+    // fill up and cause yt-dlp to block. This is the key fix for downloads stalling
+    // after a number of files.
+    (void)process->readAllStandardOutput();
+    (void)process->readAllStandardError();
+}
+
+void YtDlpManager::armStallWatchdog(int id) {
+    if (!activeProcesses.contains(id)) return;
+    QTimer*& timer = stallTimers[id];
+    if (!timer) {
+        timer = new QTimer(this);
+        timer->setSingleShot(true);
+        const int kStallTimeoutMs = 60 * 1000; // 60s with no output == stalled
+        timer->setInterval(kStallTimeoutMs);
+        connect(timer, &QTimer::timeout, this, [this, id]() {
+            if (!activeProcesses.contains(id)) return;
+            stopStallWatchdog(id);
+            QProcess* p = activeProcesses.take(id);
+            QString info;
+            if (p) {
+                info = QString::fromUtf8(p->readAllStandardOutput()).trimmed();
+                QString infoErr = QString::fromUtf8(p->readAllStandardError()).trimmed();
+                if (!infoErr.isEmpty()) info = info.isEmpty() ? infoErr : infoErr + "\n" + info;
+                if (p->state() != QProcess::NotRunning) {
+                    p->kill();
+                    p->waitForFinished(2000);
+                }
+                p->deleteLater();
+            }
+            Logger::instance().error("yt-dlp download stalled and was killed: " + QString::number(id));
+            emit downloadFailed(id,
+                "yt-dlp produced no progress for a long time and was stopped. " +
+                (info.isEmpty() ? QString() : QString("\n") + info));
+        });
+    }
+    timer->start();
+}
+
+void YtDlpManager::stopStallWatchdog(int id) {
+    if (auto it = stallTimers.find(id); it != stallTimers.end()) {
+        if (it.value()) it.value()->stop();
+        it.value()->deleteLater();
+        stallTimers.erase(it);
     }
 }
 

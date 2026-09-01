@@ -97,36 +97,40 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     chunksBoxLayout->addLayout(chunkLayout);
     downloadsLayout->addWidget(chunksGroup);
 
-    QGroupBox* fileTypeFilterGroup = new QGroupBox("Download Type Filter");
+    QGroupBox* fileTypeFilterGroup = new QGroupBox("Download Type Filter (per type)");
     QVBoxLayout* fileTypeFilterLayout = new QVBoxLayout(fileTypeFilterGroup);
 
-    QHBoxLayout* filterModeLayout = new QHBoxLayout();
-    QLabel* filterModeLabel = new QLabel("Mode:");
-    filterModeLabel->setBuddy(typeFilterModeCombo = new QComboBox());
-    filterModeLayout->addWidget(filterModeLabel);
-    typeFilterModeCombo->setAccessibleName("Download type filter mode");
-    typeFilterModeCombo->addItem("Disabled", "disabled");
-    typeFilterModeCombo->addItem("Include selected types", "include");
-    typeFilterModeCombo->addItem("Exclude selected types", "exclude");
-    QString savedFilterMode = DatabaseManager::instance().getSetting("downloadTypeFilterMode", "disabled");
-    int filterModeIndex = typeFilterModeCombo->findData(savedFilterMode);
-    if (filterModeIndex >= 0) typeFilterModeCombo->setCurrentIndex(filterModeIndex);
-    filterModeLayout->addWidget(typeFilterModeCombo);
-    fileTypeFilterLayout->addLayout(filterModeLayout);
+    // Each download category keeps its own mode, so include/exclude rules are
+    // independent per category instead of one shared global filter.
+    QStringList knownCategories = {"image", "video", "audio", "document", "archive", "executable", "torrent", "other"};
+    QStringList savedModes = DatabaseManager::instance().getSetting("downloadTypeFilterModes", "").split(';', Qt::SkipEmptyParts);
+    QHash<QString, QString> savedModeMap;
+    for (const QString& entry : savedModes) {
+        int sep = entry.indexOf('=');
+        if (sep > 0) savedModeMap[entry.left(sep)] = entry.mid(sep + 1);
+    }
 
-    QStringList knownCategories = {"all", "image", "video", "audio", "document", "archive", "executable", "torrent"};
-    QStringList savedSelected = DatabaseManager::instance().getSetting("downloadTypeFilterTypes", "all").split(';', Qt::SkipEmptyParts);
     QGridLayout* typeGrid = new QGridLayout();
-    int col = 0;
+    typeGrid->addWidget(new QLabel("Type"), 0, 0);
+    typeGrid->addWidget(new QLabel("Action"), 0, 1);
+    int row = 1;
     for (const QString& name : knownCategories) {
-        QCheckBox* check = new QCheckBox(name.toUpper()[0] + name.mid(1));
-        check->setChecked(savedSelected.isEmpty() || savedSelected.contains(name) || (savedSelected.contains("all") && name == "all"));
-        typeFilterChecks.push_back(check);
-        typeGrid->addWidget(check, col / 2, col % 2);
-        ++col;
+        QLabel* label = new QLabel(name.toUpper()[0] + name.mid(1));
+        typeGrid->addWidget(label, row, 0);
+        QComboBox* combo = new QComboBox();
+        combo->setAccessibleName("Filter action for " + name);
+        combo->addItem("Disabled", "disabled");
+        combo->addItem("Allow", "allow");
+        combo->addItem("Block", "block");
+        QString mode = savedModeMap.value(name, "disabled");
+        int idx = combo->findData(mode);
+        if (idx >= 0) combo->setCurrentIndex(idx);
+        typeFilterModeCombos[name] = combo;
+        typeGrid->addWidget(combo, row, 1);
+        ++row;
     }
     fileTypeFilterLayout->addLayout(typeGrid);
-    fileTypeFilterLayout->addWidget(new QLabel("When enabled, URLs matching the selected categories are allowed or blocked based on the chosen mode."));
+    fileTypeFilterLayout->addWidget(new QLabel("Allow lets matching URLs download; Block rejects them. Each type is configured independently. Disabled means that type is never filtered."));
     downloadsLayout->addWidget(fileTypeFilterGroup);
 
     QGroupBox* speedGroup = new QGroupBox("Speed Limiter");
@@ -528,16 +532,16 @@ void SettingsDialog::onSave() {
     DatabaseManager::instance().saveSetting("defaultTrackers", defaultTrackerEdit->toPlainText());
     DatabaseManager::instance().saveSetting("speedLimit", QString::number(speedLimitSpin->value()));
     DatabaseManager::instance().saveSetting("seedTime", QString::number(seedTimeCombo->currentData().toInt()));
-    DatabaseManager::instance().saveSetting("downloadTypeFilterMode", typeFilterModeCombo->currentData().toString());
     DatabaseManager::instance().saveSetting("userAgent", userAgentEdit->text().trimmed());
 
-    QStringList selectedFilters;
-    for (QCheckBox* check : typeFilterChecks) {
-        if (check && check->isChecked()) {
-            selectedFilters << check->text().toLower();
+    QStringList filterModes;
+    for (auto it = typeFilterModeCombos.constBegin(); it != typeFilterModeCombos.constEnd(); ++it) {
+        if (it.value()) {
+            QString mode = it.value()->currentData().toString();
+            if (mode != "disabled") filterModes << it.key() + '=' + mode;
         }
     }
-    DatabaseManager::instance().saveSetting("downloadTypeFilterTypes", selectedFilters.join(';'));
+    DatabaseManager::instance().saveSetting("downloadTypeFilterModes", filterModes.join(';'));
 
     qint64 speedLimit = (qint64)speedLimitSpin->value() * 1024;
     DownloadManager::instance().setSpeedLimit(speedLimit);
