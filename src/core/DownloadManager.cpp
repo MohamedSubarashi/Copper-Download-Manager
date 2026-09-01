@@ -68,13 +68,14 @@ DownloadManager& DownloadManager::instance() {
     return instance;
 }
 
-int DownloadManager::addDownload(const QString& url, const QString& path, const QString& type, int chunks) {
-    Logger::instance().info("Adding download: " + url + " Type: " + type);
+int DownloadManager::addDownload(const QString& url, const QString& path, const QString& type, int chunks, const QString& audioFormat) {
+    Logger::instance().info("Adding download: " + url + " Type: " + type + " Format: " + audioFormat);
 
     DownloadItem item;
     item.id = nextId++;
     item.url = url;
     item.type = type;
+    item.audioFormat = audioFormat.isEmpty() ? "mp4" : audioFormat;
     item.totalSize = 0;
     item.downloadedSize = 0;
     item.status = "Queued";
@@ -96,6 +97,13 @@ int DownloadManager::addDownload(const QString& url, const QString& path, const 
         }
     }
     if (fileName.isEmpty()) fileName = "download_" + QString::number(item.id);
+    // Audio-extraction requests (mp3) should target the final audio file name so
+    // the on-disk result matches the download-table entry.
+    if (type == "YtDlp" && item.audioFormat == "mp3") {
+        QString base = QFileInfo(fileName).completeBaseName();
+        base = sanitizeFileName(base.isEmpty() ? fileName : base, "download_" + QString::number(item.id));
+        fileName = base + ".mp3";
+    }
     item.fileName = sanitizeFileName(fileName, "download_" + QString::number(item.id));
 
     if (type == "Torrent") {
@@ -108,6 +116,13 @@ int DownloadManager::addDownload(const QString& url, const QString& path, const 
         } else {
             item.filePath = path;
         }
+    }
+
+    // A full-file path built for an mp3 extraction must also end in .mp3 so
+    // yt-dlp's --extract-audio output matches the tracked path. item.fileName
+    // is already sanitized and mp3-suffixed, so rejoin it with the directory.
+    if (type == "YtDlp" && item.audioFormat == "mp3" && !QFileInfo(item.filePath).suffix().isEmpty()) {
+        item.filePath = QFileInfo(item.filePath).path() + "/" + item.fileName;
     }
 
     QDir().mkpath(QFileInfo(item.filePath).absolutePath());
@@ -128,7 +143,7 @@ int DownloadManager::addDownload(const QString& url, const QString& path, const 
             createChunkedDownloaderFor(id, false);
         } else if (type == "YtDlp") {
             downloads[id].status = "Downloading";
-            YtDlpManager::instance().startDownload(url, item.filePath, id);
+            YtDlpManager::instance().startDownload(url, item.filePath, id, item.audioFormat);
             emit statusChanged(id, "Downloading");
         } else if (type == "Torrent") {
             downloads[id].status = "Downloading";

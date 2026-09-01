@@ -9,6 +9,7 @@ struct CopperLink {
     QString url;
     QString filename;
     QString path;
+    QString format;
     bool valid = false;
 };
 
@@ -32,6 +33,7 @@ inline CopperLink parseCopperLink(const QString& raw) {
     cl.url = decodeOnce(query.queryItemValue("url"));
     cl.filename = decodeOnce(query.queryItemValue("filename"));
     cl.path = decodeOnce(query.queryItemValue("path"));
+    cl.format = decodeOnce(query.queryItemValue("format"));
     cl.valid = !cl.url.isEmpty();
     return cl;
 }

@@ -135,6 +135,7 @@
         flex: 1; min-width: 0; color: #e8eaed;
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
+      #copperDmBar .cdm-actions { display: flex; gap: 6px; }
       #copperDmBar .cdm-btn {
         all: initial; cursor: pointer; white-space: nowrap;
         background: #d2691e; color: #fff;
@@ -143,6 +144,8 @@
       #copperDmBar .cdm-btn:hover { background: #b5571a; }
       #copperDmBar .cdm-btn.cdm-audio { background: #1a73e8; }
       #copperDmBar .cdm-btn.cdm-audio:hover { background: #1765cc; }
+      #copperDmBar .cdm-btn.cdm-muted { background: #5f6368; }
+      #copperDmBar .cdm-btn.cdm-muted:hover { background: #3c4043; }
       #copperDmBar .cdm-empty {
         padding: 12px; color: #9aa0a6; text-align: center;
       }
@@ -209,20 +212,38 @@
       name.title = item.url;
       row.appendChild(name);
 
-      const btn = document.createElement("button");
-      btn.className = "cdm-btn" + (item.kind === "audio" ? " cdm-audio" : "");
-      const label = item.kind === "audio" ? (item.ext || "mp3") : "mp4";
-      btn.textContent = "Download " + label.toUpperCase();
-      btn.addEventListener("click", () => {
+      const actions = document.createElement("span");
+      actions.className = "cdm-actions";
+
+      const send = (format) => {
         try {
           chrome.runtime.sendMessage(
-            { action: "sendUrl", url: item.url, filename: item.title },
+            { action: "sendUrl", url: item.url, filename: item.title, format: format },
             () => { void chrome.runtime.lastError; }
           );
         } catch (e) { /* noop */ }
-      });
-      row.appendChild(btn);
+      };
 
+      // Video: offer both the raw video (MP4) and an extracted audio (MP3),
+      // IDM-style. Audio sources only get the MP3 option.
+      if (item.kind === "video") {
+        const mp4 = document.createElement("button");
+        mp4.className = "cdm-btn";
+        mp4.textContent = "Download MP4";
+        mp4.addEventListener("click", () => send("mp4"));
+        actions.appendChild(mp4);
+      }
+
+      const mp3 = document.createElement("button");
+      mp3.className = item.kind === "audio" ? "cdm-btn cdm-audio" : "cdm-btn cdm-muted";
+      mp3.textContent = "Download MP3";
+      mp3.title = item.kind === "audio"
+        ? "Download the audio file"
+        : "Extract MP3 audio (requires FFmpeg)";
+      mp3.addEventListener("click", () => send("mp3"));
+      actions.appendChild(mp3);
+
+      row.appendChild(actions);
       itemsEl.appendChild(row);
     }
 

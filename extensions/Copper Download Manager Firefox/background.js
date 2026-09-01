@@ -90,12 +90,12 @@ function setCurrentEnabledState(enabled) {
   chrome.storage.local.set({ [STORAGE_KEY]: enabled });
 }
 
-async function sendToCopper(url, filename = "", path = "") {
+async function sendToCopper(url, filename = "", path = "", format = "mp4") {
   const enabled = await getCurrentEnabledState();
   if (!enabled) {
     return { accepted: false, notInstalled: false };
   }
-  const rep = await sendNativeMessage({ action: "download", url, filename, path });
+  const rep = await sendNativeMessage({ action: "download", url, filename, path, format });
   if (rep && rep.ok) {
     return { accepted: true, notInstalled: false };
   }
@@ -104,9 +104,9 @@ async function sendToCopper(url, filename = "", path = "") {
 
 // Route a URL to Copper. On success, the download is handed to the app. If the
 // program is not installed, open the 'not installed' page instead of silently
-// failing.
-async function dispatch(url, filename = "", path = "") {
-  const result = await sendToCopper(url, filename, path);
+// failing. "format" selects the output container (mp4 | mp3).
+async function dispatch(url, filename = "", path = "", format = "mp4") {
+  const result = await sendToCopper(url, filename, path, format);
   if (result.accepted) {
     return true;
   }
@@ -198,7 +198,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request && request.action === "sendUrl") {
-    dispatch(request.url, request.filename || "", request.path || "").then((done) => {
+    dispatch(request.url, request.filename || "", request.path || "", request.format || "mp4").then((done) => {
       sendResponse({ success: done });
     });
     return true;

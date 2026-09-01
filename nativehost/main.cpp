@@ -203,6 +203,7 @@ int main(int argc, char* argv[]) {
         req["url"] = msg["url"].toString();
         req["filename"] = msg["filename"].toString();
         req["path"] = msg["path"].toString();
+        req["format"] = msg["format"].toString();
         writeMessage(exchangeWithApp(req));
         return 0;
     }

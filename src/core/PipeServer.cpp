@@ -137,6 +137,8 @@ void PipeServer::handleMessage(QLocalSocket* socket, const QJsonObject& msg) {
         QString arg = "copper://download?url=" + enc(url);
         if (!filename.isEmpty()) arg += "&filename=" + enc(filename);
         if (!path.isEmpty()) arg += "&path=" + enc(path);
+        QString format = msg["format"].toString();
+        if (!format.isEmpty()) arg += "&format=" + enc(format);
 
         emit argumentForwarded(arg);
         writeReply(socket, {{"ok", true}, {"message", "Download accepted"}});

@@ -1130,9 +1130,15 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
                         if (!fullSavePath.endsWith('/') && !fullSavePath.endsWith('\\')) fullSavePath += "/";
                         fullSavePath += sanitizeFileName(cl.filename);
                     }
-                    if (cl.url.contains("youtube.com") || cl.url.contains("youtu.be") ||
+                    // format=mp3 forces the yt-dlp path: the app extracts the audio
+                    // stream (needs FFmpeg). Everything else uses the conventional
+                    // YtDlp-for-video-sites / HTTP-for-direct-links split.
+                    bool wantMp3 = cl.format.compare("mp3", Qt::CaseInsensitive) == 0;
+                    if (wantMp3 ||
+                        cl.url.contains("youtube.com") || cl.url.contains("youtu.be") ||
                         cl.url.contains("soundcloud.com") || cl.url.contains("vimeo.com")) {
-                        DownloadManager::instance().addDownload(cl.url, "", "YtDlp");
+                        DownloadManager::instance().addDownload(cl.url, fullSavePath, "YtDlp", 16,
+                            wantMp3 ? "mp3" : "mp4");
                     } else {
                         DownloadManager::instance().addDownload(cl.url, fullSavePath, "HTTP");
                     }
