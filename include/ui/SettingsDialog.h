@@ -31,8 +31,6 @@ private slots:
     void onRegisterDefaultHandler();
     void onUnregisterDefaultHandler();
     void onBrowseDownloadPath();
-    void onAddDefaultTracker();
-    void onClearDefaultTrackers();
     void accept() override;
 
 private:
@@ -41,7 +39,9 @@ private:
     QLineEdit* downloadPathEdit;
     QComboBox* chunkCombo;
     QHash<QString, QComboBox*> typeFilterModeCombos;
-    QPlainTextEdit* defaultTrackerEdit;
+    QCheckBox* formatFilterEnabledCheck;
+    QPlainTextEdit* includeExtensionsEdit;
+    QPlainTextEdit* excludeExtensionsEdit;
     QLabel* ytdlpVersionLabel;
     QLabel* ffmpegVersionLabel;
     QLabel* aria2cVersionLabel;

@@ -105,6 +105,8 @@ def validate_dir(label, path, is_firefox):
     ok &= check("nativeMessaging" in perms,
                 "nativeMessaging permission declared (extension talks to the host)")
     ok &= check("tabs" in perms, "tabs permission declared (popup 'send current page')")
+    ok &= check("downloads" in perms,
+                "downloads permission declared (auto-capture normal browser downloads)")
 
     # All referenced JS files exist on disk.
     js_refs = []
@@ -139,6 +141,12 @@ def validate_dir(label, path, is_firefox):
                     "toolbar click opens status page (action.onClicked)")
         ok &= check("openStatusTab" in bg_src,
                     "background opens the bundled status/install page")
+        ok &= check("downloads.onCreated" in bg_src,
+                    "background auto-captures normal browser downloads (downloads.onCreated)")
+        ok &= check("api/download-filters" in bg_src,
+                    "background reads the include/exclude filter config via /api/download-filters")
+        ok &= check("chrome.downloads.cancel" in bg_src or "downloads.cancel" in bg_src,
+                    "background cancels the browser download after a successful dispatch")
 
     return ok
 

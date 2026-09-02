@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.5.3
+Current version: 0.5.5
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 
@@ -126,6 +126,34 @@ suite, or CI.
 - [x] Integration suite expanded to **38** cases (playlist URL routed to YtDlp type, clear
       failure without yt-dlp); all pass against the 0.5.3 exe.
 - [x] Added `installer/CopperDownloadManager.iss` (Inno Setup) for future MSI/EXE packaging.
+
+## Completed milestone: v0.5.5 (real browser download capture + include/exclude file-format filter)
+
+- [x] **Extension now auto-captures normal browser downloads**. Previously the
+      extension only injected via context menus and the media bar, so ordinary
+      downloads never reached Copper. Added a `chrome.downloads.onCreated` listener
+      (Chrome + Firefox `background.js`) that intercepts browser downloads, dispatches
+      to Copper first, then cancels the browser's own copy (`chrome.downloads.cancel`)
+      only after a successful dispatch. Skips `blob:`/`data:` URLs and uses `format=""`
+      so direct-file captures go through the HTTP engine (not yt-dlp). New `downloads`
+      permission in both manifests; extension bumped to **5.3.0**.
+- [x] **Include/exclude file-format filter** in Settings > Downloads, enforced
+      app-wide for every intake path (manual Add URL, copper://, `/api/download`, native
+      pipe, cold-start loops). Centralized in `DownloadManager::addDownload` (returns -1
+      when blocked). Defaults: all image formats excluded; all non-image formats included.
+      URLs with no extension are always allowed.
+- [x] **Trackers tab removed** from Settings (whole tab: UI, `onAddDefaultTracker`,
+      `onClearDefaultTrackers`, and its save logic). Runtime `defaultTrackers` torrent
+      seeding is untouched.
+- [x] New `GET /api/download-filters` endpoint (`{enabled, include, exclude}`) so the
+      extension uses the exact same lists (with JS fallback defaults when unreachable).
+      LocalServer returns 400 with a clear "blocked by file-format filter" error instead
+      of the old `success:true id:-1`; `AddUrlDialog` warns on the blocked path.
+- [x] Version bumped to 0.5.5 (CMake, `main.cpp`, `app.rc`, DB User-Agent,
+      THIRD-PARTY-NOTICES, CI, Inno Setup) and deployed to `installer/release/0.5.5/`.
+- [x] Integration suite expanded to **44** cases (download-filters endpoint, excluded
+      image rejected, allowed include list) and extension validator extended for the
+      `downloads` permission + `onCreated` capture checks; all green.
 
 ## Completed milestone: extension injects through native messaging (IDM model)
 

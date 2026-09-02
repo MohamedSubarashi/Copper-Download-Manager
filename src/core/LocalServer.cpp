@@ -178,6 +178,18 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         return;
     }
 
+    if (path == "/api/download-filters" && method == "GET") {
+        QJsonObject json;
+        json["enabled"] = DownloadManager::instance().fileFormatFilterEnabled();
+        QJsonArray inc, exc;
+        for (const QString& s : DownloadManager::instance().includeFileFormats()) inc.append(s);
+        for (const QString& s : DownloadManager::instance().excludeFileFormats()) exc.append(s);
+        json["include"] = inc;
+        json["exclude"] = exc;
+        sendJsonResponse(socket, 200, json, allowedOrigin);
+        return;
+    }
+
     if (path == "/api/download" && method == "POST") {
         QJsonDocument doc = QJsonDocument::fromJson(body);
         if (!doc.isObject()) {
@@ -223,6 +235,11 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
             } else {
                 id = DownloadManager::instance().addDownload(url, fullSavePath, "HTTP");
             }
+        }
+
+        if (id < 0) {
+            sendJsonResponse(socket, 400, {{"error", "Blocked by download file-format filter"}}, allowedOrigin);
+            return;
         }
 
         // Raise the main window so the new download is immediately visible.

@@ -68,7 +68,63 @@ DownloadManager& DownloadManager::instance() {
     return instance;
 }
 
+static QStringList splitFormatList(const QString& raw) {
+    QStringList result;
+    for (const QString& token : raw.split(QRegularExpression("[,;\\s]+"), Qt::SkipEmptyParts)) {
+        QString clean = token.trimmed().toLower();
+        while (clean.startsWith('.')) clean = clean.mid(1);
+        if (!clean.isEmpty()) result.append(clean);
+    }
+    return result;
+}
+
+QStringList DownloadManager::includeFileFormats() {
+    static const QStringList defaultInclude = {
+        "mp4","mkv","webm","avi","mov","wmv","flv","m4v","mpg","mpeg","ts","m2ts","3gp","ogm",
+        "mp3","wav","flac","aac","ogg","m4a","opus","wma","mid","midi","aiff",
+        "zip","rar","7z","tar","gz","bz2","xz","tgz","iso","cab",
+        "pdf","doc","docx","xls","xlsx","ppt","pptx","txt","rtf","csv","odt","ods","odp","epub","mobi","md",
+        "exe","msi","apk","deb","rpm","appimage","dmg","bat","cmd","com",
+        "torrent","ttf","otf","woff","woff2",
+        "bin","dat","db","sqlite",
+        "js","jsx","ts","tsx","json","html","css","scss","py","java","c","cpp","h","cs","go","rs","php","rb","sh"
+    };
+    QString saved = DatabaseManager::instance().getSetting("formatIncludeExtensions", "");
+    if (saved.isEmpty()) return defaultInclude;
+    return splitFormatList(saved);
+}
+
+QStringList DownloadManager::excludeFileFormats() {
+    static const QStringList defaultExclude = {
+        "png","jpg","jpeg","gif","webp","bmp","svg","ico","avif","jfif",
+        "heic","heif","tif","tiff","raw","psd","eps","ai","dng","cr2","nef","arw","exr"
+    };
+    QString saved = DatabaseManager::instance().getSetting("formatExcludeExtensions", "");
+    if (saved.isEmpty()) return defaultExclude;
+    return splitFormatList(saved);
+}
+
+bool DownloadManager::fileFormatFilterEnabled() {
+    return DatabaseManager::instance().getSetting("formatFilterEnabled", "true") == "true";
+}
+
+bool DownloadManager::isFileFormatAllowed(const QString& url) {
+    if (!fileFormatFilterEnabled()) return true;
+    QString ext = QFileInfo(QUrl(url).path()).suffix().toLower();
+    if (ext.isEmpty()) return true;
+    QStringList exclude = excludeFileFormats();
+    if (exclude.contains(ext)) return false;
+    QStringList include = includeFileFormats();
+    if (!include.isEmpty() && !include.contains(ext)) return false;
+    return true;
+}
+
 int DownloadManager::addDownload(const QString& url, const QString& path, const QString& type, int chunks, const QString& audioFormat) {
+    if (!isFileFormatAllowed(url)) {
+        Logger::instance().info("Download blocked by file-format filter: " + url);
+        return -1;
+    }
+
     Logger::instance().info("Adding download: " + url + " Type: " + type + " Format: " + audioFormat);
 
     DownloadItem item;

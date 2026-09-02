@@ -202,7 +202,11 @@ void AddUrlDialog::onAdd() {
             QString savePath = path.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) : path;
             QString type = "HTTP";
             if (typeIndex == 2) type = "YtDlp";
-            DownloadManager::instance().addDownload(url, savePath, type);
+            int id = DownloadManager::instance().addDownload(url, savePath, type);
+            if (id < 0) {
+                statusLabel->setText("Blocked by file-format filter (Settings > Downloads)");
+                return;
+            }
         }
         accept();
     }

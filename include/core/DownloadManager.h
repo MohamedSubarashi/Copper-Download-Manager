@@ -17,6 +17,11 @@ class DownloadManager : public QObject {
 public:
     static DownloadManager& instance();
 
+    static bool isFileFormatAllowed(const QString& url);
+    static bool fileFormatFilterEnabled();
+    static QStringList includeFileFormats();
+    static QStringList excludeFileFormats();
+
     int addDownload(const QString& url, const QString& path, const QString& type, int chunks = 16, const QString& audioFormat = "mp4");
     void addPlaylistDownload(const QVector<PlaylistEntry>& entries, const QString& path, const QString& type, bool useTrackNumbers = true, const QString& audioFormat = "mp4", const QString& torrentSourceUrl = "", const QString& folderName = "");
     void pauseDownload(int id);

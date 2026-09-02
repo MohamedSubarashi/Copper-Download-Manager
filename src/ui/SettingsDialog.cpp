@@ -133,6 +133,47 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     fileTypeFilterLayout->addWidget(new QLabel("Allow lets matching URLs download; Block rejects them. Each type is configured independently. Disabled means that type is never filtered."));
     downloadsLayout->addWidget(fileTypeFilterGroup);
 
+    QGroupBox* formatFilterGroup = new QGroupBox("File Format Filter");
+    QVBoxLayout* formatFilterLayout = new QVBoxLayout(formatFilterGroup);
+    formatFilterEnabledCheck = new QCheckBox("Enable file-format filter for all downloads");
+    formatFilterEnabledCheck->setChecked(DatabaseManager::instance().getSetting("formatFilterEnabled", "true") == "true");
+    formatFilterLayout->addWidget(formatFilterEnabledCheck);
+
+    QLabel* includeLabel = new QLabel("Include file formats (comma or space separated). Leave empty to allow all non-excluded formats:");
+    includeLabel->setWordWrap(true);
+    formatFilterLayout->addWidget(includeLabel);
+    includeExtensionsEdit = new QPlainTextEdit();
+    includeExtensionsEdit->setAccessibleName("Include file formats");
+    QString includeSaved = DatabaseManager::instance().getSetting("formatIncludeExtensions", "");
+    if (includeSaved.isEmpty()) {
+        includeExtensionsEdit->setPlainText("mp4, mkv, webm, avi, mov, wmv, flv, m4v, mpg, mpeg, ts, m2ts, 3gp, mp3, wav, flac, aac, ogg, m4a, opus, wma, mid, midi, aiff, zip, rar, 7z, tar, gz, bz2, xz, tgz, iso, cab, pdf, doc, docx, xls, xlsx, ppt, pptx, txt, rtf, csv, odt, ods, odp, epub, mobi, md, exe, msi, apk, deb, rpm, appimage, dmg, bat, cmd, com, torrent, ttf, otf, woff, woff2, bin, dat, db, sqlite, js, jsx, ts, tsx, json, html, css, scss, py, java, c, cpp, h, cs, go, rs, php, rb, sh");
+    } else {
+        includeExtensionsEdit->setPlainText(includeSaved);
+    }
+    includeExtensionsEdit->setMaximumHeight(80);
+    formatFilterLayout->addWidget(includeExtensionsEdit);
+
+    QLabel* excludeLabel = new QLabel("Exclude file formats (blocked even if in the include list):");
+    excludeLabel->setWordWrap(true);
+    formatFilterLayout->addWidget(excludeLabel);
+    excludeExtensionsEdit = new QPlainTextEdit();
+    excludeExtensionsEdit->setAccessibleName("Exclude file formats");
+    QString excludeSaved = DatabaseManager::instance().getSetting("formatExcludeExtensions", "");
+    if (excludeSaved.isEmpty()) {
+        excludeExtensionsEdit->setPlainText("png, jpg, jpeg, gif, webp, bmp, svg, ico, avif, jfif, heic, heif, tif, tiff, raw, psd, eps, ai, dng, cr2, nef, arw");
+    } else {
+        excludeExtensionsEdit->setPlainText(excludeSaved);
+    }
+    excludeExtensionsEdit->setMaximumHeight(80);
+    formatFilterLayout->addWidget(excludeExtensionsEdit);
+
+    QLabel* formatFilterHint = new QLabel("Applied to every download path (manual Add URL, copper://, the API, and the browser extension). URLs with no file extension are always allowed.");
+    formatFilterHint->setWordWrap(true);
+    formatFilterHint->setStyleSheet("color: gray; font-size: 11px;");
+    formatFilterLayout->addWidget(formatFilterHint);
+
+    downloadsLayout->addWidget(formatFilterGroup);
+
     QGroupBox* speedGroup = new QGroupBox("Speed Limiter");
     QVBoxLayout* speedBoxLayout = new QVBoxLayout(speedGroup);
     QHBoxLayout* speedLayout = new QHBoxLayout();
@@ -317,34 +358,6 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     licensesLayout->addWidget(licensesText);
     tabWidget->addTab(licensesTab, "Licenses");
 
-    // Trackers Tab
-    QWidget* trackersTab = new QWidget();
-    QVBoxLayout* trackersLayout = new QVBoxLayout(trackersTab);
-
-    QGroupBox* defaultTrackersGroup = new QGroupBox("Default Torrent Trackers");
-    QVBoxLayout* defaultTrackersLayout = new QVBoxLayout(defaultTrackersGroup);
-    QLabel* trackersInfo = new QLabel("These trackers will be added to all new torrent downloads:");
-    trackersInfo->setWordWrap(true);
-    defaultTrackersLayout->addWidget(trackersInfo);
-    defaultTrackerEdit = new QPlainTextEdit();
-    defaultTrackerEdit->setPlaceholderText("Enter one tracker URL per line...\n\nExample:\nudp://tracker.opentrackr.org:1337/announce\nudp://open.stealth.si:80/announce");
-    defaultTrackerEdit->setMinimumHeight(150);
-    defaultTrackerEdit->setPlainText(DatabaseManager::instance().getSetting("defaultTrackers", ""));
-    defaultTrackersLayout->addWidget(defaultTrackerEdit);
-
-    QHBoxLayout* trackerBtnLayout = new QHBoxLayout();
-    QPushButton* addDefaultTrackerBtn = new QPushButton("Add");
-    connect(addDefaultTrackerBtn, &QPushButton::clicked, this, &SettingsDialog::onAddDefaultTracker);
-    QPushButton* clearDefaultTrackersBtn = new QPushButton("Clear All");
-    connect(clearDefaultTrackersBtn, &QPushButton::clicked, this, &SettingsDialog::onClearDefaultTrackers);
-    trackerBtnLayout->addWidget(addDefaultTrackerBtn);
-    trackerBtnLayout->addWidget(clearDefaultTrackersBtn);
-    defaultTrackersLayout->addLayout(trackerBtnLayout);
-    trackersLayout->addWidget(defaultTrackersGroup);
-
-    trackersLayout->addStretch();
-    tabWidget->addTab(trackersTab, "Trackers");
-
     // System Tab
     QWidget* systemTab = new QWidget();
     QVBoxLayout* systemLayout = new QVBoxLayout(systemTab);
@@ -490,18 +503,6 @@ void SettingsDialog::onUpdateMessage(const QString& error) {
     QMessageBox::warning(this, "Update", error);
 }
 
-void SettingsDialog::onClearDefaultTrackers() {
-    defaultTrackerEdit->clear();
-}
-
-void SettingsDialog::onAddDefaultTracker() {
-    QString current = defaultTrackerEdit->toPlainText();
-    if (!current.endsWith("\n") && !current.isEmpty()) {
-        defaultTrackerEdit->setPlainText(current + "\n");
-    }
-    defaultTrackerEdit->setFocus();
-}
-
 void SettingsDialog::onRegisterDefaultHandler() {
     DefaultHandler::instance().registerAsDefault();
     handlerStatusLabel->setText("Registered as default downloader");
@@ -529,10 +530,13 @@ void SettingsDialog::accept() {
 void SettingsDialog::onSave() {
     DatabaseManager::instance().saveSetting("downloadPath", downloadPathEdit->text());
     DatabaseManager::instance().saveSetting("chunks", chunkCombo->currentText());
-    DatabaseManager::instance().saveSetting("defaultTrackers", defaultTrackerEdit->toPlainText());
     DatabaseManager::instance().saveSetting("speedLimit", QString::number(speedLimitSpin->value()));
     DatabaseManager::instance().saveSetting("seedTime", QString::number(seedTimeCombo->currentData().toInt()));
     DatabaseManager::instance().saveSetting("userAgent", userAgentEdit->text().trimmed());
+
+    DatabaseManager::instance().saveSetting("formatFilterEnabled", formatFilterEnabledCheck->isChecked() ? "true" : "false");
+    DatabaseManager::instance().saveSetting("formatIncludeExtensions", includeExtensionsEdit->toPlainText());
+    DatabaseManager::instance().saveSetting("formatExcludeExtensions", excludeExtensionsEdit->toPlainText());
 
     QStringList filterModes;
     for (auto it = typeFilterModeCombos.constBegin(); it != typeFilterModeCombos.constEnd(); ++it) {

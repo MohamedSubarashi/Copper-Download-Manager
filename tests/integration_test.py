@@ -324,6 +324,23 @@ def main():
         check("GET /api/downloads -> 200", st == 200, f"status={st}")
         check("downloads is a list", isinstance(j.get("downloads"), list), str(j))
 
+        # --- /api/download-filters (include/exclude file-format filter) ---
+        st, j = http_request(port, "GET", "/api/download-filters")
+        check("GET /api/download-filters -> 200", st == 200, f"status={st}")
+        check("download-filters reports enabled flag",
+              isinstance(j, dict) and j.get("enabled") is True, str(j))
+        check("download-filters exposes exclude list (images blocked by default)",
+              isinstance(j.get("exclude"), list) and "jpg" in j.get("exclude", []), str(j))
+        check("download-filters exposes include list",
+              isinstance(j.get("include"), list) and "mp4" in j.get("include", []), str(j))
+
+        # --- /api/download rejects an excluded image URL (file-format filter) ---
+        st, j = http_request(port, "POST", "/api/download",
+                             {"url": "https://example.com/photo.jpg", "filename": "photo.jpg", "path": ""})
+        check("POST /api/download excluded image -> 400", st == 400, f"status={st} resp={j}")
+        check("blocked image reports filter error",
+              isinstance(j, dict) and "filter" in str(j.get("error", "")).lower(), str(j))
+
         # --- /api/forward (single-instance forwarding path) ---
         st, j = http_request(port, "POST", "/api/forward", {"argument": "show"})
         check("POST /api/forward show -> 200", st == 200, f"status={st}")

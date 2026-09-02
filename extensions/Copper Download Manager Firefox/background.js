@@ -101,6 +101,71 @@ async function dispatch(url, filename = "", path = "", format = "mp4") {
   return false;
 }
 
+function normalizeExt(ext) {
+  return (ext || "").toLowerCase().replace(/^\.+/, "");
+}
+
+function extOfUrlOrName(url, name) {
+  const src = (name || "").split(/[\\/]/).pop() || url || "";
+  const m = src.match(/\.([a-z0-9]+)(?:$|[?#])/i);
+  return m ? normalizeExt(m[1]) : "";
+}
+
+const FILTER_CACHE_TTL = 30000;
+let filterCache = { ts: 0, data: null };
+
+const DEFAULT_EXCLUDE = "png jpg jpeg gif webp bmp svg ico avif jfif heic heif tif tiff raw psd eps ai dng cr2 nef arw exr".split(/\s+/);
+const DEFAULT_INCLUDE = "mp4 mkv webm avi mov wmv flv m4v mpg mpeg ts m2ts 3gp ogm mp3 wav flac aac ogg m4a opus wma mid midi aiff zip rar 7z tar gz bz2 xz tgz iso cab pdf doc docx xls xlsx ppt pptx txt rtf csv odt ods odp epub mobi md exe msi apk deb rpm appimage dmg bat cmd com torrent ttf otf woff woff2 js jsx ts tsx json html css scss py java c cpp h cs go rs php rb sh bin dat db sqlite".split(/\s+/);
+
+async function fetchFilterConfig() {
+  const now = Date.now();
+  if (filterCache.data && now - filterCache.ts < FILTER_CACHE_TTL) return filterCache.data;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1200);
+    const res = await fetch(`${HTTP_API}/api/download-filters`, { signal: controller.signal, cache: "no-store" });
+    clearTimeout(timer);
+    if (res.ok) {
+      const j = await res.json();
+      const cfg = {
+        enabled: j.enabled !== false,
+        include: (j.include || []).map(normalizeExt).filter(Boolean),
+        exclude: (j.exclude || []).map(normalizeExt).filter(Boolean),
+      };
+      filterCache = { ts: now, data: cfg };
+      return cfg;
+    }
+  } catch (e) {}
+  const fallback = filterCache.data || { enabled: true, include: DEFAULT_INCLUDE.slice(), exclude: DEFAULT_EXCLUDE.slice() };
+  return fallback;
+}
+
+function shouldCaptureExtension(ext, cfg) {
+  if (!cfg.enabled) return true;
+  const e = normalizeExt(ext);
+  if (!e) return true;
+  if (cfg.exclude.includes(e)) return false;
+  if (cfg.include.length > 0 && !cfg.include.includes(e)) return false;
+  return true;
+}
+
+chrome.downloads.onCreated.addListener((item) => {
+  getCurrentEnabledState().then((enabled) => {
+    if (!enabled) return;
+    if (!item || !item.url || item.url.startsWith("blob:") || item.url.startsWith("data:")) return;
+    const ext = extOfUrlOrName(item.url, item.filename || "");
+    fetchFilterConfig().then((cfg) => {
+      if (!shouldCaptureExtension(ext, cfg)) return;
+      const downloadName = (item.filename || "").split(/[\\/]/).pop() || "";
+      sendToCopper(item.url, downloadName, "", "").then((result) => {
+        if (result.accepted) {
+          try { chrome.downloads.cancel(item.id, () => {}); } catch (e) {}
+        }
+      });
+    });
+  });
+});
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get([STORAGE_KEY], (items) => {
     if (items[STORAGE_KEY] === undefined) {
