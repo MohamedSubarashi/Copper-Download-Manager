@@ -3,7 +3,6 @@
 
 #include <QDialog>
 #include <QVector>
-#include <QHash>
 
 class QTabWidget;
 class QLineEdit;
@@ -38,7 +37,6 @@ private:
     QTabWidget* tabWidget;
     QLineEdit* downloadPathEdit;
     QComboBox* chunkCombo;
-    QHash<QString, QComboBox*> typeFilterModeCombos;
     QCheckBox* formatFilterEnabledCheck;
     QPlainTextEdit* includeExtensionsEdit;
     QPlainTextEdit* excludeExtensionsEdit;

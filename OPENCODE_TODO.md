@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.5.5
+Current version: 0.5.6
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 
@@ -154,6 +154,24 @@ suite, or CI.
 - [x] Integration suite expanded to **44** cases (download-filters endpoint, excluded
       image rejected, allowed include list) and extension validator extended for the
       `downloads` permission + `onCreated` capture checks; all green.
+
+## Completed milestone: v0.5.6 (Formats tab + universal include/exclude file-format filter)
+
+- [x] **Removed the per-type "Download Type Filter"** (the Allow/Block per-category
+      dropdowns: `typeFilterModeCombos`, `downloadTypeFilterModes`, and
+      `UrlDetector::isAllowedByDownloadType`/`detectContentCategory`). The app now has a
+      single, universal file-format filter instead of confusing per-type rules.
+- [x] **File Format Filter moved to its own "Formats" tab** in Settings, placed between
+      the **Downloads** and **Tools** tabs, with the enable-in-all-downloads checkbox plus
+      Include (allow list) and Exclude (block list) format boxes.
+- [x] **Filter now enforced for all downloads** — centralized in
+      `DownloadManager::isFileFormatAllowed` and applied in `addDownload` **and**
+      `addChildDownload` (playlist/yt-dlp children), covering every intake path.
+      Defaults: all images excluded; all non-image formats included; a URL with no
+      extension is always allowed.
+- [x] Extension versions bumped to **5.4.0** (Chrome + Firefox) and program to **0.5.6**
+      (CMake, `main.cpp`, `app.rc`, DB User-Agent, THIRD-PARTY-NOTICES, CI, Inno Setup),
+      deployed to `installer/release/0.5.6/`.
 
 ## Completed milestone: extension injects through native messaging (IDM model)
 

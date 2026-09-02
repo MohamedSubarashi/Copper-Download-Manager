@@ -563,6 +563,10 @@ void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries,
 }
 
 void DownloadManager::addChildDownload(int parentId, const QString& url, const QString& path, const QString& type, const QString& audioFormat) {
+    if (!isFileFormatAllowed(url)) {
+        Logger::instance().info("Child download blocked by file-format filter: " + url);
+        return;
+    }
     DownloadItem child;
     child.id = nextId++;
     child.url = url;

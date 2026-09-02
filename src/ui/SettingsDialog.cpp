@@ -97,83 +97,6 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     chunksBoxLayout->addLayout(chunkLayout);
     downloadsLayout->addWidget(chunksGroup);
 
-    QGroupBox* fileTypeFilterGroup = new QGroupBox("Download Type Filter (per type)");
-    QVBoxLayout* fileTypeFilterLayout = new QVBoxLayout(fileTypeFilterGroup);
-
-    // Each download category keeps its own mode, so include/exclude rules are
-    // independent per category instead of one shared global filter.
-    QStringList knownCategories = {"image", "video", "audio", "document", "archive", "executable", "torrent", "other"};
-    QStringList savedModes = DatabaseManager::instance().getSetting("downloadTypeFilterModes", "").split(';', Qt::SkipEmptyParts);
-    QHash<QString, QString> savedModeMap;
-    for (const QString& entry : savedModes) {
-        int sep = entry.indexOf('=');
-        if (sep > 0) savedModeMap[entry.left(sep)] = entry.mid(sep + 1);
-    }
-
-    QGridLayout* typeGrid = new QGridLayout();
-    typeGrid->addWidget(new QLabel("Type"), 0, 0);
-    typeGrid->addWidget(new QLabel("Action"), 0, 1);
-    int row = 1;
-    for (const QString& name : knownCategories) {
-        QLabel* label = new QLabel(name.toUpper()[0] + name.mid(1));
-        typeGrid->addWidget(label, row, 0);
-        QComboBox* combo = new QComboBox();
-        combo->setAccessibleName("Filter action for " + name);
-        combo->addItem("Disabled", "disabled");
-        combo->addItem("Allow", "allow");
-        combo->addItem("Block", "block");
-        QString mode = savedModeMap.value(name, "disabled");
-        int idx = combo->findData(mode);
-        if (idx >= 0) combo->setCurrentIndex(idx);
-        typeFilterModeCombos[name] = combo;
-        typeGrid->addWidget(combo, row, 1);
-        ++row;
-    }
-    fileTypeFilterLayout->addLayout(typeGrid);
-    fileTypeFilterLayout->addWidget(new QLabel("Allow lets matching URLs download; Block rejects them. Each type is configured independently. Disabled means that type is never filtered."));
-    downloadsLayout->addWidget(fileTypeFilterGroup);
-
-    QGroupBox* formatFilterGroup = new QGroupBox("File Format Filter");
-    QVBoxLayout* formatFilterLayout = new QVBoxLayout(formatFilterGroup);
-    formatFilterEnabledCheck = new QCheckBox("Enable file-format filter for all downloads");
-    formatFilterEnabledCheck->setChecked(DatabaseManager::instance().getSetting("formatFilterEnabled", "true") == "true");
-    formatFilterLayout->addWidget(formatFilterEnabledCheck);
-
-    QLabel* includeLabel = new QLabel("Include file formats (comma or space separated). Leave empty to allow all non-excluded formats:");
-    includeLabel->setWordWrap(true);
-    formatFilterLayout->addWidget(includeLabel);
-    includeExtensionsEdit = new QPlainTextEdit();
-    includeExtensionsEdit->setAccessibleName("Include file formats");
-    QString includeSaved = DatabaseManager::instance().getSetting("formatIncludeExtensions", "");
-    if (includeSaved.isEmpty()) {
-        includeExtensionsEdit->setPlainText("mp4, mkv, webm, avi, mov, wmv, flv, m4v, mpg, mpeg, ts, m2ts, 3gp, mp3, wav, flac, aac, ogg, m4a, opus, wma, mid, midi, aiff, zip, rar, 7z, tar, gz, bz2, xz, tgz, iso, cab, pdf, doc, docx, xls, xlsx, ppt, pptx, txt, rtf, csv, odt, ods, odp, epub, mobi, md, exe, msi, apk, deb, rpm, appimage, dmg, bat, cmd, com, torrent, ttf, otf, woff, woff2, bin, dat, db, sqlite, js, jsx, ts, tsx, json, html, css, scss, py, java, c, cpp, h, cs, go, rs, php, rb, sh");
-    } else {
-        includeExtensionsEdit->setPlainText(includeSaved);
-    }
-    includeExtensionsEdit->setMaximumHeight(80);
-    formatFilterLayout->addWidget(includeExtensionsEdit);
-
-    QLabel* excludeLabel = new QLabel("Exclude file formats (blocked even if in the include list):");
-    excludeLabel->setWordWrap(true);
-    formatFilterLayout->addWidget(excludeLabel);
-    excludeExtensionsEdit = new QPlainTextEdit();
-    excludeExtensionsEdit->setAccessibleName("Exclude file formats");
-    QString excludeSaved = DatabaseManager::instance().getSetting("formatExcludeExtensions", "");
-    if (excludeSaved.isEmpty()) {
-        excludeExtensionsEdit->setPlainText("png, jpg, jpeg, gif, webp, bmp, svg, ico, avif, jfif, heic, heif, tif, tiff, raw, psd, eps, ai, dng, cr2, nef, arw");
-    } else {
-        excludeExtensionsEdit->setPlainText(excludeSaved);
-    }
-    excludeExtensionsEdit->setMaximumHeight(80);
-    formatFilterLayout->addWidget(excludeExtensionsEdit);
-
-    QLabel* formatFilterHint = new QLabel("Applied to every download path (manual Add URL, copper://, the API, and the browser extension). URLs with no file extension are always allowed.");
-    formatFilterHint->setWordWrap(true);
-    formatFilterHint->setStyleSheet("color: gray; font-size: 11px;");
-    formatFilterLayout->addWidget(formatFilterHint);
-
-    downloadsLayout->addWidget(formatFilterGroup);
-
     QGroupBox* speedGroup = new QGroupBox("Speed Limiter");
     QVBoxLayout* speedBoxLayout = new QVBoxLayout(speedGroup);
     QHBoxLayout* speedLayout = new QHBoxLayout();
@@ -207,6 +130,54 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
 
     downloadsLayout->addStretch();
     tabWidget->addTab(downloadsTab, "Downloads");
+
+    // Formats Tab (file-format include/exclude filter, applied to every download)
+    QWidget* formatsTab = new QWidget();
+    QVBoxLayout* formatsLayout = new QVBoxLayout(formatsTab);
+
+    QGroupBox* formatFilterGroup = new QGroupBox("File Format Filter");
+    QVBoxLayout* formatFilterLayout = new QVBoxLayout(formatFilterGroup);
+    formatFilterEnabledCheck = new QCheckBox("Enable file-format filter for all downloads");
+    formatFilterEnabledCheck->setAccessibleName("Enable file-format filter for all downloads");
+    formatFilterEnabledCheck->setChecked(DatabaseManager::instance().getSetting("formatFilterEnabled", "true") == "true");
+    formatFilterLayout->addWidget(formatFilterEnabledCheck);
+
+    QLabel* includeLabel = new QLabel("Allow these file formats (comma or space separated). Leave empty to allow every format except the excluded ones:");
+    includeLabel->setWordWrap(true);
+    formatFilterLayout->addWidget(includeLabel);
+    includeExtensionsEdit = new QPlainTextEdit();
+    includeExtensionsEdit->setAccessibleName("Include file formats");
+    QString includeSaved = DatabaseManager::instance().getSetting("formatIncludeExtensions", "");
+    if (includeSaved.isEmpty()) {
+        includeExtensionsEdit->setPlainText("mp4, mkv, webm, avi, mov, wmv, flv, m4v, mpg, mpeg, ts, m2ts, 3gp, mp3, wav, flac, aac, ogg, m4a, opus, wma, mid, midi, aiff, zip, rar, 7z, tar, gz, bz2, xz, tgz, iso, cab, pdf, doc, docx, xls, xlsx, ppt, pptx, txt, rtf, csv, odt, ods, odp, epub, mobi, md, exe, msi, apk, deb, rpm, appimage, dmg, bat, cmd, com, torrent, ttf, otf, woff, woff2, bin, dat, db, sqlite, js, jsx, ts, tsx, json, html, css, scss, py, java, c, cpp, h, cs, go, rs, php, rb, sh");
+    } else {
+        includeExtensionsEdit->setPlainText(includeSaved);
+    }
+    includeExtensionsEdit->setMaximumHeight(80);
+    formatFilterLayout->addWidget(includeExtensionsEdit);
+
+    QLabel* excludeLabel = new QLabel("Block these file formats (always blocked, even if listed in the allow list):");
+    excludeLabel->setWordWrap(true);
+    formatFilterLayout->addWidget(excludeLabel);
+    excludeExtensionsEdit = new QPlainTextEdit();
+    excludeExtensionsEdit->setAccessibleName("Exclude file formats");
+    QString excludeSaved = DatabaseManager::instance().getSetting("formatExcludeExtensions", "");
+    if (excludeSaved.isEmpty()) {
+        excludeExtensionsEdit->setPlainText("png, jpg, jpeg, gif, webp, bmp, svg, ico, avif, jfif, heic, heif, tif, tiff, raw, psd, eps, ai, dng, cr2, nef, arw");
+    } else {
+        excludeExtensionsEdit->setPlainText(excludeSaved);
+    }
+    excludeExtensionsEdit->setMaximumHeight(80);
+    formatFilterLayout->addWidget(excludeExtensionsEdit);
+
+    QLabel* formatFilterHint = new QLabel("Applied to every download path (manual Add URL, copper://, the API, and the browser extension). The Include list allows only the formats listed; the Exclude list always blocks. A URL with no file extension is always allowed.");
+    formatFilterHint->setWordWrap(true);
+    formatFilterHint->setStyleSheet("color: gray; font-size: 11px;");
+    formatFilterLayout->addWidget(formatFilterHint);
+
+    formatsLayout->addWidget(formatFilterGroup);
+    formatsLayout->addStretch();
+    tabWidget->addTab(formatsTab, "Formats");
 
     // Tools Tab
     QWidget* toolsTab = new QWidget();
@@ -537,15 +508,6 @@ void SettingsDialog::onSave() {
     DatabaseManager::instance().saveSetting("formatFilterEnabled", formatFilterEnabledCheck->isChecked() ? "true" : "false");
     DatabaseManager::instance().saveSetting("formatIncludeExtensions", includeExtensionsEdit->toPlainText());
     DatabaseManager::instance().saveSetting("formatExcludeExtensions", excludeExtensionsEdit->toPlainText());
-
-    QStringList filterModes;
-    for (auto it = typeFilterModeCombos.constBegin(); it != typeFilterModeCombos.constEnd(); ++it) {
-        if (it.value()) {
-            QString mode = it.value()->currentData().toString();
-            if (mode != "disabled") filterModes << it.key() + '=' + mode;
-        }
-    }
-    DatabaseManager::instance().saveSetting("downloadTypeFilterModes", filterModes.join(';'));
 
     qint64 speedLimit = (qint64)speedLimitSpin->value() * 1024;
     DownloadManager::instance().setSpeedLimit(speedLimit);

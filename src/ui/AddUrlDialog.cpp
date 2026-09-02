@@ -114,20 +114,6 @@ void AddUrlDialog::onAdd() {
     QString url = urlEdit->text().trimmed();
     if (url.isEmpty()) return;
 
-    QHash<QString, QString> modes;
-    QStringList savedModes = DatabaseManager::instance().getSetting("downloadTypeFilterModes", "").split(';', Qt::SkipEmptyParts);
-    for (const QString& entry : savedModes) {
-        int sep = entry.indexOf('=');
-        if (sep > 0) modes[entry.left(sep)] = entry.mid(sep + 1);
-    }
-    if (!modes.isEmpty()) {
-        if (!UrlDetector::isAllowedByDownloadType(url, modes)) {
-            QMessageBox::warning(this, "Blocked by filter",
-                "This URL type is filtered out by your current download-type settings.\n\nChange the filter in Settings > Downloads to allow it.");
-            return;
-        }
-    }
-
     int typeIndex = typeCombo->currentIndex();
     QString path = pathEdit->text();
 
@@ -239,17 +225,6 @@ void AddUrlDialog::validateUrl() {
         statusLabel->clear();
         UrlType type = UrlDetector::detect(url);
         typeInfoLabel->setText("Detected: " + UrlDetector::typeToString(type));
-        QHash<QString, QString> modes;
-        QStringList savedModes = DatabaseManager::instance().getSetting("downloadTypeFilterModes", "").split(';', Qt::SkipEmptyParts);
-        for (const QString& entry : savedModes) {
-            int sep = entry.indexOf('=');
-            if (sep > 0) modes[entry.left(sep)] = entry.mid(sep + 1);
-        }
-        if (!modes.isEmpty()) {
-            if (!UrlDetector::isAllowedByDownloadType(url, modes)) {
-                typeInfoLabel->setText(typeInfoLabel->text() + " | Filtered by type settings");
-            }
-        }
     } else {
         typeInfoLabel->setText("");
         if (url.isEmpty()) {
