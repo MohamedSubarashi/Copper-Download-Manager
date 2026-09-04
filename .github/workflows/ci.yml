@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [master, main]
+    tags: ['v*']
   pull_request:
     branches: [master, main]
 
@@ -98,3 +99,133 @@ jobs:
         with:
           name: copper-download-manager-portable-${{ matrix.qt }}
           path: installer/release/CopperDownloadManager-portable-*.zip
+
+  build-linux-deb:
+    name: Build Linux .deb (Ubuntu / Qt 6.6.3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.6.3"
+          cache: true
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Package .deb
+        run: |
+          cpack -B build --config build/CPackConfig.cmake -G DEB
+          ls -la build/*.deb
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-download-manager-deb
+          path: build/*.deb
+
+  build-arch:
+    name: Build Arch .pkg.tar.zst
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install toolchain + deps
+        run: |
+          pacman -Syu --noconfirm --needed base-devel cmake ninja qt6-base \
+            aria2 yt-dlp ffmpeg git
+      - uses: actions/checkout@v4
+
+      - name: Create PKGBUILD source tarball and build
+        run: |
+          VER="$(sed -nE 's/^project\([^ ]+ VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)"
+          echo "VER=$VER"
+          useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          cd installer/arch
+          git archive --format=tar.gz \
+            --prefix="Copper-Download-Manager-${VER}/" \
+            -o "copper-download-manager-${VER}.tar.gz" HEAD
+          chown builder:builder "copper-download-manager-${VER}.tar.gz"
+          su builder -c "cd '$GITHUB_WORKSPACE/installer/arch' && makepkg -f --noconfirm"
+          ls -la *.pkg.tar.zst
+
+      - name: Upload Arch artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-download-manager-arch
+          path: installer/arch/*.pkg.tar.zst
+
+  build-macos:
+    name: Build macOS .dmg (Qt 6.6.3)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.6.3"
+          cache: true
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Deploy Qt libs into .app bundle
+        run: |
+          "$QT_ROOT_DIR/bin/macdeployqt" \
+            build/CopperDownloadManager.app \
+            -dmg -always-overwrite || \
+          "$QT_ROOT_DIR/bin/macdeployqt" \
+            build/CopperDownloadManager.app -always-overwrite
+          ls -la build/*.dmg
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper-download-manager-dmg
+          path: build/*.dmg
+
+  release:
+    name: Publish GitHub release
+    needs: [build-linux-deb, build-arch, build-macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Build a flat list of every asset artifact to attach to the release.
+          mapfile -t ASSETS < <(find artifacts -type f)
+          echo "Found ${#ASSETS[@]} asset(s):"
+          for f in "${ASSETS[@]}"; do echo "  $f"; done
+          gh release create "$TAG" "${ASSETS[@]}" \
+            --title "Copper Download Manager $TAG" \
+            --generate-notes
+

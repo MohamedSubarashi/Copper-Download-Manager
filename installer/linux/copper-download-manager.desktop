@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Copper Download Manager
+GenericName=Download Manager
+Comment=Multi-engine download manager with a browser extension
+Exec=CopperDownloadManager %U
+Icon=copper-download-manager
+Terminal=false
+Categories=Network;FileTransfer;
+MimeType=x-scheme-handler/copper;application/x-bittorrent;x-scheme-handler/magnet;
+StartupWMClass=CopperDownloadManager

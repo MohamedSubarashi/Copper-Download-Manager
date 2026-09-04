@@ -1,0 +1,35 @@
+# Maintainer: Copper
+# Build notes:
+#   The source tarball is produced from the tagged checkout by the CI job and
+#   placed next to this PKGBUILD as copper-download-manager-<ver>.tar.gz, so
+#   `makepkg` does not re-fetch over the network. For a manual local build,
+#   `git archive --format=tar.gz --prefix=Copper-Download-Manager-$pkgver/ -o copper-download-manager-$pkgver.tar.gz v$pkgver`
+pkgname=copper-download-manager
+pkgver=0.5.6
+pkgrel=1
+pkgdesc="Copper Download Manager - multi-engine download manager with a browser extension"
+arch=('x86_64' 'aarch64')
+url="https://github.com/MohamedSubarashi/Copper-Download-Manager"
+license=('GPL3')
+depends=('qt6-base' 'libstdc++' 'aria2' 'yt-dlp' 'ffmpeg')
+makedepends=('cmake' 'ninja' 'gcc' 'qt6-base')
+optdepends=('libtorrent-rasterbar: native libtorrent torrent backend')
+source=("copper-download-manager-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cmake -B build -S "$srcdir/Copper-Download-Manager-$pkgver" \
+        -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr
+    cmake --build build
+}
+
+package() {
+    DESTDIR="$pkgdir" cmake --install build
+
+    install -Dm644 "$srcdir/Copper-Download-Manager-$pkgver/installer/linux/copper-download-manager.desktop" \
+        "$pkgdir/usr/share/applications/copper-download-manager.desktop"
+    install -Dm644 "$srcdir/Copper-Download-Manager-$pkgver/Assets/app.png" \
+        "$pkgdir/usr/share/icons/hicolor/512x512/apps/copper-download-manager.png"
+}

@@ -154,3 +154,44 @@ if(WIN32)
         COMMENT "Deploying to installer/release/${PROJECT_VERSION}/"
     )
 endif()
+
+# ---------------------------------------------------------------------------
+# Linux desktop integration (share/application .desktop + hi-res icon)
+# ---------------------------------------------------------------------------
+if(UNIX AND NOT APPLE)
+    install(FILES "${CMAKE_SOURCE_DIR}/installer/linux/copper-download-manager.desktop"
+            DESTINATION share/applications)
+    install(FILES "${CMAKE_SOURCE_DIR}/Assets/app.png"
+            DESTINATION share/icons/hicolor/512x512/apps
+            RENAME copper-download-manager.png)
+endif()
+
+# ---------------------------------------------------------------------------
+# Packaging: CPack. On Linux -> .deb; on macOS -> .dmg (DragNDrop).
+# ---------------------------------------------------------------------------
+include(CPack)
+
+set(CPACK_PACKAGE_NAME "copper-download-manager")
+set(CPACK_PACKAGE_VENDOR "Copper")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_CONTACT "Copper Download Manager")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "Copper Download Manager - multi-engine download manager with a browser extension")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/THIRD-PARTY-NOTICES.txt")
+
+if(UNIX AND NOT APPLE)
+    set(CPACK_GENERATOR "DEB")
+    # Depends on the same auxiliary binaries the app uses for its engines plus
+    # the Qt runtime pieces (base libs + the sqlite Qt Sql driver + GL for
+    # rendering). Aux downloads (yt-dlp/aria2/ffmpeg) still run from ~/.copper.
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS
+        "libqt6core6 (>= 6.2), libqt6gui6 (>= 6.2), libqt6widgets6 (>= 6.2), libqt6network6 (>= 6.2), libqt6sql6 (>= 6.2), qt6-qpa-plugins, libgl1, libegl1, libstdc++6")
+    set(CPACK_DEBIAN_PACKAGE_SECTION "net")
+    set(CPACK_DEBIAN_PACKAGE_HOMEPAGE
+        "https://github.com/MohamedSubarashi/Copper-Download-Manager")
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Copper")
+elseif(APPLE)
+    set(CPACK_GENERATOR "DragNDrop")
+    set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}/Assets/app.ico")
+    set(CPACK_DMG_DS_STORE_SETUP_SCRIPT_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+endif()
