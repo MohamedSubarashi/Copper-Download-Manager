@@ -35,3 +35,10 @@ releases/0.1.5/
 *.log
 *.zip
 *.exe
+
+# Duplicated working copies of the repo (backup clones with their own .git)
+CopperBuild/
+copperdm/
+
+# Scratch build transcript
+build-out.txt

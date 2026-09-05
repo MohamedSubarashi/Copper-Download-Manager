@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.5.6
+Current version: 0.7.0
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 
@@ -154,6 +154,29 @@ suite, or CI.
 - [x] Integration suite expanded to **44** cases (download-filters endpoint, excluded
       image rejected, allowed include list) and extension validator extended for the
       `downloads` permission + `onCreated` capture checks; all green.
+
+## Completed milestone: v0.7.0 (extension remake + reliable injection + crash fixes + tray-by-default)
+
+- [x] **Extension remade for reliable injection** while keeping the playlist + single-video
+      download bar (`copper-bar.js`: Playlist MP4/MP3, Download MP4/MP3 unchanged).
+- [x] **Native + HTTP + launch-app pipeline** in `background.js`: try native messaging, then
+      POST `http://127.0.0.1:24680/api/download`, and if Copper is offline launch it via the
+      host and retry. Bundle hardening so the bar shows even when the app isn't running yet
+      (clicking starts it), with per-dispatch success/failure feedback (badge/notification).
+- [x] **Host-config write moved to a per-user writable dir** (`Copper/copper_host_config.json`
+      under the user config dir) instead of next to the exe, fixing the Program Files
+      `copper_host_config.json` write failure; the native host reads it from there first.
+- [x] **Crash fixes:** (1) folder parents no longer count against `maxConcurrent`, so multiple
+      playlists can't deadlock children in "Queued"; (2) yt-dlp stall watchdog now uses a
+      non-blocking kill (no GUI freeze); (3) filter-blocked downloads are surfaced on the
+      copper:///forward path; (4) torrent-resume aria connections are disconnected before
+      reconnecting (no signal leak); (5) stale "Queued" children of a failed aria2 parent are
+      marked failed; (6) `parentId > 0` sentinel checks hardened to `!= -1`.
+- [x] **Close AND minimize go to the tray by default** (`minimizeToTray` default `"true"`):
+      only the explicit tray-menu Quit exits the app.
+- [x] Extension bumped to **5.5.0** (Chrome + Firefox); program bumped to **0.7.0** (CMake,
+      `main.cpp`, `app.rc`, DB User-Agent, THIRD-PARTY-NOTICES, CI, Inno Setup, PKGBUILD),
+      released on GitHub as `v0.7.0`.
 
 ## Completed milestone: v0.5.6 (Formats tab + universal include/exclude file-format filter)
 

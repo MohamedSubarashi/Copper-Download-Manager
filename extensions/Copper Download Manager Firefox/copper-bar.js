@@ -250,13 +250,28 @@
     const itemsEl = barRoot.querySelector(".cdm-items");
     itemsEl.textContent = "";
 
-    const send = (url, filename, format) => {
+    const setBtnState = (btn, text, busy) => {
+      btn.disabled = !!busy;
+      btn.textContent = text;
+    };
+
+    const send = (btn, url, filename, format, doneText) => {
+      setBtnState(btn, "Sending\u2026", true);
       try {
         chrome.runtime.sendMessage(
           { action: "sendUrl", url, filename, format },
-          () => { void chrome.runtime.lastError; }
+          (resp) => {
+            void chrome.runtime.lastError;
+            const ok = resp && resp.success;
+            setBtnState(btn, ok ? (doneText || "Sent \u2713") : "Copper off / failed", false);
+            if (ok) {
+              setTimeout(() => setBtnState(btn, doneText || "Sent \u2713", false), 1500);
+            }
+          }
         );
-      } catch (e) { /* noop */ }
+      } catch (e) {
+        setBtnState(btn, "Copper off / failed", false);
+      }
     };
 
     // Playlist section (shown first when detected)
@@ -282,14 +297,14 @@
       mp4.className = "cdm-btn cdm-playlist";
       mp4.textContent = "Playlist MP4";
       mp4.title = "Download entire playlist as video (MP4)";
-      mp4.addEventListener("click", () => send(playlistInfo.url, playlistInfo.title, "playlist-mp4"));
+      mp4.addEventListener("click", () => send(mp4, playlistInfo.url, playlistInfo.title, "playlist-mp4", "Playlist sent"));
       actions.appendChild(mp4);
 
       const mp3 = document.createElement("button");
       mp3.className = "cdm-btn cdm-playlist-audio";
       mp3.textContent = "Playlist MP3";
       mp3.title = "Download entire playlist as audio (MP3)";
-      mp3.addEventListener("click", () => send(playlistInfo.url, playlistInfo.title, "playlist-mp3"));
+      mp3.addEventListener("click", () => send(mp3, playlistInfo.url, playlistInfo.title, "playlist-mp3", "Playlist sent"));
       actions.appendChild(mp3);
 
       row.appendChild(actions);
@@ -324,7 +339,7 @@
         const mp4 = document.createElement("button");
         mp4.className = "cdm-btn";
         mp4.textContent = "Download MP4";
-        mp4.addEventListener("click", () => send(item.url, item.title, "mp4"));
+        mp4.addEventListener("click", () => send(mp4, item.url, item.title, "mp4", "MP4 sent"));
         actions.appendChild(mp4);
       }
 
@@ -334,7 +349,7 @@
       mp3.title = item.kind === "audio"
         ? "Download the audio file"
         : "Extract MP3 audio (requires FFmpeg)";
-      mp3.addEventListener("click", () => send(item.url, item.title, "mp3"));
+      mp3.addEventListener("click", () => send(mp3, item.url, item.title, "mp3", "MP3 sent"));
       actions.appendChild(mp3);
 
       row.appendChild(actions);
@@ -368,7 +383,9 @@
 
   chrome.runtime.sendMessage({ action: "getStatus" }, (resp) => {
     if (chrome.runtime.lastError || !resp) return;
-    if (!resp.enabled || !resp.installed) return;
+    // Show the bar whenever the extension is enabled, even if the desktop app
+    // is not currently running - clicking a button will launch Copper.
+    if (resp.enabled === false) return;
     init();
   });
 })();

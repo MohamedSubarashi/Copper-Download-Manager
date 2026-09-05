@@ -2,6 +2,8 @@
 #define NATIVEMESSAGING_H
 
 #include <QString>
+#include <QStandardPaths>
+#include <QDir>
 
 // Registers and refreshes the browser native-messaging host manifests so the
 // extension can talk to the desktop app via a named pipe instead of the
@@ -26,6 +28,21 @@ public:
     // Record where the host executable lives and the app launcher, so the host
     // can find and start Copper independently of the browser.
     static bool writeHostConfig();
+
+    // Per-user writable directory holding copper_host_config.json. Deterministic
+    // and identical from both the app and the native host (independent of each
+    // process's application name), so the host can always locate Copper even when
+    // the app is installed under a non-writable path (e.g. C:\Program Files\...).
+    static inline QString hostConfigPath() {
+        QString base;
+#ifdef PLATFORM_WINDOWS
+        base = qEnvironmentVariable("LOCALAPPDATA");
+        if (base.isEmpty()) base = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
+#endif
+        if (base.isEmpty())
+            base = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
+        return QDir(base).filePath("Copper/copper_host_config.json");
+    }
 
     // All browser registration locations that installManifest() may write.
     static QStringList manifestPaths();

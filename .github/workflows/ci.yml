@@ -70,7 +70,21 @@ jobs:
           assert subsystem == 2, "expected GUI subsystem, got console"
           PY
           echo "Deployed package:"
-          ls -la installer/release/0.5.6/ 2>/dev/null | head -40 || true
+          ls -la installer/release/0.7.0/ 2>/dev/null | head -40 || true
+
+      - name: Verify version resource is readable (Release only)
+        if: matrix.config == 'Release'
+        shell: pwsh
+        run: |
+          $exe = "build/CopperDownloadManager.exe"
+          $v = (Get-Item $exe).VersionInfo
+          $ver = [regex]::Match((Get-Content CMakeLists.txt -Raw), 'project\([^ ]+ VERSION ([0-9.]+)').Groups[1].Value
+          Write-Host "FileVersion: $($v.FileVersion)"
+          Write-Host "FileDescription: $($v.FileDescription)"
+          if (-not $v.FileVersion -or $v.FileVersion -ne $ver) {
+            throw "Windows cannot read the version resource (expected ${ver}, got '$($v.FileVersion)')"
+          }
+          Write-Host "Version resource OK (${ver})"
 
       - name: Package portable zip (Release only)
         if: matrix.config == 'Release'

@@ -346,21 +346,36 @@ void YtDlpManager::armStallWatchdog(int id) {
             if (!activeProcesses.contains(id)) return;
             stopStallWatchdog(id);
             QProcess* p = activeProcesses.take(id);
-            QString info;
-            if (p) {
-                info = QString::fromUtf8(p->readAllStandardOutput()).trimmed();
-                QString infoErr = QString::fromUtf8(p->readAllStandardError()).trimmed();
-                if (!infoErr.isEmpty()) info = info.isEmpty() ? infoErr : infoErr + "\n" + info;
-                if (p->state() != QProcess::NotRunning) {
-                    p->kill();
-                    p->waitForFinished(2000);
+            if (!p) return;
+            QString info = QString::fromUtf8(p->readAllStandardOutput()).trimmed();
+            QString infoErr = QString::fromUtf8(p->readAllStandardError()).trimmed();
+            if (!infoErr.isEmpty()) info = info.isEmpty() ? infoErr : infoErr + "\n" + info;
+
+            auto fail = [this, id, info]() {
+                Logger::instance().error("yt-dlp download stalled and was killed: " + QString::number(id));
+                emit downloadFailed(id,
+                    "yt-dlp produced no progress for a long time and was stopped. " +
+                    (info.isEmpty() ? QString() : QString("\n") + info));
+            };
+
+            if (p->state() != QProcess::NotRunning) {
+                p->kill();
+                // Non-blocking: never waitForFinished() on the GUI thread - the
+                // stalled child can take a while to die, and blocking here freezes
+                // the UI (and stalls the browser intake pipe). Finalize from the
+                // process's finished signal instead.
+                QObject::connect(p, &QProcess::finished, this, [fail, p](int, QProcess::ExitStatus) {
+                    fail();
+                    p->deleteLater();
+                });
+                if (p->state() == QProcess::NotRunning) {
+                    fail();
+                    p->deleteLater();
                 }
+            } else {
+                fail();
                 p->deleteLater();
             }
-            Logger::instance().error("yt-dlp download stalled and was killed: " + QString::number(id));
-            emit downloadFailed(id,
-                "yt-dlp produced no progress for a long time and was stopped. " +
-                (info.isEmpty() ? QString() : QString("\n") + info));
         });
     }
     timer->start();

@@ -150,7 +150,12 @@ QString NativeMessaging::installManifest(const QString& browser, const QStringLi
 bool NativeMessaging::writeHostConfig() {
     // A tiny JSON config telling the host where the app lives, so the host can
     // start Copper even when the browser spawns it without our app running.
-    QString host = hostExePath();
+    //
+    // Stored in the per-user writable config dir, NOT next to the .exe: when the
+    // app is installed under a protected path (e.g. C:\Program Files\...) the
+    // directory is not writable and the write would fail, breaking the host's
+    // ability to find/launch Copper from a fresh browser start.
+    const QString host = hostExePath();
     QFileInfo fi(host);
 
     QJsonObject cfg;
@@ -165,7 +170,9 @@ bool NativeMessaging::writeHostConfig() {
     reg.setValue("HostPath", fi.absolutePath());
 #endif
 
-    const QString configPath = fi.absolutePath() + "/copper_host_config.json";
+    const QString configPath = hostConfigPath();
+    QFileInfo cf(configPath);
+    QDir().mkpath(cf.absolutePath());
     QFile f(configPath);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
         Logger::instance().error("NativeMessaging: cannot write host config to " + configPath);

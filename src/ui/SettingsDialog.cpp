@@ -374,7 +374,7 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     startupBoxLayout->addWidget(startupCheck);
 
     QCheckBox* minimizeToTrayCheck = new QCheckBox("Minimize to system tray");
-    minimizeToTrayCheck->setChecked(DatabaseManager::instance().getSetting("minimizeToTray", "false") == "true");
+    minimizeToTrayCheck->setChecked(DatabaseManager::instance().getSetting("minimizeToTray", "true") == "true");
     connect(minimizeToTrayCheck, &QCheckBox::toggled, this, [](bool checked) {
         DatabaseManager::instance().saveSetting("minimizeToTray", checked ? "true" : "false");
     });

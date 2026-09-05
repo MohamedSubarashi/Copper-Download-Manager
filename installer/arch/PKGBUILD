@@ -5,7 +5,7 @@
 #   `makepkg` does not re-fetch over the network. For a manual local build,
 #   `git archive --format=tar.gz --prefix=Copper-Download-Manager-$pkgver/ -o copper-download-manager-$pkgver.tar.gz v$pkgver`
 pkgname=copper-download-manager
-pkgver=0.5.6
+pkgver=0.7.0
 pkgrel=1
 pkgdesc="Copper Download Manager - multi-engine download manager with a browser extension"
 arch=('x86_64' 'aarch64')

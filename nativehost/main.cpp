@@ -22,6 +22,7 @@
 #include <QThread>
 #include <QTimer>
 #include <memory>
+#include "utils/NativeMessaging.h"
 
 #ifdef _WIN32
 #include <io.h>
@@ -75,9 +76,11 @@ void writeMessage(const QJsonObject& obj) {
 }
 
 QString appExecutablePath() {
-    // Look for a config written next to us by the desktop app.
-    QDir dir = QDir(QCoreApplication::applicationDirPath());
-    QFile cfg(dir.filePath("copper_host_config.json"));
+    // Look for the per-user config written by the desktop app. The app writes it
+    // to a writable user dir (not next to the exe) so this works even when the
+    // app is installed under a protected path such as C:\Program Files\...
+    const QString configPath = NativeMessaging::hostConfigPath();
+    QFile cfg(configPath);
     if (cfg.open(QIODevice::ReadOnly)) {
         QJsonDocument doc = QJsonDocument::fromJson(cfg.readAll());
         QString path = doc.object()["copperExecutable"].toString();
@@ -85,6 +88,7 @@ QString appExecutablePath() {
         cfg.close();
     }
     // Fallback: sibling directory (host ships next to the app exe).
+    QDir dir = QDir(QCoreApplication::applicationDirPath());
     QString sibling = dir.filePath(
 #ifdef _WIN32
         "CopperDownloadManager.exe"

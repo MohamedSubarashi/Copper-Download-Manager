@@ -76,7 +76,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), currentFilter(0) 
         activateWindow();
     });
     trayMenu->addSeparator();
-    trayMenu->addAction(QIcon(":/icons/Delete.png"), "Quit", qApp, &QApplication::quit);
+    trayMenu->addAction(QIcon(":/icons/Delete.png"), "Quit", this, [this]() {
+        m_forceExit = true;
+        qApp->quit();
+    });
     trayIcon->setContextMenu(trayMenu);
     connect(trayIcon, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason) {
         if (reason == QSystemTrayIcon::DoubleClick || reason == QSystemTrayIcon::Trigger) {
@@ -328,17 +331,27 @@ void MainWindow::saveWindowState() {
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     saveWindowState();
-    if (trayIcon && trayIcon->isVisible()) {
-        trayIcon->hide();
+    // When minimize-to-tray is enabled (default), closing the window hides it to
+    // the tray instead of quitting. Only a real exit (explicit Quit from the tray
+    // menu) closes the app.
+    if (!m_forceExit && trayIcon && trayIcon->isVisible()
+        && DatabaseManager::instance().getSetting("minimizeToTray", "true") == "true") {
+        hide();
+        trayIcon->showMessage("Copper Download Manager", "Still running in the system tray");
+        event->ignore();
+        return;
     }
+    if (trayIcon) trayIcon->hide();
     event->accept();
 }
 
 void MainWindow::changeEvent(QEvent* event) {
     if (event->type() == QEvent::WindowStateChange) {
-        if (isMinimized() && DatabaseManager::instance().getSetting("minimizeToTray", "false") == "true") {
+        if (isMinimized() && DatabaseManager::instance().getSetting("minimizeToTray", "true") == "true") {
             hide();
-            trayIcon->showMessage("Copper Download Manager", "Minimized to system tray");
+            QTimer::singleShot(0, this, [this]() {
+                if (trayIcon) trayIcon->showMessage("Copper Download Manager", "Minimized to system tray");
+            });
             event->accept();
         }
     }
@@ -1085,16 +1098,25 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
                 if (!selected.isEmpty()) {
                     DownloadManager::instance().addPlaylistDownload(selected, outputPath, "Torrent", useTracks, fmt, source, torrentName);
                 } else {
-                    DownloadManager::instance().addDownload(source, outputPath, "Torrent");
+                    int addId = DownloadManager::instance().addDownload(source, outputPath, "Torrent");
+                    if (addId < 0) {
+                        Logger::instance().info("torrent blocked by file-format filter: " + source);
+                        statusBarWidget->showMessage("Blocked by file-format filter: " + source.left(60), 8000);
+                    }
                 }
             }
         }
     } else if (arg.startsWith("http://") || arg.startsWith("https://") || arg.startsWith("ftp://")) {
         UrlType detected = UrlDetector::detect(arg);
+        int addId = -2; // negative => not yet attempted
         if (detected == UrlPlaylist || detected == UrlYtDlp) {
-            DownloadManager::instance().addDownload(arg, "", "YtDlp");
+            addId = DownloadManager::instance().addDownload(arg, "", "YtDlp");
         } else {
-            DownloadManager::instance().addDownload(arg, "", "HTTP");
+            addId = DownloadManager::instance().addDownload(arg, "", "HTTP");
+        }
+        if (addId < 0) {
+            Logger::instance().info("forwarded download blocked by file-format filter: " + arg);
+            statusBarWidget->showMessage("Blocked by file-format filter: " + arg.left(60), 8000);
         }
     } else if (arg.startsWith("copper://")) {
         QString path = arg.mid(QString("copper://").size());
@@ -1122,7 +1144,11 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
                         if (!selected.isEmpty()) {
                             DownloadManager::instance().addPlaylistDownload(selected, outputPath, "Torrent", useTracks, fmt, source, torrentName);
                         } else {
-                            DownloadManager::instance().addDownload(source, outputPath, "Torrent");
+                            int addId = DownloadManager::instance().addDownload(source, outputPath, "Torrent");
+                            if (addId < 0) {
+                                Logger::instance().info("copper:// torrent blocked by file-format filter: " + source);
+                                statusBarWidget->showMessage("Blocked by file-format filter: " + source.left(60), 8000);
+                            }
                         }
                     }
                 } else {
@@ -1141,9 +1167,17 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
                     if (wantMp3 || wantPlaylist ||
                         UrlDetector::isYtDlpUrl(cl.url) || UrlDetector::isPlaylistUrl(cl.url)) {
                         QString audioFmt = wantMp3 || wantPlaylistMp3 ? "mp3" : "mp4";
-                        DownloadManager::instance().addDownload(cl.url, fullSavePath, "YtDlp", 16, audioFmt);
+                        int addId = DownloadManager::instance().addDownload(cl.url, fullSavePath, "YtDlp", 16, audioFmt);
+                        if (addId < 0) {
+                            Logger::instance().info("copper:// download blocked by file-format filter: " + cl.url);
+                            statusBarWidget->showMessage("Blocked by file-format filter: " + cl.url.left(60), 8000);
+                        }
                     } else {
-                        DownloadManager::instance().addDownload(cl.url, fullSavePath, "HTTP");
+                        int addId = DownloadManager::instance().addDownload(cl.url, fullSavePath, "HTTP");
+                        if (addId < 0) {
+                            Logger::instance().info("copper:// download blocked by file-format filter: " + cl.url);
+                            statusBarWidget->showMessage("Blocked by file-format filter: " + cl.url.left(60), 8000);
+                        }
                     }
                 }
             } else {

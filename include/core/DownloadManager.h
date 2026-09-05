@@ -5,6 +5,8 @@
 #include <QVector>
 #include <QMap>
 #include <QHash>
+#include <QList>
+#include <QMetaObject>
 #include <QTimer>
 #include <QProcess>
 #include "core/DownloadItem.h"
@@ -72,6 +74,10 @@ private:
 
     QMap<int, DownloadItem> downloads;
     QMap<int, ChunkedDownloader*> activeChunkedDownloaders;
+    // Live aria2 signal connections per torrent download (progress/finished/
+    // failed). Cleared on re-resume so connections never accumulate across the
+    // many times a paused/restarted torrent gets resumed.
+    QHash<int, QList<QMetaObject::Connection>> ariaConnectionHandles;
     QHash<int, qint64> lastProgressToDbMs;
     int nextId;
     int maxConcurrent;

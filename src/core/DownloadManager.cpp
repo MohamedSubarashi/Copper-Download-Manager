@@ -191,7 +191,10 @@ int DownloadManager::addDownload(const QString& url, const QString& path, const 
 
     int activeCount = 0;
     for (const DownloadItem& d : downloads) {
-        if (d.status == "Downloading") activeCount++;
+        // Folder parents (playlist/torrent containers) are not real transfers and
+        // must not consume a concurrent slot, otherwise injecting several playlists
+        // deadlocks their children in "Queued".
+        if (d.status == "Downloading" && !d.isFolder) activeCount++;
     }
 
     if (activeCount < maxConcurrent) {
@@ -343,9 +346,13 @@ void DownloadManager::restoreFromDatabase() {
         startOrder.append(item.id);
     }
 
+    int activeCount = 0;
+    for (const DownloadItem& d : downloads) {
+        if (d.status == "Downloading" && !d.isFolder) activeCount++;
+    }
     int started = 0;
     for (int id : startOrder) {
-        if (started >= maxConcurrent) break;
+        if (activeCount + started >= maxConcurrent) break;
         if (!downloads.contains(id)) continue;
         DownloadItem& item = downloads[id];
         bool isHttp = item.type == "HTTP" || item.type == "HTTPS" || item.type == "FTP";
@@ -505,6 +512,15 @@ void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries,
         } else {
             downloads[parentItem.id].status = "Failed";
             downloads[parentItem.id].error = "Failed to start aria2c";
+            // The parent never got an aria2 id: mark any children that were left
+            // "Queued" as failed too so they don't linger forever behind the
+            // failed parent.
+            for (int cid : downloads[parentItem.id].childIds) {
+                if (downloads.contains(cid)) {
+                    downloads[cid].status = "Failed";
+                    downloads[cid].error = "Failed to start aria2c";
+                }
+            }
             DatabaseManager::instance().updateDownload(downloads[parentItem.id]);
             emit downloadFailed(parentItem.id, "Failed to start aria2c");
             emit statusChanged(parentItem.id, "Failed");
@@ -591,7 +607,7 @@ void DownloadManager::addChildDownload(int parentId, const QString& url, const Q
 
     int activeCount = 0;
     for (const DownloadItem& d : downloads) {
-        if (d.status == "Downloading") activeCount++;
+        if (d.status == "Downloading" && !d.isFolder) activeCount++;
     }
 
     if (activeCount < maxConcurrent) {
@@ -683,7 +699,12 @@ void DownloadManager::resumeDownload(int id) {
         }
         if (ariaId > 0) {
             downloads[id].aria2cId = ariaId;
-            connect(&Aria2cManager::instance(), &Aria2cManager::downloadProgress, this, [this, id, ariaId](int aId, qint64 downloaded, qint64 total, qint64 spd) {
+            // Disconnect any prior live aria handlers for this download so the
+            // three connections below do not accumulate across repeated resumes.
+            for (const QMetaObject::Connection& c : ariaConnectionHandles.take(id))
+                disconnect(c);
+            QList<QMetaObject::Connection>& handles = ariaConnectionHandles[id];
+            handles << connect(&Aria2cManager::instance(), &Aria2cManager::downloadProgress, this, [this, id, ariaId](int aId, qint64 downloaded, qint64 total, qint64 spd) {
                 if (aId != ariaId || !downloads.contains(id)) return;
                 downloads[id].downloadedSize = downloaded;
                 downloads[id].totalSize = total;
@@ -726,7 +747,7 @@ void DownloadManager::resumeDownload(int id) {
                 emit downloadProgress(id, downloaded, total);
                 emit downloadSpeed(id, spd);
             });
-            connect(&Aria2cManager::instance(), &Aria2cManager::downloadFinished, this, [this, id, ariaId](int aId) {
+            handles << connect(&Aria2cManager::instance(), &Aria2cManager::downloadFinished, this, [this, id, ariaId](int aId) {
                 if (aId != ariaId || !downloads.contains(id)) return;
                 downloads[id].status = "Completed";
                 downloads[id].progress = 100.0;
@@ -743,7 +764,7 @@ void DownloadManager::resumeDownload(int id) {
                 emit statusChanged(id, "Completed");
                 startNextQueued();
             });
-            connect(&Aria2cManager::instance(), &Aria2cManager::downloadFailed, this, [this, id, ariaId](int aId, const QString& error) {
+            handles << connect(&Aria2cManager::instance(), &Aria2cManager::downloadFailed, this, [this, id, ariaId](int aId, const QString& error) {
                 if (aId != ariaId || !downloads.contains(id)) return;
                 downloads[id].status = "Failed";
                 downloads[id].error = error;
@@ -865,7 +886,9 @@ qint64 DownloadManager::getSpeedLimit() const {
 void DownloadManager::startNextQueued() {
     int activeCount = 0;
     for (const DownloadItem& d : downloads) {
-        if (d.status == "Downloading") activeCount++;
+        // Folder parents are containers, not real transfers; never count them
+        // against maxConcurrent (prevents multi-playlist deadlock).
+        if (d.status == "Downloading" && !d.isFolder) activeCount++;
     }
 
     for (int id : downloads.keys()) {
@@ -934,7 +957,7 @@ void DownloadManager::onChunkProgress(int id, qint64 downloaded, qint64 total) {
 
     emit downloadProgress(id, downloaded, total);
 
-    if (downloads[id].parentId > 0) {
+    if (downloads[id].parentId != -1) {
         updateAggregateProgress(downloads[id].parentId);
     }
 }
@@ -969,7 +992,7 @@ void DownloadManager::onChunkFinished(int id) {
     emit downloadFinished(id);
     emit statusChanged(id, "Completed");
 
-    if (item.parentId > 0) {
+    if (item.parentId != -1) {
         updateAggregateProgress(item.parentId);
     }
 
@@ -994,7 +1017,7 @@ void DownloadManager::onChunkFailed(int id, const QString& error) {
     emit downloadFailed(id, error);
     emit statusChanged(id, "Failed");
 
-    if (item.parentId > 0) {
+    if (item.parentId != -1) {
         updateAggregateProgress(item.parentId);
     }
 
@@ -1015,7 +1038,7 @@ void DownloadManager::onYtDlpProgress(int id, qint64 downloaded, qint64 total) {
 
     emit downloadProgress(id, downloaded, total);
 
-    if (downloads[id].parentId > 0) {
+    if (downloads[id].parentId != -1) {
         updateAggregateProgress(downloads[id].parentId);
     }
 }
@@ -1045,7 +1068,7 @@ void DownloadManager::onYtDlpFinished(int id) {
     emit downloadFinished(id);
     emit statusChanged(id, "Completed");
 
-    if (item.parentId > 0) {
+    if (item.parentId != -1) {
         updateAggregateProgress(item.parentId);
     }
 
@@ -1065,7 +1088,7 @@ void DownloadManager::onYtDlpFailed(int id, const QString& error) {
     emit downloadFailed(id, error);
     emit statusChanged(id, "Failed");
 
-    if (item.parentId > 0) {
+    if (item.parentId != -1) {
         updateAggregateProgress(item.parentId);
     }
 

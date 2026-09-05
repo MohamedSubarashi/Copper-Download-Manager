@@ -89,6 +89,9 @@ private:
     QSystemTrayIcon* trayIcon;
     QMenu* trayMenu;
     QMenu* contextMenu;
+    // Set when the user explicitly chooses Quit (from the tray menu) so that the
+    // next close event is treated as a real exit instead of minimizing to tray.
+    bool m_forceExit = false;
 
     int currentFilter;
     QMap<int, qint64> downloadSpeeds;

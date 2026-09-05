@@ -45,7 +45,13 @@ cmake -S . -B C:\Qt\Builds\CopperDownloadManager\rel -G Ninja ^
 cmake --build C:\Qt\Builds\CopperDownloadManager\rel
 ```
 
-> **Space-in-path caveat:** `app.rc` (Windows version/icon resource) is skipped when the source path contains spaces (e.g. `Copper Download Manager`) to avoid a MinGW `windres` preprocessing failure. The app still reports its version at runtime via `main.cpp`.
+> **Windows version/icon resource:** `app.rc` is compiled from a copy inside the
+> build tree by `windres` (invoked directly, with no include flags, so the
+> source path may contain spaces). The resulting `.rsrc` object is then
+> normalized by `tools/fix_version_resource.py` to fix a binutils 2.39 `windres`
+> quirk that otherwise makes the version invisible to Windows; the exe reliably
+> reports `FileVersion`/`ProductVersion` in Explorer and via
+> `GetFileVersionInfo`.
 
 The release build is automatically deployed to `installer/release/<version>/` (windeployqt) and the final package (Setup.exe + portable zip) is placed in `Release/`.
 

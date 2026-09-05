@@ -1,8 +1,21 @@
+// Copper Download Manager - extension background service worker.
+//
+// Reliable injection pipeline: native messaging host (preferred) -> HTTP API
+// (/api/download) fallback -> launch the desktop app and retry. The download
+// bar (copper-bar.js) for playlists and single videos sends {action:"sendUrl"};
+// context menus and auto-capture (chrome.downloads.onCreated) use the same
+// dispatch path so everything reaches Copper the same way.
+
 const STORAGE_KEY = "copperExtensionEnabled";
 const HOST = "com.copper.dm";
 const STATUS_PAGE = "copper.html";
 const HTTP_API = "http://127.0.0.1:24680";
-const HTTP_PING_TIMEOUT = 1500;
+const HTTP_TIMEOUT = 3000;
+const LAST_RESULT_KEY = "copperLastResult";
+
+// ---------------------------------------------------------------------------
+// Low-level transports
+// ---------------------------------------------------------------------------
 
 function sendNativeMessage(message) {
   return new Promise((resolve) => {
@@ -21,53 +34,49 @@ function sendNativeMessage(message) {
   });
 }
 
-function isNotInstalledReply(rep) {
-  if (!rep || rep.ok === undefined) return true;
-  if (rep.ok) return false;
-  const msg = (rep.error || "").toLowerCase();
-  return msg.includes("not found") || msg.includes("not installed");
-}
-
-async function pingCopper() {
-  const rep = await sendNativeMessage({ action: "ping" });
-  if (rep && rep.ok) return true;
-  return httpPing();
-}
-
-function httpPing() {
+function httpApi(path, method, body) {
   return new Promise((resolve) => {
+    let timer;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), HTTP_PING_TIMEOUT);
-    fetch(`${HTTP_API}/api/ping`, { signal: controller.signal, cache: "no-store" })
-      .then((res) => resolve(res.ok))
-      .catch(() => resolve(false))
+    const opts = {
+      method,
+      cache: "no-store",
+      signal: controller.signal,
+    };
+    if (body) {
+      opts.headers = { "Content-Type": "application/json" };
+      opts.body = JSON.stringify(body);
+    }
+    const t0 = Date.now();
+    fetch(`${HTTP_API}${path}`, opts)
+      .then(async (res) => {
+        let j = null;
+        try {
+          j = await res.json();
+        } catch (e) { /* non-JSON body */ }
+        resolve({
+          ok: res.ok,
+          status: res.status,
+          json: j,
+          ms: Date.now() - t0,
+        });
+      })
+      .catch((e) => {
+        resolve({ ok: false, status: 0, json: null, ms: Date.now() - t0, error: e.message });
+      })
       .finally(() => clearTimeout(timer));
+    timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT);
   });
 }
 
-function notifyCopperUnreachable() {
-  chrome.notifications.create({
-    type: "basic",
-    iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-    title: "Copper isn't reachable",
-    message:
-      "Copper Download Manager could not be reached. Make sure the native host is installed (open Copper, then try again).",
-  });
-}
-
-function openStatusTab(notInstalled) {
-  let url = chrome.runtime.getURL(STATUS_PAGE);
-  if (notInstalled) {
-    url += "?status=not-installed";
-  }
-  chrome.tabs.create({ url });
-}
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
 
 function getCurrentEnabledState() {
   return new Promise((resolve) => {
     chrome.storage.local.get([STORAGE_KEY], (items) => {
-      const value = items[STORAGE_KEY];
-      resolve(value !== false);
+      resolve(items[STORAGE_KEY] !== false);
     });
   });
 }
@@ -76,30 +85,121 @@ function setCurrentEnabledState(enabled) {
   chrome.storage.local.set({ [STORAGE_KEY]: enabled });
 }
 
+function rememberResult(ok, detail) {
+  chrome.storage.local.set({ [LAST_RESULT_KEY]: { ok, detail, at: Date.now() } });
+}
+
+// ---------------------------------------------------------------------------
+// App reachability + launch
+// ---------------------------------------------------------------------------
+
+async function httpPing() {
+  const res = await httpApi("/api/ping", "GET");
+  return res.status >= 200 && res.status < 500;
+}
+
+// Try to make the desktop app start (the native host launches it on first use).
+async function launchCopper() {
+  try {
+    await sendNativeMessage({ action: "open" });
+  } catch (e) { /* ignore */ }
+}
+
+// ---------------------------------------------------------------------------
+// Injection core
+// ---------------------------------------------------------------------------
+
+function isNotInstalledReply(rep) {
+  if (!rep || rep.ok === undefined) return true;
+  if (rep.ok) return false;
+  const msg = (rep.error || "").toLowerCase();
+  return msg.includes("not found") || msg.includes("not installed");
+}
+
+// Send one download request through every transport until one succeeds.
+// Returns {accepted, notInstalled, reason}.
 async function sendToCopper(url, filename = "", path = "", format = "mp4") {
   const enabled = await getCurrentEnabledState();
   if (!enabled) {
-    return { accepted: false, notInstalled: false };
+    return { accepted: false, notInstalled: false, reason: "disabled" };
   }
+
+  // 1) Native messaging host.
   const rep = await sendNativeMessage({ action: "download", url, filename, path, format });
   if (rep && rep.ok) {
-    return { accepted: true, notInstalled: false };
+    rememberResult(true, "native");
+    return { accepted: true, notInstalled: false, reason: "native" };
   }
-  return { accepted: false, notInstalled: isNotInstalledReply(rep) };
+  const notInstalled = isNotInstalledReply(rep);
+
+  // 2) HTTP API fallback.
+  const h = await httpApi("/api/download", "POST", {
+    url,
+    filename,
+    path,
+    format,
+  });
+  if (h.ok) {
+    rememberResult(true, "http");
+    return { accepted: true, notInstalled: false, reason: "http" };
+  }
+  // The app may be listening but rejected the download (e.g. filter). A 4xx is
+  // a definitive answer, not "unreachable" - don't launch for that.
+  const definitiveReject = h.status >= 400 && h.status <= 499;
+
+  // 3) Launch the app and retry the native host once.
+  if (!definitiveReject) {
+    await launchCopper();
+    await new Promise((r) => setTimeout(r, 900));
+    const rep2 = await sendNativeMessage({ action: "download", url, filename, path, format });
+    if (rep2 && rep2.ok) {
+      rememberResult(true, "native-after-launch");
+      return { accepted: true, notInstalled: false, reason: "native-after-launch" };
+    }
+    const h2 = await httpApi("/api/download", "POST", { url, filename, path, format });
+    if (h2.ok) {
+      rememberResult(true, "http-after-launch");
+      return { accepted: true, notInstalled: false, reason: "http-after-launch" };
+    }
+  }
+
+  rememberResult(false, definitiveReject ? "rejected" : "unreachable");
+  return { accepted: false, notInstalled: notInstalled || !definitiveReject, reason: "failed" };
 }
 
 async function dispatch(url, filename = "", path = "", format = "mp4") {
   const result = await sendToCopper(url, filename, path, format);
-  if (result.accepted) {
-    return true;
-  }
-  if (result.notInstalled) {
-    openStatusTab(true);
-  } else {
-    notifyCopperUnreachable();
-  }
+  if (result.accepted) return true;
+  notifyDispatchFailed(result);
   return false;
 }
+
+function notifyDispatchFailed(result) {
+  const title = "Copper download could not be added";
+  let message =
+    "Copper Download Manager could not be reached. Please open Copper and try again.";
+  if (result && result.reason === "rejected" && result.detail) {
+    message = "Copper rejected the download: " + result.detail;
+  }
+  try {
+    chrome.notifications.create({
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+      title,
+      message,
+    });
+  } catch (e) { /* noop */ }
+}
+
+function openStatusTab(notInstalled) {
+  let url = chrome.runtime.getURL(STATUS_PAGE);
+  if (notInstalled) url += "?status=not-installed";
+  chrome.tabs.create({ url });
+}
+
+// ---------------------------------------------------------------------------
+// File-format filter (kept in sync with the app's /api/download-filters)
+// ---------------------------------------------------------------------------
 
 function normalizeExt(ext) {
   return (ext || "").toLowerCase().replace(/^\.+/, "");
@@ -120,24 +220,18 @@ const DEFAULT_INCLUDE = "mp4 mkv webm avi mov wmv flv m4v mpg mpeg ts m2ts 3gp o
 async function fetchFilterConfig() {
   const now = Date.now();
   if (filterCache.data && now - filterCache.ts < FILTER_CACHE_TTL) return filterCache.data;
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 1200);
-    const res = await fetch(`${HTTP_API}/api/download-filters`, { signal: controller.signal, cache: "no-store" });
-    clearTimeout(timer);
-    if (res.ok) {
-      const j = await res.json();
-      const cfg = {
-        enabled: j.enabled !== false,
-        include: (j.include || []).map(normalizeExt).filter(Boolean),
-        exclude: (j.exclude || []).map(normalizeExt).filter(Boolean),
-      };
-      filterCache = { ts: now, data: cfg };
-      return cfg;
-    }
-  } catch (e) {}
-  const fallback = filterCache.data || { enabled: true, include: DEFAULT_INCLUDE.slice(), exclude: DEFAULT_EXCLUDE.slice() };
-  return fallback;
+  const res = await httpApi("/api/download-filters", "GET");
+  if (res.ok && res.json) {
+    const j = res.json;
+    const cfg = {
+      enabled: j.enabled !== false,
+      include: (j.include || []).map(normalizeExt).filter(Boolean),
+      exclude: (j.exclude || []).map(normalizeExt).filter(Boolean),
+    };
+    filterCache = { ts: now, data: cfg };
+    return cfg;
+  }
+  return filterCache.data || { enabled: true, include: DEFAULT_INCLUDE.slice(), exclude: DEFAULT_EXCLUDE.slice() };
 }
 
 function shouldCaptureExtension(ext, cfg) {
@@ -148,6 +242,10 @@ function shouldCaptureExtension(ext, cfg) {
   if (cfg.include.length > 0 && !cfg.include.includes(e)) return false;
   return true;
 }
+
+// ---------------------------------------------------------------------------
+// Auto-capture of normal browser downloads
+// ---------------------------------------------------------------------------
 
 chrome.downloads.onCreated.addListener((item) => {
   getCurrentEnabledState().then((enabled) => {
@@ -165,6 +263,10 @@ chrome.downloads.onCreated.addListener((item) => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Context menus
+// ---------------------------------------------------------------------------
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get([STORAGE_KEY], (items) => {
@@ -202,15 +304,19 @@ chrome.contextMenus.onClicked.addListener((info) => {
   }
   if (info.menuItemId === "copper-playlist-mp4") {
     const url = info.linkUrl || info.pageUrl;
-    if (url) dispatch(url, "Full Playlist", "", "playlist-mp4");
+    if (url) { dispatch(url, "Full Playlist", "", "playlist-mp4"); }
     return;
   }
   if (info.menuItemId === "copper-playlist-mp3") {
     const url = info.linkUrl || info.pageUrl;
-    if (url) dispatch(url, "Full Playlist", "", "playlist-mp3");
+    if (url) { dispatch(url, "Full Playlist", "", "playlist-mp3"); }
     return;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Status page / action + message API
+// ---------------------------------------------------------------------------
 
 chrome.action.onClicked.addListener(() => {
   openStatusTab(false);
@@ -229,7 +335,7 @@ async function registerWithCopper() {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request && request.action === "getStatus") {
-    Promise.all([getCurrentEnabledState(), pingCopper()]).then(([enabled, reachable]) => {
+    Promise.all([getCurrentEnabledState(), httpPing()]).then(([enabled, reachable]) => {
       try {
         sendResponse({ enabled, reachable, installed: reachable, extensionId: chrome.runtime.id });
       } catch (e) { /* noop */ }
@@ -238,7 +344,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request && request.action === "getAppInstalled") {
-    pingCopper().then((installed) => {
+    httpPing().then((installed) => {
       try {
         sendResponse({ installed });
       } catch (e) { /* noop */ }
@@ -261,7 +367,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request && request.action === "openCopper") {
-    pingCopper().then((running) => sendResponse({ success: running }));
+    launchCopper().then(() => sendResponse({ success: true }));
     return true;
   }
 

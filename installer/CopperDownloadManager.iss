@@ -1,5 +1,5 @@
 #define MyAppName "Copper Download Manager"
-#define MyAppVersion "0.5.6"
+#define MyAppVersion "0.7.0"
 #define MyAppPublisher "Mohamed Subarashi"
 #define MyAppExeName "CopperDownloadManager.exe"
 
@@ -28,7 +28,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "release\0.5.6\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "release\0.7.0\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

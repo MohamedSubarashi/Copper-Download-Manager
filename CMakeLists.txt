@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(CopperDownloadManager VERSION 0.5.6 LANGUAGES CXX)
+project(CopperDownloadManager VERSION 0.7.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -46,15 +46,46 @@ set(RESOURCE_FILES resources.qrc)
 set(ALL_SOURCES main.cpp ${SOURCES} ${HEADERS} ${RESOURCE_FILES})
 
 if(WIN32)
-    # Compile the version/icon resource from a copy in the (space-free) build
-    # tree. MinGW windres re-tokenizes include/argument lists and breaks when
-    # the source path contains spaces (e.g. "Copper Download Manager"). By
-    # compiling the RC from a build-tree copy we sidestep that entirely.
+    # The version/icon resource is compiled from a copy inside the build tree
+    # rather than the source tree. The build and source trees can sit under a
+    # path containing spaces (e.g. "C:\...\Copper Download Manager\..."), and
+    # MinGW windres re-tokenizes "-I <path with spaces>" into broken flag words
+    # when it forwards them to its cc1 preprocessor - even when quoted. app.rc
+    # has no #include directives (all values are literals), so it needs no
+    # include dirs at all. We therefore invoke windres DIRECTLY from a custom
+    # command with no include flags, producing a plain object file that is
+    # linked into the executable. This is robust regardless of spaces in the
+    # source or binary path.
     set(RESRC_DIR "${CMAKE_BINARY_DIR}/_resrc")
     set(RESRC_RC "${RESRC_DIR}/app.rc")
+    set(RESRC_OBJ "${RESRC_DIR}/app.rc.o")
     configure_file("${CMAKE_SOURCE_DIR}/app.rc" "${RESRC_RC}" COPYONLY)
     file(COPY "${CMAKE_SOURCE_DIR}/Assets/app.ico" DESTINATION "${RESRC_DIR}/Assets")
-    list(APPEND ALL_SOURCES "${RESRC_RC}")
+
+    # Version-tree normalization. GNU windres (binutils 2.39 and some newer
+    # MinGW trees) emits the RT_VERSION subtree with a SECOND-LEVEL *named*
+    # entry whose name string is "VS_VERSION_INFO"; Windows' version API
+    # requires a numeric language-id entry there. Windres' own object is
+    # therefore linked with a tree Windows cannot read, and every version
+    # reader (Explorer, PowerShell, GetFileVersionInfo) reports an empty
+    # version. tools/fix_version_resource.py converts that entry to id 1 in
+    # place and is deliberately a no-op when the tree is already correct, so
+    # it is safe for both broken and fixed windres versions.
+    find_program(RC_FIXER_PYTHON NAMES python3 python py)
+    if(NOT RC_FIXER_PYTHON)
+        message(FATAL_ERROR "Python is required to post-process the windres version resource; install Python or add it to PATH")
+    endif()
+    add_custom_command(
+        OUTPUT "${RESRC_OBJ}"
+        COMMAND ${CMAKE_RC_COMPILER} -O coff "${RESRC_RC}" -o "${RESRC_OBJ}"
+        COMMAND "${RC_FIXER_PYTHON}" "${CMAKE_SOURCE_DIR}/tools/fix_version_resource.py" "${RESRC_OBJ}"
+        DEPENDS "${RESRC_RC}" "${CMAKE_SOURCE_DIR}/tools/fix_version_resource.py"
+        COMMENT "Compiling Windows resource (windres + version-tree fix)"
+        VERBATIM
+    )
+    list(APPEND ALL_SOURCES "${RESRC_OBJ}")
+    # Keep a reference to the resource for the target dependency/order below.
+    set(COPPER_WINRES_OBJ "${RESRC_OBJ}")
 endif()
 
 if(APPLE)
