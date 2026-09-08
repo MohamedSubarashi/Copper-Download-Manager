@@ -79,16 +79,7 @@ static QStringList splitFormatList(const QString& raw) {
 }
 
 QStringList DownloadManager::includeFileFormats() {
-    static const QStringList defaultInclude = {
-        "mp4","mkv","webm","avi","mov","wmv","flv","m4v","mpg","mpeg","ts","m2ts","3gp","ogm",
-        "mp3","wav","flac","aac","ogg","m4a","opus","wma","mid","midi","aiff",
-        "zip","rar","7z","tar","gz","bz2","xz","tgz","iso","cab",
-        "pdf","doc","docx","xls","xlsx","ppt","pptx","txt","rtf","csv","odt","ods","odp","epub","mobi","md",
-        "exe","msi","apk","deb","rpm","appimage","dmg","bat","cmd","com",
-        "torrent","ttf","otf","woff","woff2",
-        "bin","dat","db","sqlite",
-        "js","jsx","ts","tsx","json","html","css","scss","py","java","c","cpp","h","cs","go","rs","php","rb","sh"
-    };
+    static const QStringList defaultInclude = {};
     QString saved = DatabaseManager::instance().getSetting("formatIncludeExtensions", "");
     if (saved.isEmpty()) return defaultInclude;
     return splitFormatList(saved);

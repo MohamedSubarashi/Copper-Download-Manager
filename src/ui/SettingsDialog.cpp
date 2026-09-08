@@ -149,7 +149,7 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     includeExtensionsEdit->setAccessibleName("Include file formats");
     QString includeSaved = DatabaseManager::instance().getSetting("formatIncludeExtensions", "");
     if (includeSaved.isEmpty()) {
-        includeExtensionsEdit->setPlainText("mp4, mkv, webm, avi, mov, wmv, flv, m4v, mpg, mpeg, ts, m2ts, 3gp, mp3, wav, flac, aac, ogg, m4a, opus, wma, mid, midi, aiff, zip, rar, 7z, tar, gz, bz2, xz, tgz, iso, cab, pdf, doc, docx, xls, xlsx, ppt, pptx, txt, rtf, csv, odt, ods, odp, epub, mobi, md, exe, msi, apk, deb, rpm, appimage, dmg, bat, cmd, com, torrent, ttf, otf, woff, woff2, bin, dat, db, sqlite, js, jsx, ts, tsx, json, html, css, scss, py, java, c, cpp, h, cs, go, rs, php, rb, sh");
+        includeExtensionsEdit->setPlainText("");
     } else {
         includeExtensionsEdit->setPlainText(includeSaved);
     }
@@ -366,7 +366,7 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     QGroupBox* startupGroup = new QGroupBox("Startup");
     QVBoxLayout* startupBoxLayout = new QVBoxLayout(startupGroup);
     QCheckBox* startupCheck = new QCheckBox("Start with system");
-    startupCheck->setChecked(DatabaseManager::instance().getSetting("startup", "false") == "true");
+    startupCheck->setChecked(DatabaseManager::instance().getSetting("startup", "true") == "true");
     connect(startupCheck, &QCheckBox::toggled, this, [this](bool checked) {
         DatabaseManager::instance().saveSetting("startup", checked ? "true" : "false");
         updateStartupRegistry(checked);

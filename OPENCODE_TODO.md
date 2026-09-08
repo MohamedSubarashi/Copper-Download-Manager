@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.7.0
+Current version: 0.8.0
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 
@@ -154,6 +154,20 @@ suite, or CI.
 - [x] Integration suite expanded to **44** cases (download-filters endpoint, excluded
       image rejected, allowed include list) and extension validator extended for the
       `downloads` permission + `onCreated` capture checks; all green.
+
+## Completed milestone: v0.8.0 (all file types + auto-start default + extension v6.0.0)
+
+- [x] **All file types supported by default**: emptied the default include list so every
+      non-excluded format is allowed. The exclude list (image formats) is unchanged.
+      Users can still restrict formats via Settings > Formats.
+- [x] **Auto-start with Windows enabled by default**: new installations now have the
+      "Start with system" checkbox checked by default (registry `HKCU\...\Run` with
+      `--minimized`). Users can disable it in Settings > System > Startup.
+- [x] **Extension fallback defaults synced**: `DEFAULT_INCLUDE` in both Chrome and
+      Firefox `background.js` updated to match the empty app default; the `/api/download-filters`
+      endpoint continues to provide the authoritative list at runtime.
+- [x] Extension bumped to **6.0.0** (Chrome + Firefox); program bumped to **0.8.0** (CMake,
+      `main.cpp`, `app.rc`, DB User-Agent, THIRD-PARTY-NOTICES, CI, Inno Setup, PKGBUILD).
 
 ## Completed milestone: v0.7.0 (extension remake + reliable injection + crash fixes + tray-by-default)
 

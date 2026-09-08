@@ -215,7 +215,7 @@ const FILTER_CACHE_TTL = 30000;
 let filterCache = { ts: 0, data: null };
 
 const DEFAULT_EXCLUDE = "png jpg jpeg gif webp bmp svg ico avif jfif heic heif tif tiff raw psd eps ai dng cr2 nef arw exr".split(/\s+/);
-const DEFAULT_INCLUDE = "mp4 mkv webm avi mov wmv flv m4v mpg mpeg ts m2ts 3gp ogm mp3 wav flac aac ogg m4a opus wma mid midi aiff zip rar 7z tar gz bz2 xz tgz iso cab pdf doc docx xls xlsx ppt pptx txt rtf csv odt ods odp epub mobi md exe msi apk deb rpm appimage dmg bat cmd com torrent ttf otf woff woff2 js jsx ts tsx json html css scss py java c cpp h cs go rs php rb sh bin dat db sqlite".split(/\s+/);
+const DEFAULT_INCLUDE = "".split(/\s+/).filter(Boolean);
 
 async function fetchFilterConfig() {
   const now = Date.now();
