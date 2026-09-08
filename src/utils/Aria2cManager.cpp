@@ -23,6 +23,7 @@
 #include <QThread>
 #include <QCoreApplication>
 #include <QSet>
+#include <QVersionNumber>
 
 Aria2cManager::Aria2cManager() : nextId(1), maxConcurrent(3), isDownloading(false), nam(new QNetworkAccessManager(this)), activeReply(nullptr) {
     // Use a persistent RPC secret persisted across sessions. A per-process random
@@ -79,7 +80,11 @@ QString Aria2cManager::getAria2cPath() {
 }
 
 bool Aria2cManager::isInstalled() {
-    return QFile::exists(getAria2cPath());
+    // A zero-byte/stale leftover file must NOT be treated as installed; it would
+    // make "Check & Update aria2c" skip the download forever while aria2 still
+    // fails to run. Require a real, non-empty binary.
+    QFileInfo fi(getAria2cPath());
+    return fi.exists() && fi.size() > 0;
 }
 
 QString Aria2cManager::getVersion() {
@@ -87,7 +92,47 @@ QString Aria2cManager::getVersion() {
     QProcess process;
     process.start(getAria2cPath(), QStringList() << "--version");
     process.waitForFinished(5000);
-    return process.readAllStandardOutput().trimmed().split('\n').first();
+    QString firstLine = process.readAllStandardOutput().trimmed().split('\n').first();
+    if (firstLine.isEmpty()) {
+        // The binary exists but does not run (missing runtime, corrupt file, or
+        // blocked by a security policy). Treat it as not installed so the user
+        // can re-download via "Check & Update aria2c".
+        return "Invalid / not runnable";
+    }
+    return firstLine;
+}
+
+// "1.37.0" from the "aria2 version 1.37.0" banner, or empty when the binary is
+// missing / not runnable (which forces installOrUpdate() to re-download).
+QString Aria2cManager::installedVersionNumber() {
+    if (!isInstalled()) return QString();
+    QRegularExpression versionRegex("aria2 version (\\d+\\.\\d+\\.\\d+)");
+    QRegularExpressionMatch match = versionRegex.match(getVersion());
+    return match.hasMatch() ? match.captured(1) : QString();
+}
+
+// Pick the Windows x64 release zip from a GitHub "latest release" payload.
+void Aria2cManager::pickLatestAria2Asset(const QJsonObject& release, QString& url, QString& fileName, QString& version) {
+#ifdef PLATFORM_WINDOWS
+    QRegularExpression versionRegex("(\\d+\\.\\d+\\.\\d+)");
+    QRegularExpressionMatch tagMatch = versionRegex.match(release.value("tag_name").toString());
+    if (!tagMatch.hasMatch()) return;
+    version = tagMatch.captured(1);
+
+    QJsonArray assets = release.value("assets").toArray();
+    for (const QJsonValue& val : assets) {
+        QJsonObject asset = val.toObject();
+        QString name = asset.value("name").toString();
+        if (name.contains("win-64bit") && name.endsWith(".zip", Qt::CaseInsensitive)) {
+            url = asset.value("browser_download_url").toString();
+            fileName = name;
+            return;
+        }
+    }
+    url.clear();
+    fileName.clear();
+    version.clear();
+#endif
 }
 
 void Aria2cManager::installOrUpdate() {
@@ -96,26 +141,65 @@ void Aria2cManager::installOrUpdate() {
         return;
     }
 
-    if (isInstalled()) {
-        Logger::instance().info("aria2c already installed: " + getVersion() + " (skipping download)");
-        emit installationProgress("Already installed: " + getVersion());
-        return;
-    }
-
     isDownloading = true;
     Logger::instance().info("Installing/updating aria2c...");
-    emit installationProgress("Starting download...");
+    emit installationProgress("Checking latest version...");
 
-#ifdef PLATFORM_WINDOWS
-    QString url = "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip";
-    QString fileName = "aria2-1.37.0-win-64bit-build1.zip";
+    // Mirror the yt-dlp flow: query the GitHub API for the latest aria2 release,
+    // compare with the installed binary, and only skip the download when the
+    // installed build is current. Previously an existing (even stale or corrupt)
+    // aria2c.exe was never re-downloaded, so "Check & Update aria2c" silently did
+    // nothing once a file existed.
+    QNetworkRequest request(QUrl("https://api.github.com/repos/aria2/aria2/releases/latest"));
+    request.setRawHeader("Accept", "application/vnd.github.v3+json");
+    request.setRawHeader("User-Agent", "Mozilla/5.0 CopperDownloadManager/1.0");
+
+    QNetworkReply* reply = nam->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+
+        QString url, fileName, version;
+        bool fromApi = false;
+        if (reply->error() == QNetworkReply::NoError) {
+            QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+            if (doc.isObject()) {
+                pickLatestAria2Asset(doc.object(), url, fileName, version);
+                fromApi = !url.isEmpty();
+            }
+        }
+        if (!fromApi) {
+#ifndef PLATFORM_WINDOWS
+            Logger::instance().error("aria2c auto-install is only supported on Windows; install it manually");
+            emit installationProgress("aria2c install is Windows-only - install manually");
+            isDownloading = false;
+            return;
 #else
-    QString url = "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0.tar.bz2";
-    QString fileName = "aria2-1.37.0.tar.bz2";
+            // GitHub API unreachable -> fall back to the pinned, known-good release.
+            url = "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip";
+            fileName = "aria2-1.37.0-win-64bit-build1.zip";
+            version = "1.37.0";
+            Logger::instance().warning("aria2c version check failed; falling back to pinned release " + version);
 #endif
+        }
 
-    emit installationProgress("Downloading aria2c...");
-    startDownload(url, fileName);
+        if (isInstalled()) {
+            QString installed = installedVersionNumber();
+            QVersionNumber ins = QVersionNumber::fromString(installed);
+            QVersionNumber latest = QVersionNumber::fromString(version);
+            bool upToDate = !ins.isNull() && !latest.isNull() && ins >= latest;
+            Logger::instance().info("aria2c installed=" + (installed.isEmpty() ? QString("unknown") : installed) +
+                                    " latest=" + version + (upToDate ? " (skipping download)" : " (update available)"));
+            if (upToDate) {
+                emit installationProgress("Already up to date: " + installed);
+                isDownloading = false;
+                return;
+            }
+        }
+
+        Logger::instance().info("Downloading aria2c " + version + " from: " + url);
+        emit installationProgress("Downloading aria2c " + version + "...");
+        startDownload(url, fileName);
+    });
 }
 
 bool Aria2cManager::ensureInstalled() {
@@ -296,6 +380,19 @@ bool Aria2cManager::extractAria2c(const QString& zipPath) {
     QString toolsDir = getToolsDir();
     QString extractDir = toolsDir + "/aria2_tmp";
 
+    // If a daemon from this session is still alive, release the exe first: a
+    // running aria2c.exe cannot be removed or overwritten, which made "Check &
+    // Update aria2c" report failure ("Installation failed") while a torrent was
+    // seeding/active.
+    if (m_daemonProcess) {
+        m_daemonProcess->kill();
+        m_daemonProcess->waitForFinished(1000);
+        m_daemonProcess->deleteLater();
+        m_daemonProcess = nullptr;
+    }
+    m_daemonRunning = false;
+    m_pollInProgress = false;
+
     QDir dir;
     if (dir.exists(extractDir)) dir.removeRecursively();
     dir.mkpath(extractDir);
@@ -318,9 +415,17 @@ bool Aria2cManager::extractAria2c(const QString& zipPath) {
         if (fn == "aria2c.exe") {
             QString dest = toolsDir + "/aria2c.exe";
             QFile::remove(dest);
-            if (QFile::copy(fp, dest)) {
+            // A lingering antivirus/lock can still hold the file briefly; retry
+            // a few times before giving up.
+            for (int attempt = 0; attempt < 5 && !QFile::copy(fp, dest); ++attempt) {
+                QThread::msleep(300);
+                QFile::remove(dest);
+            }
+            if (QFile::exists(dest)) {
                 QFile::setPermissions(dest, QFileDevice::ExeUser | QFileDevice::ExeOwner | QFileDevice::ExeOther);
                 found = true;
+            } else {
+                Logger::instance().error("Could not copy aria2c.exe into " + toolsDir);
             }
         }
     }

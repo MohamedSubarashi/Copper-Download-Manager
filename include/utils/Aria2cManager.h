@@ -146,6 +146,12 @@ private:
     void startDownload(const QString& url, const QString& fileName);
     bool extractAria2c(const QString& zipPath);
 
+    // Install/update helpers: resolve the latest Windows release from the
+    // GitHub API (mirroring YtDlpManager) so "Check & Update aria2c" actually
+    // re-downloads when a newer build exists or the current binary is broken.
+    QString installedVersionNumber();
+    void pickLatestAria2Asset(const QJsonObject& release, QString& url, QString& fileName, QString& version);
+
 public:
     // Resolve/download a torrent source (local path, magnet, or remote .torrent URL)
     // to the local path that aria2 should seed from. For magnets, localPath is empty

@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.8.0
+Current version: 0.8.1
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 
@@ -154,6 +154,23 @@ suite, or CI.
 - [x] Integration suite expanded to **44** cases (download-filters endpoint, excluded
       image rejected, allowed include list) and extension validator extended for the
       `downloads` permission + `onCreated` capture checks; all green.
+
+## Completed milestone: v0.8.1 (fix aria2c "Check & Update" in Tools)
+
+- [x] **"Check & Update aria2c" now actually updates**: `installOrUpdate()` queries the
+      GitHub API for the latest aria2 release (mirroring the yt-dlp flow) and re-downloads
+      when the installed build is older or missing, instead of always reporting
+      "Already installed" for any existing `aria2c.exe` (which silently broke the download
+      option once a stale/corrupt file existed).
+- [x] **Stale binaries handled**: `isInstalled()` now requires a non-empty file, and a
+      binary that exists but fails to run (`--version` empty) is treated as not installed
+      so the download is retried — covers zero-byte/corrupt leftovers and blocked exes.
+- [x] **Locked exe no longer blocks the update**: `extractAria2c()` kills the running
+      RPC daemon before overwriting `aria2c.exe` and retries the copy (antivirus/lock
+      tolerance).
+- [x] Version pinned-release fallback retained when the GitHub API is unreachable.
+- [x] Program bumped to **0.8.1** (CMake, `main.cpp`, `app.rc`, DB User-Agent,
+      THIRD-PARTY-NOTICES, CI, Inno Setup, PKGBUILD); extension stays at **6.0.0**.
 
 ## Completed milestone: v0.8.0 (all file types + auto-start default + extension v6.0.0)
 
