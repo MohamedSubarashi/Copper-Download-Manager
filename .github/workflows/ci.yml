@@ -198,16 +198,17 @@ jobs:
 
       - name: Shim AGL framework (removed from newer Xcode SDKs)
         run: |
-          SDK_DIR="$(xcrun --sdk macosx --show-sdk-path)"
-          sudo mkdir -p "$SDK_DIR/System/Library/Frameworks/AGL.framework"
-          sudo ln -sf "$SDK_DIR/System/Library/Frameworks/OpenGL.framework/OpenGL" \
-            "$SDK_DIR/System/Library/Frameworks/AGL.framework/AGL"
+          SDK_OPENGL="$(xcrun --sdk macosx --show-sdk-path)/System/Library/Frameworks/OpenGL.framework/OpenGL"
+          sudo mkdir -p /usr/local/lib/AGL.framework
+          sudo ln -sf "$SDK_OPENGL" /usr/local/lib/AGL.framework/AGL
+          ls -l /usr/local/lib/AGL.framework/AGL
 
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DCMAKE_EXE_LINKER_FLAGS="-F/usr/local/lib"
 
       - name: Build
         run: cmake --build build
