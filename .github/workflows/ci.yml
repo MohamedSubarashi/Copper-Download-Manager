@@ -199,8 +199,9 @@ jobs:
       - name: Shim AGL framework (removed from newer Xcode SDKs)
         run: |
           SDK_DIR="$(xcrun --sdk macosx --show-sdk-path)"
-          sudo ln -sf "$SDK_DIR/System/Library/Frameworks/OpenGL.framework" \
-            "$SDK_DIR/System/Library/Frameworks/AGL.framework"
+          sudo mkdir -p "$SDK_DIR/System/Library/Frameworks/AGL.framework"
+          sudo ln -sf "$SDK_DIR/System/Library/Frameworks/OpenGL.framework/OpenGL" \
+            "$SDK_DIR/System/Library/Frameworks/AGL.framework/AGL"
 
       - name: Configure
         run: |
