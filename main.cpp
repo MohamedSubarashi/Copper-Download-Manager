@@ -179,7 +179,7 @@ int main(int argc, char* argv[]) {
 
     QApplication app(argc, argv);
     app.setApplicationName("Copper Download Manager");
-    app.setApplicationVersion("0.8.1");
+    app.setApplicationVersion("0.9.0");
     app.setOrganizationName("Copper");
 
     Logger::instance().info("========================================");

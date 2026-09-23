@@ -212,6 +212,14 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    if (action == "open") {
+        // Launch (or raise) the desktop app. exchangeWithApp starts the app if
+        // nobody is listening on the pipe, and the app's pipe server turns the
+        // "open" action into argumentForwarded("show") which raises the window.
+        writeMessage(exchangeWithApp({{"action", "open"}}));
+        return 0;
+    }
+
     if (action == "ping") {
         QJsonObject rep = exchangeWithApp({{"action", "ping"}});
         rep["running"] = rep.value("ok").toBool();

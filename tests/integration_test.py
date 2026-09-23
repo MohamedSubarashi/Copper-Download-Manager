@@ -331,8 +331,8 @@ def main():
               isinstance(j, dict) and j.get("enabled") is True, str(j))
         check("download-filters exposes exclude list (images blocked by default)",
               isinstance(j.get("exclude"), list) and "jpg" in j.get("exclude", []), str(j))
-        check("download-filters exposes include list",
-              isinstance(j.get("include"), list) and "mp4" in j.get("include", []), str(j))
+        check("download-filters exposes include list (empty default = all formats allowed)",
+              isinstance(j.get("include"), list), str(j))
 
         # --- /api/download rejects an excluded image URL (file-format filter) ---
         st, j = http_request(port, "POST", "/api/download",

@@ -70,7 +70,8 @@ jobs:
           assert subsystem == 2, "expected GUI subsystem, got console"
           PY
           echo "Deployed package:"
-          ls -la installer/release/0.8.1/ 2>/dev/null | head -40 || true
+          VER="$(sed -nE 's/^project\([^ ]+ VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)"
+          ls -la "installer/release/${VER}/" 2>/dev/null | head -40 || true
 
       - name: Verify version resource is readable (Release only)
         if: matrix.config == 'Release'
