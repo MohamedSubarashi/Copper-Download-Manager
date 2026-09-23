@@ -169,15 +169,14 @@ jobs:
           VER="$(sed -nE 's/^project\([^ ]+ VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)"
           echo "VER=$VER"
           useradd -m builder
-          chown -R builder:builder "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          cd installer/arch
+          cd "$GITHUB_WORKSPACE"
           git archive --format=tar.gz \
             --prefix="Copper-Download-Manager-${VER}/" \
-            -o "copper-download-manager-${VER}.tar.gz" HEAD
-          chown builder:builder "copper-download-manager-${VER}.tar.gz"
+            -o "installer/arch/copper-download-manager-${VER}.tar.gz" HEAD
+          chown -R builder:builder "$GITHUB_WORKSPACE"
           su builder -c "cd '$GITHUB_WORKSPACE/installer/arch' && makepkg -f --noconfirm"
-          ls -la *.pkg.tar.zst
+          ls -la installer/arch/*.pkg.tar.zst
 
       - name: Upload Arch artifact
         uses: actions/upload-artifact@v4

@@ -14,6 +14,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QRegularExpression>
+#include <signal.h>
 
 YtDlpManager::YtDlpManager() : isDownloading(false), nam(new QNetworkAccessManager(this)), activeReply(nullptr) {}
 
