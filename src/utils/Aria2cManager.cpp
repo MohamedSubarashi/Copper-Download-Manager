@@ -210,9 +210,6 @@ bool Aria2cManager::ensureInstalled() {
 #ifdef PLATFORM_WINDOWS
     QString url = "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip";
     QString fileName = "aria2-1.37.0-win-64bit-build1.zip";
-#else
-    return false;
-#endif
 
     QString toolsDir = getToolsDir();
     QDir().mkpath(toolsDir);
@@ -296,6 +293,9 @@ bool Aria2cManager::ensureInstalled() {
 
     loop.exec();
     return downloadOk;
+#else
+    return false;
+#endif
 }
 
 QString Aria2cManager::getToolsDir() {

@@ -170,6 +170,7 @@ jobs:
           echo "VER=$VER"
           useradd -m builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           cd installer/arch
           git archive --format=tar.gz \
             --prefix="Copper-Download-Manager-${VER}/" \
