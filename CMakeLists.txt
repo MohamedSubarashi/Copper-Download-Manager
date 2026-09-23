@@ -14,6 +14,30 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
+# Qt 6.6-6.9's FindWrapOpenGL.cmake falls back to a literal "-framework AGL"
+# when find_library(AGL) fails. Apple removed the AGL framework from the
+# macOS SDK (14+ / Xcode 15+), so that fallback breaks linking on modern
+# SDKs ("ld: framework 'AGL' not found"). Pre-create the WrapOpenGL::WrapOpenGL
+# target so Qt's module takes its early-return path and uses OpenGL directly.
+if(APPLE AND NOT TARGET WrapOpenGL::WrapOpenGL)
+    find_package(OpenGL QUIET)
+    if(OpenGL_FOUND)
+        add_library(WrapOpenGL::WrapOpenGL INTERFACE IMPORTED)
+        set(_fincept_ogl_path "")
+        if(TARGET OpenGL::GL)
+            get_target_property(_fincept_ogl_loc OpenGL::GL IMPORTED_LOCATION)
+            if(_fincept_ogl_loc AND NOT _fincept_ogl_loc MATCHES "/([^/]+)\\.framework$")
+                get_filename_component(_fincept_ogl_path "${_fincept_ogl_loc}" DIRECTORY)
+            endif()
+        endif()
+        if(NOT _fincept_ogl_path)
+            set(_fincept_ogl_path "-framework OpenGL")
+        endif()
+        target_link_libraries(WrapOpenGL::WrapOpenGL INTERFACE "${_fincept_ogl_path}")
+        set(WrapOpenGL_FOUND ON)
+    endif()
+endif()
+
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Sql Gui)
 
 find_package(PkgConfig QUIET)
