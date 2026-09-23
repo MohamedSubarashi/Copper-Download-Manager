@@ -200,7 +200,6 @@ endif()
 # ---------------------------------------------------------------------------
 # Packaging: CPack. On Linux -> .deb; on macOS -> .dmg (DragNDrop).
 # ---------------------------------------------------------------------------
-include(CPack)
 
 set(CPACK_PACKAGE_NAME "copper-download-manager")
 set(CPACK_PACKAGE_VENDOR "Copper")
@@ -226,3 +225,5 @@ elseif(APPLE)
     set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}/Assets/app.ico")
     set(CPACK_DMG_DS_STORE_SETUP_SCRIPT_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
+
+include(CPack)
