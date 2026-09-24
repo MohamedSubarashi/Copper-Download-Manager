@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Copper Download Manager</title>
+  <link rel="stylesheet" href="copper.css">
+</head>
+<body>
+  <main class="card">
+    <header class="brand">
+      <img src="icons/icon128.png" alt="" class="logo">
+      <h1>Copper Download Manager</h1>
+      <p class="tagline">Browser command center</p>
+    </header>
+
+    <!-- Unknown / probing -->
+    <section id="status-unknown" class="panel" hidden>
+      <h2>Checking installation&hellip;</h2>
+      <p>Contacting the Copper native host&hellip;</p>
+    </section>
+
+    <!-- App reachable: live manager -->
+    <section id="status-ready" class="panel" hidden>
+      <div class="row-between">
+        <h2>Downloads</h2>
+        <div class="actions">
+          <button id="btn-open" class="primary">Open Copper</button>
+          <button id="btn-recheck" title="Re-check the desktop app">Refresh</button>
+        </div>
+      </div>
+      <div id="dl-header" class="dl-meta">
+        <span>App reachable</span> <span id="dl-count"></span>
+      </div>
+      <ul id="dl-list" class="dl-list">
+        <li class="dl-empty">No active downloads yet.</li>
+      </ul>
+    </section>
+
+    <!-- Not installed -->
+    <section id="status-not-installed" class="panel" hidden>
+      <h2><span class="warn">&#9888;</span> Copper isn&rsquo;t installed</h2>
+      <p>
+        To capture downloads from your browser, install the Copper Download Manager desktop app,
+        then restart your browser.
+      </p>
+      <div class="actions">
+        <a id="btn-download" class="primary" href="https://github.com/MohamedSubarashi/Copper-Download-Manager/releases" target="_blank" rel="noopener">Download Copper</a>
+      </div>
+      <p class="hint">After installing, open the app once so it can register the browser host, then reload this page.</p>
+      <div class="actions">
+        <button id="btn-recheck2">Check again</button>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section id="settings-panel" class="panel" hidden>
+      <h2>Settings</h2>
+
+      <div class="setting">
+        <div class="setting-text">
+          <strong>Capture downloads</strong>
+          <p>Hand the browser's own downloads to Copper automatically.</p>
+        </div>
+        <input type="checkbox" id="set-autoCapture" class="switch">
+      </div>
+
+      <div class="setting">
+        <div class="setting-text">
+          <strong>Media detection bar</strong>
+          <p>Show the floating download bar on pages with media.</p>
+        </div>
+        <input type="checkbox" id="set-showBar" class="switch">
+      </div>
+
+      <div class="setting">
+        <div class="setting-text">
+          <strong>Context menus</strong>
+          <p>Right-click entries for links, media, selections and playlists.</p>
+        </div>
+        <input type="checkbox" id="set-contextMenus" class="switch">
+      </div>
+
+      <div class="setting">
+        <div class="setting-text">
+          <strong>Notify on failure</strong>
+          <p>Show a system notification when a download can't be handed off.</p>
+        </div>
+        <input type="checkbox" id="set-notifyOnFail" class="switch">
+      </div>
+
+      <div class="setting">
+        <div class="setting-text">
+          <strong>Default format</strong>
+          <p>Format used when no specific one is chosen.</p>
+        </div>
+        <select id="set-defaultFormat">
+          <option value="mp4">MP4 (video)</option>
+          <option value="mp3">MP3 (audio)</option>
+          <option value="">Original</option>
+        </select>
+      </div>
+
+      <div class="actions">
+        <button id="btn-save" class="primary">Save Settings</button>
+        <span id="save-state" class="muted"></span>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <button id="btn-toggle" title="Enable or disable browser capture"></button>
+      <span id="toggle-label"></span>
+    </footer>
+  </main>
+  <script src="copper.js"></script>
+</body>
+</html>

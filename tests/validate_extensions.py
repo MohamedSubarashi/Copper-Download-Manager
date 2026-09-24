@@ -25,8 +25,8 @@ import os
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CHROME = os.path.join(REPO, "extensions", "Copper Download Manager Chrome")
-FIREFOX = os.path.join(REPO, "extensions", "Copper Download Manager Firefox")
+CHROME = os.path.join(REPO, "extensions", "Chrome")
+FIREFOX = os.path.join(REPO, "extensions", "Firefox")
 
 MANDATORY_MV3 = {"manifest_version", "name", "version", "description",
                  "permissions", "background", "icons"}

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(CopperDownloadManager VERSION 0.9.0 LANGUAGES CXX)
+project(CopperDownloadManager VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -62,8 +62,8 @@ else()
     add_definitions(-DPLATFORM_LINUX)
 endif()
 
-file(GLOB_RECURSE SOURCES "src/*.cpp")
-file(GLOB_RECURSE HEADERS "include/*.h")
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
+file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS "include/*.h")
 
 set(RESOURCE_FILES resources.qrc)
 
@@ -95,9 +95,26 @@ if(WIN32)
     # version. tools/fix_version_resource.py converts that entry to id 1 in
     # place and is deliberately a no-op when the tree is already correct, so
     # it is safe for both broken and fixed windres versions.
-    find_program(RC_FIXER_PYTHON NAMES python3 python py)
+    # Python must actually be runnable: some Windows installs expose a Windows
+    # Store "python3.exe" app-execution alias that find_program picks up but that
+    # fails with "The system cannot find the file specified" when executed. Prefer
+    # a real interpreter and validate each candidate at configure time.
+    set(PYTHON_CANDIDATES python python3 py)
+    foreach(_copper_py_name IN LISTS PYTHON_CANDIDATES)
+        find_program(RC_FIXER_PYTHON NAMES ${_copper_py_name})
+        if(RC_FIXER_PYTHON)
+            execute_process(COMMAND "${RC_FIXER_PYTHON}" -c "pass"
+                            RESULT_VARIABLE _copper_py_result OUTPUT_QUIET ERROR_QUIET)
+            if(_copper_py_result EQUAL 0)
+                message(STATUS "A runnable Python interpreter found: ${RC_FIXER_PYTHON}")
+                break()
+            endif()
+            message(STATUS "Ignoring non-runnable Python candidate: ${RC_FIXER_PYTHON}")
+            unset(RC_FIXER_PYTHON CACHE)
+        endif()
+    endforeach()
     if(NOT RC_FIXER_PYTHON)
-        message(FATAL_ERROR "Python is required to post-process the windres version resource; install Python or add it to PATH")
+        message(FATAL_ERROR "A runnable Python is required to post-process the windres version resource; install Python or add it to PATH")
     endif()
     add_custom_command(
         OUTPUT "${RESRC_OBJ}"
@@ -176,13 +193,23 @@ if(WIN32)
     target_link_libraries(copper_native_host ws2_32)
 endif()
 
-# Ship the host next to the app exe and into the release folder.
+# Ship the host next to the app exe and into the deploy folder.
 if(WIN32)
-    set(RELEASE_DIR "${CMAKE_SOURCE_DIR}/installer/release/${PROJECT_VERSION}")
+    # Deployment target varies by build type: Debug builds land in the repo
+    # "debug/<version>" folder, Release builds keep installer/release/<version>.
+    # windeployqt flags follow the same split. The installed Qt for MinGW ships
+    # only release runtime DLLs, so the Debug deploy reuses them (the app itself
+    # still compiles with -O0 -g and active asserts).
+    set(DEPLOY_DIR "${CMAKE_SOURCE_DIR}/installer/release/${PROJECT_VERSION}")
+    set(DEPLOY_FLAGS --release --no-translations --no-opengl-sw)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(DEPLOY_DIR "${CMAKE_SOURCE_DIR}/debug/${PROJECT_VERSION}")
+        set(DEPLOY_FLAGS --no-translations --no-opengl-sw)
+    endif()
     add_custom_command(TARGET copper_native_host POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${RELEASE_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:copper_native_host>" "${RELEASE_DIR}/"
-        COMMENT "Deploying native messaging host to ${RELEASE_DIR}/"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${DEPLOY_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:copper_native_host>" "${DEPLOY_DIR}/"
+        COMMENT "Deploying native messaging host to ${DEPLOY_DIR}/"
     )
 endif()
 
@@ -199,14 +226,14 @@ if(WIN32)
         set(WINDEPLOYQT_EXECUTABLE "${CMAKE_PREFIX_PATH}/bin/windeployqt.exe")
     endif()
 
-    set(RELEASE_DIR "${CMAKE_SOURCE_DIR}/installer/release/${PROJECT_VERSION}")
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${RELEASE_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:${PROJECT_NAME}>" "${RELEASE_DIR}/"
-        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/THIRD-PARTY-NOTICES.txt" "${RELEASE_DIR}/"
-        COMMAND "${WINDEPLOYQT_EXECUTABLE}" --release --no-translations --no-opengl-sw --dir "${RELEASE_DIR}" "$<TARGET_FILE:${PROJECT_NAME}>"
-        COMMAND ${CMAKE_COMMAND} -E remove -f "${RELEASE_DIR}/sqldrivers/qsqlibase.dll" "${RELEASE_DIR}/sqldrivers/qsqlmimer.dll" "${RELEASE_DIR}/sqldrivers/qsqloci.dll" "${RELEASE_DIR}/sqldrivers/qsqlodbc.dll" "${RELEASE_DIR}/sqldrivers/qsqlpsql.dll"
-        COMMENT "Deploying to installer/release/${PROJECT_VERSION}/"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${DEPLOY_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:${PROJECT_NAME}>" "${DEPLOY_DIR}/"
+        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/THIRD-PARTY-NOTICES.txt" "${DEPLOY_DIR}/"
+        COMMAND "${WINDEPLOYQT_EXECUTABLE}" ${DEPLOY_FLAGS} --dir "${DEPLOY_DIR}" "$<TARGET_FILE:${PROJECT_NAME}>"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:copper_native_host>" "${DEPLOY_DIR}/"
+        COMMAND ${CMAKE_COMMAND} -E remove -f "${DEPLOY_DIR}/sqldrivers/qsqlibase.dll" "${DEPLOY_DIR}/sqldrivers/qsqlmimer.dll" "${DEPLOY_DIR}/sqldrivers/qsqloci.dll" "${DEPLOY_DIR}/sqldrivers/qsqlodbc.dll" "${DEPLOY_DIR}/sqldrivers/qsqlpsql.dll"
+        COMMENT "Deploying to ${DEPLOY_DIR}/"
     )
 endif()
 

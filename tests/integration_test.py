@@ -145,10 +145,12 @@ def _make_file_server(payload, mode="normal", chunk_bits=""):
                 self.end_headers()
                 if mode == "slow":
                     # Trickle so a test can observe partial progress and interrupt.
-                    for i in range(0, len(data), 8192):
-                        self.wfile.write(data[i:i + 8192])
+                    # Slice small + sleep long enough that even 16 parallel range
+                    # connections finish over several seconds on fast machines.
+                    for i in range(0, len(data), 4096):
+                        self.wfile.write(data[i:i + 4096])
                         self.wfile.flush()
-                        time.sleep(0.01)
+                        time.sleep(0.25)
                 else:
                     self.wfile.write(data)
                 return

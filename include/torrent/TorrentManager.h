@@ -18,7 +18,6 @@ public:
     void resumeDownload(int id);
     void removeDownload(int id);
     void addTrackers(int torrentId, const QStringList& trackers);
-    QStringList getDefaultTrackers() const;
 
 signals:
     void downloadProgress(int id, qint64 downloaded, qint64 total, qint64 speed);

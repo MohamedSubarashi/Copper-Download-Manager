@@ -222,7 +222,7 @@ jobs:
 
   release:
     name: Publish GitHub release
-    needs: [build-linux-deb, build-arch, build-macos]
+    needs: [build-windows, build-linux-deb, build-arch, build-macos]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -237,6 +237,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          # Releases are already created locally by the maintainer with the
+          # Windows installer artifacts; skip if one exists for this tag so CI
+          # stays green and only attaches what is missing.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; skipping creation."
+            exit 0
+          fi
           # Build a flat list of every asset artifact to attach to the release.
           mapfile -t ASSETS < <(find artifacts -type f)
           echo "Found ${#ASSETS[@]} asset(s):"

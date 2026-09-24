@@ -24,6 +24,7 @@
 #include <QSpinBox>
 #include <QGridLayout>
 #include <QCoreApplication>
+#include <QDir>
 #include <QSettings>
 #include <QProcess>
 
@@ -519,7 +520,8 @@ void SettingsDialog::updateStartupRegistry(bool enabled) {
 #ifdef PLATFORM_WINDOWS
     QSettings runKey("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", QSettings::NativeFormat);
     if (enabled) {
-        runKey.setValue("CopperDownloadManager", "\"" + QCoreApplication::applicationFilePath() + "\" --minimized");
+        QString exePath = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
+        runKey.setValue("CopperDownloadManager", "\"" + exePath + "\" --minimized");
         Logger::instance().info("Startup autostart enabled");
     } else {
         runKey.remove("CopperDownloadManager");

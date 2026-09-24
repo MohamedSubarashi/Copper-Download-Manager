@@ -17,6 +17,7 @@
 #include "utils/UpdateManager.h"
 #include <QMenuBar>
 #include <QToolBar>
+#include <QToolButton>
 #include <QStatusBar>
 #include <QTableWidget>
 #include <QHeaderView>
@@ -49,7 +50,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStandardPaths>
-#include <QSystemTrayIcon>
 #include <QProcess>
 #include <QCoreApplication>
 
@@ -258,36 +258,79 @@ void MainWindow::setupMenuBar() {
 
 void MainWindow::setupToolBar() {
     toolBar = new QToolBar("Main Toolbar", this);
-    toolBar->setIconSize(QSize(24, 24));
+    toolBar->setObjectName("MainToolbar");
     toolBar->setMovable(false);
+    toolBar->setFloatable(false);
+    toolBar->setFixedHeight(72);
+    toolBar->setStyleSheet(
+        "QToolBar#MainToolbar {"
+        "   background: transparent;"
+        "   border: none;"
+        "}"
+        "QToolBar#MainToolbar QToolButton {"
+        "   background: transparent;"
+        "   border: none;"
+        "   border-radius: 10px;"
+        "}"
+        "QToolBar#MainToolbar QToolButton:hover {"
+        "   background-color: rgba(255, 255, 255, 0.35);"
+        "}"
+        "QToolBar#MainToolbar QToolButton:pressed {"
+        "   background-color: rgba(255, 255, 255, 0.55);"
+        "}"
+    );
     addToolBar(toolBar);
+    toolBar->installEventFilter(this);
 
-    QAction* addUrlBtn = toolBar->addAction(QIcon(":/icons/AddUrl.png"), "Add URL");
-    connect(addUrlBtn, &QAction::triggered, this, &MainWindow::onAddUrl);
+    struct BtnSpec {
+        const char* icon;
+        const char* tip;
+        void (MainWindow::*slot)();
+    };
+    // Buttons fill the whole bar: equal stretch, large icons, even spacing.
+    const BtnSpec specs[] = {
+        {":/icons/AddUrl.png",        "Add URL",               &MainWindow::onAddUrl},
+        {":/icons/Start.png",         "Resume",                &MainWindow::onStartSelected},
+        {":/icons/Pause.png",         "Pause",                 &MainWindow::onPauseSelected},
+        {":/icons/Stop.png",          "Cancel",                &MainWindow::onStopSelected},
+        {":/icons/Delete.png",        "Delete",                &MainWindow::onDeleteSelected},
+        {":/icons/CurrentDownload.png", "Open Downloads Folder", &MainWindow::onOpenDownloadsFolder},
+        {":/icons/Settings.png",      "Settings",              &MainWindow::onSettings},
+        {":/icons/About.png",         "About",                 &MainWindow::onAbout},
+    };
 
-    toolBar->addSeparator();
+    QWidget* container = new QWidget(toolBar);
+    QHBoxLayout* lay = new QHBoxLayout(container);
+    lay->setContentsMargins(10, 2, 10, 2);
+    lay->setSpacing(8);
+    for (const BtnSpec& spec : specs) {
+        QToolButton* btn = new QToolButton(container);
+        btn->setIcon(QIcon(spec.icon));
+        btn->setToolTip(spec.tip);
+        btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        btn->setMinimumSize(44, 44);
+        btn->setIconSize(QSize(60, 60));
+        connect(btn, &QToolButton::clicked, this, spec.slot);
+        lay->addWidget(btn);
+    }
+    toolBar->addWidget(container);
+}
 
-    QAction* startBtn = toolBar->addAction(QIcon(":/icons/Start.png"), "Resume");
-    connect(startBtn, &QAction::triggered, this, &MainWindow::onStartSelected);
-
-    QAction* pauseBtn = toolBar->addAction(QIcon(":/icons/Pause.png"), "Pause");
-    connect(pauseBtn, &QAction::triggered, this, &MainWindow::onPauseSelected);
-
-    QAction* stopBtn = toolBar->addAction(QIcon(":/icons/Stop.png"), "Cancel");
-    connect(stopBtn, &QAction::triggered, this, &MainWindow::onStopSelected);
-
-    toolBar->addSeparator();
-
-    QAction* deleteBtn = toolBar->addAction(QIcon(":/icons/Delete.png"), "Delete");
-    connect(deleteBtn, &QAction::triggered, this, &MainWindow::onDeleteSelected);
-
-    toolBar->addSeparator();
-
-    QAction* settingsBtn = toolBar->addAction(QIcon(":/icons/Settings.png"), "Settings");
-    connect(settingsBtn, &QAction::triggered, this, &MainWindow::onSettings);
-
-    QAction* aboutBtn = toolBar->addAction(QIcon(":/icons/About.png"), "About");
-    connect(aboutBtn, &QAction::triggered, this, &MainWindow::onAbout);
+bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
+    // Keep the toolbar icons sized to the available space so they grow and
+    // shrink together with the window layout.
+    if (obj == toolBar && event->type() == QEvent::Resize) {
+        const qreal count = 8.0;
+        const qreal marginH = 20.0;   // 10px left + 10px right
+        const qreal spacing = 8.0;
+        qreal widthPer = (toolBar->width() - marginH - spacing * (count - 1.0)) / count;
+        int icon = qBound(32, qMin(qRound(widthPer) - 12, toolBar->height() - 12), 64);
+        const QList<QToolButton*> buttons = toolBar->findChildren<QToolButton*>();
+        for (QToolButton* btn : buttons) {
+            btn->setIconSize(QSize(icon, icon));
+        }
+    }
+    return QMainWindow::eventFilter(obj, event);
 }
 
 void MainWindow::setupStatusBar() {
@@ -526,6 +569,13 @@ void MainWindow::onOpenFolder() {
     }
 }
 
+void MainWindow::onOpenDownloadsFolder() {
+    QString dir = DatabaseManager::instance().getSetting(
+        "downloadPath", QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
+    QDir().mkpath(dir);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+}
+
 void MainWindow::onCopyUrl() {
     QTableWidgetItem* idItem = table->item(table->currentRow(), 0);
     if (!idItem) return;
@@ -602,9 +652,6 @@ void MainWindow::onDownloadAdded(int id, const QString& path, const QString& typ
 }
 
 void MainWindow::onDownloadProgress(int id, qint64 downloaded, qint64 total) {
-    downloadProgressMap[id] = downloaded;
-    downloadTotalMap[id] = total;
-
     DownloadItem item = DownloadManager::instance().getDownload(id);
 
     // Live-update the visible row(s) for this download so the progress bar and size
@@ -661,8 +708,6 @@ void MainWindow::onDownloadFailed(int id, const QString& error) {
 
 void MainWindow::onDownloadRemoved(int id) {
     downloadSpeeds.remove(id);
-    downloadProgressMap.remove(id);
-    downloadTotalMap.remove(id);
     refreshTable();
 }
 

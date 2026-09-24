@@ -52,11 +52,11 @@ void Logger::writeLog(const QString& level, const QString& message) {
     QFile file(logFilePath);
     if (file.open(QIODevice::Append | QIODevice::Text)) {
         file.write((line + "\n").toUtf8());
+        qint64 size = file.size();
         file.close();
-    }
-
-    if (file.size() > maxLogSize) {
-        rotateLogs();
+        if (size > maxLogSize) {
+            rotateLogs();
+        }
     }
 }
 

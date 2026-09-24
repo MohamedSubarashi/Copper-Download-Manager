@@ -14,7 +14,6 @@ TorrentManager& TorrentManager::instance() {
 int TorrentManager::addTorrent(const QString& magnetOrFile, const QString& savePath) {
     Logger::instance().info("TorrentManager: Adding torrent: " + magnetOrFile);
 
-    QString trackers = getDefaultTrackers().join(",");
     int id = Aria2cManager::instance().addTorrent(magnetOrFile, savePath);
 
     if (id > 0) {
@@ -52,17 +51,4 @@ void TorrentManager::removeDownload(int id) {
 void TorrentManager::addTrackers(int torrentId, const QStringList& trackers) {
     Logger::instance().info("TorrentManager: Adding " + QString::number(trackers.size()) + " trackers to torrent " + QString::number(torrentId));
     Aria2cManager::instance().addTrackers(torrentId, trackers);
-}
-
-QStringList TorrentManager::getDefaultTrackers() const {
-    QString trackerStr = DatabaseManager::instance().getSetting("defaultTrackers", "");
-    if (trackerStr.isEmpty()) {
-        return QStringList() <<
-            "udp://tracker.opentrackr.org:1337/announce" <<
-            "udp://open.stealth.si:80/announce" <<
-            "udp://tracker.torrent.eu.org:451/announce" <<
-            "udp://tracker.bittor.pw:1337/announce" <<
-            "http://tracker.opentrackr.org:1337/announce";
-    }
-    return trackerStr.split("\n", Qt::SkipEmptyParts);
 }

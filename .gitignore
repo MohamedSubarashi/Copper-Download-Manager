@@ -3,6 +3,9 @@ build/
 build-debug/
 build-*/
 
+# Debug build output (deployed by the CMake post-build hook)
+debug/
+
 # CMake artifacts
 CMakeCache.txt
 CMakeFiles/
@@ -35,6 +38,9 @@ releases/0.1.5/
 *.log
 *.zip
 *.exe
+
+# Python bytecode caches
+__pycache__/
 
 # Duplicated working copies of the repo (backup clones with their own .git)
 CopperBuild/

@@ -145,9 +145,7 @@ void AddUrlDialog::onAdd() {
     }
 
     if (typeIndex == 2 || UrlDetector::isYtDlpUrl(url)) {
-        UrlType detected = UrlDetector::detect(url);
-        SourceType sourceType = (detected == UrlPlaylist) ? SourceVideo : SourceVideo;
-        DownloadManagerDialog dialog(sourceType, url, path, this);
+        DownloadManagerDialog dialog(SourceVideo, url, path, this);
         dialog.setAudioFormat(audioFormat);
         if (dialog.exec() == QDialog::Accepted) {
             QVector<PlaylistEntry> selected = dialog.getSelectedEntries();
@@ -186,9 +184,7 @@ void AddUrlDialog::onAdd() {
             }
         } else {
             QString savePath = path.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) : path;
-            QString type = "HTTP";
-            if (typeIndex == 2) type = "YtDlp";
-            int id = DownloadManager::instance().addDownload(url, savePath, type);
+            int id = DownloadManager::instance().addDownload(url, savePath, "HTTP");
             if (id < 0) {
                 statusLabel->setText("Blocked by file-format filter (Settings > Downloads)");
                 return;

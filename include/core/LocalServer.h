@@ -6,6 +6,7 @@
 #include <QTcpSocket>
 #include <QHash>
 #include <QByteArray>
+#include <QJsonObject>
 
 class LocalServer : public QObject {
     Q_OBJECT

@@ -76,10 +76,8 @@ bool UrlDetector::isYtDlpUrl(const QString& url) {
         "soundcloud.com", "bandcamp.com",
         "nicovideo.jp", "bilibili.com", "bilibili.tv",
         "archive.org", "tumblr.com",
-        "twitch.tv", "crunchyroll.com",
-        "dailymotion.com", "veoh.com",
-        "metacafe.com", "dailymotion.com",
-        "rumble.com", "odysee.com"
+        "crunchyroll.com", "veoh.com",
+        "metacafe.com", "rumble.com", "odysee.com"
     };
 
     for (const QString& site : ytDlpSites) {

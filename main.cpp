@@ -1,5 +1,6 @@
 #include "ui/MainWindow.h"
 #include "ui/DownloadManagerDialog.h"
+#include "ui/SettingsDialog.h"
 #include "utils/ThemeManager.h"
 #include "utils/Logger.h"
 #include "utils/DefaultHandler.h"
@@ -179,7 +180,7 @@ int main(int argc, char* argv[]) {
 
     QApplication app(argc, argv);
     app.setApplicationName("Copper Download Manager");
-    app.setApplicationVersion("0.9.0");
+    app.setApplicationVersion("0.1.0");
     app.setOrganizationName("Copper");
 
     Logger::instance().info("========================================");
@@ -189,6 +190,12 @@ int main(int argc, char* argv[]) {
     DatabaseManager::instance().init();
 
     DefaultHandler::instance().autoUpdateRegistryPath();
+
+    // Enforce the "Start with Windows" setting (default on) at every launch:
+    // register the Run key when enabled, remove it when disabled. This also
+    // self-heals the registry path if the executable was moved.
+    bool startWithWindows = DatabaseManager::instance().getSetting("startup", "true") == "true";
+    SettingsDialog::updateStartupRegistry(startWithWindows);
 
     QString theme = DatabaseManager::instance().getSetting("theme", "System");
     ThemeManager::instance().applyTheme(ThemeManager::instance().stringToTheme(theme));

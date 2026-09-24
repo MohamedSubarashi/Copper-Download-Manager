@@ -17,6 +17,7 @@ class SettingsDialog : public QDialog {
 public:
     SettingsDialog(QWidget* parent = nullptr);
     QString getDownloadPath() const;
+    static void updateStartupRegistry(bool enabled);
 
 private slots:
     void onSave();
@@ -33,7 +34,6 @@ private slots:
     void accept() override;
 
 private:
-    void updateStartupRegistry(bool enabled);
     QTabWidget* tabWidget;
     QLineEdit* downloadPathEdit;
     QComboBox* chunkCombo;

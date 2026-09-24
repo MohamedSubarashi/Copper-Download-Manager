@@ -13,6 +13,8 @@ class QLabel;
 class QTimer;
 class QSystemTrayIcon;
 class QMenu;
+class QObject;
+class QWidget;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -25,11 +27,13 @@ protected:
     void changeEvent(QEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
+    bool eventFilter(QObject* obj, QEvent* event) override;
 
 private slots:
     void onAddUrl();
     void onSettings();
     void onAbout();
+    void onOpenDownloadsFolder();
     void onCheckForUpdates();
     void onStartSelected();
     void onPauseSelected();
@@ -67,7 +71,6 @@ private:
     void setupToolBar();
     void setupStatusBar();
     void setupSidebar();
-    void setupTable();
     void setupConnections();
     void setupShortcuts();
     void restoreWindowState();
@@ -88,15 +91,12 @@ private:
     QTimer* refreshTimer;
     QSystemTrayIcon* trayIcon;
     QMenu* trayMenu;
-    QMenu* contextMenu;
     // Set when the user explicitly chooses Quit (from the tray menu) so that the
     // next close event is treated as a real exit instead of minimizing to tray.
     bool m_forceExit = false;
 
     int currentFilter;
     QMap<int, qint64> downloadSpeeds;
-    QMap<int, qint64> downloadProgressMap;
-    QMap<int, qint64> downloadTotalMap;
     QSet<int> expandedGroups;
 };
 
