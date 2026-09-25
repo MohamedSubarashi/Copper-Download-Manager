@@ -56,25 +56,23 @@ Extension manifest validation (offline, run in CI and locally):
 python tests\validate_extensions.py
 ```
 Validates the MV3 shape, popup wiring, Firefox gecko.id + data-collection
-declaration, and that both extensions use `sendNativeMessage` (no copper:// or
-localhost ping).
+declaration, and that both extensions post downloads to the app's local HTTP
+API (`/api/download`) with a `copper://` launch fallback (no native-messaging
+dependency).
 
 ## 4. Manual QA checklist
 
 Run through these before publishing.
 
 ### Native-messaging injection (extension → desktop)
-- [ ] Firefox (registered on app startup using stable gecko.id
-      `copper-download-manager@copper`): context-menu "Download link with Copper"
-      sends the URL to the app over the named pipe and starts a download.
-- [ ] Chrome (dev/unpacked): register the loaded extension's `runtime.id` via
-      `--register-native-extension chrome <id>` or the in-extension register
-      handshake, then confirm the host manifest `allowed_origins` includes it and
-      injection works.
-- [ ] When Copper is closed, the host launches it automatically and the link is
-      still injected.
+- [ ] Chrome: right-click "Download link with Copper" posts the URL to
+      `http://127.0.0.1:24680/api/download` and a byte-exact download starts.
+- [ ] Firefox: the identical HTTP path works (add-on identified by gecko.id).
+- [ ] Started fresh (app closed): the extension opens `copper://open` to launch
+      the app, retries the API call, and the download still lands.
 - [ ] `copper_native_host.exe` sits in `<version>/` next to the app exe and the
-      Firefox manifest `path` points at it.
+      app-side pipe tests still pass (the extension itself no longer depends on
+      the host).
 
 
 ### Core downloads

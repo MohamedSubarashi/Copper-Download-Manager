@@ -16,6 +16,10 @@ Checks (offline, no external deps):
   * Every icon referenced by the manifest exists on disk.
   * Referenced JS/CSS files exist on disk.
 
+  The download path is HTTP-first (the app's local API) with a copper://
+  protocol launch fallback - the "normal" IDM-style integration. The extension
+  must NOT depend on native messaging at all.
+
 Usage:
     python tests/validate_extensions.py
 """
@@ -100,13 +104,16 @@ def validate_dir(label, path, is_firefox):
             ok &= check(os.path.isfile(os.path.join(path, ref)),
                         f"icon exists: {ref}")
 
-    # Reference checks for the native-messaging design.
+    # Reference checks for the HTTP-first design.
     perms = manifest.get("permissions") or []
-    ok &= check("nativeMessaging" in perms,
-                "nativeMessaging permission declared (extension talks to the host)")
+    ok &= check("nativeMessaging" not in perms,
+                "no nativeMessaging permission (extension talks to the app over HTTP)")
     ok &= check("tabs" in perms, "tabs permission declared (popup 'send current page')")
     ok &= check("downloads" in perms,
                 "downloads permission declared (auto-capture normal browser downloads)")
+    host_perms = manifest.get("host_permissions") or []
+    ok &= check(any("127.0.0.1:24680" in str(h) for h in host_perms),
+                "host_permissions grants the app's local HTTP API")
 
     # All referenced JS files exist on disk.
     js_refs = []
@@ -121,22 +128,22 @@ def validate_dir(label, path, is_firefox):
             ok &= check(os.path.isfile(os.path.join(path, ref)),
                         f"referenced JS exists: {ref}")
 
-    # The background must route through the native host (not copper:// HTTP or
-    # the deprecated localhost ping), so it works without a TCP port or protocol.
+    # The background must route downloads through the app's local HTTP API
+    # (http://127.0.0.1:24680/api/download) - the normal integration path - and
+    # launch/raise the app via the registered copper:// protocol when it is not
+    # running. No native-messaging dependency.
     bg_path = js_refs[0] if js_refs else None
     if bg_path:
         with open(os.path.join(path, bg_path), encoding="utf-8") as f:
             bg_src = f.read()
-        ok &= check("sendNativeMessage" in bg_src,
-                    "background uses sendNativeMessage (native messaging)")
-        ok &= check("copper://" not in bg_src,
-                    "background no longer depends on the copper:// protocol")
-        # Native messaging is the ONLY download path. The localhost HTTP API may
-        # appear exclusively for the status-page health-check fallback (dev and
-        # portable setups where the host isn't registered yet), never for routing
-        # a download. Both downloads and the status ping route via sendNativeMessage.
-        ok &= check("127.0.0.1:24680" not in bg_src or "/api/ping" in bg_src,
-                    "localhost HTTP is only a ping fallback, never the download path")
+        ok &= check("api/download" in bg_src,
+                    "background posts downloads to /api/download (local HTTP API)")
+        ok &= check("http://127.0.0.1:24680" in bg_src,
+                    "background targets the app's local HTTP API")
+        ok &= check("copper://open" in bg_src,
+                    "background launches the app via the copper:// protocol")
+        ok &= check("sendNativeMessage" not in bg_src,
+                    "background no longer uses the native messaging host")
         ok &= check("action.onClicked" in bg_src,
                     "toolbar click opens status page (action.onClicked)")
         ok &= check("openStatusTab" in bg_src,

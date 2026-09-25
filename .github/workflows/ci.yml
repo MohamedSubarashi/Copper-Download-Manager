@@ -108,12 +108,31 @@ jobs:
           print("created", out)
           PY
 
+      - name: Build Inno Setup installer (Release only)
+        if: matrix.config == 'Release'
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $cand = @(
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "C:\Program Files\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $cand | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "ISCC.exe not found after install" }
+          & $iscc "installer\CopperDownloadManager.iss"
+          $ver = [regex]::Match((Get-Content CMakeLists.txt -Raw), 'project\([^ ]+ VERSION ([0-9.]+)').Groups[1].Value
+          $out = "installer\CopperDownloadManager-$ver-setup.exe"
+          if (-not (Test-Path $out)) { throw "Setup exe was not produced: $out" }
+          Get-Item $out | Select-Object FullName, Length
+
       - name: Upload portable artifact (Release only)
         if: matrix.config == 'Release'
         uses: actions/upload-artifact@v4
         with:
           name: copper-download-manager-portable-${{ matrix.qt }}
-          path: installer/release/CopperDownloadManager-portable-*.zip
+          path: |
+            installer/release/CopperDownloadManager-portable-*.zip
+            installer/CopperDownloadManager-*-setup.exe
 
   build-linux-deb:
     name: Build Linux .deb (Ubuntu / Qt 6.6.3)

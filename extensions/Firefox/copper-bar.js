@@ -6,7 +6,7 @@
 // floats a small bar with per-item Download MP4 / Download MP3 / Copy actions
 // plus a "Download all page media" batch button. It talks to the background
 // service worker (sendUrl/sendBatch), which routes everything to the desktop
-// app via the native host with an HTTP fallback.
+// app over the local HTTP API.
 
 (() => {
   "use strict";

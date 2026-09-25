@@ -15,7 +15,6 @@
     "storage",
     "tabs",
     "notifications",
-    "nativeMessaging",
     "downloads"
   ],
   "host_permissions": [

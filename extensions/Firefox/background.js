@@ -1,11 +1,13 @@
 // Copper Download Manager - extension background (Chrome & Firefox MV3).
 //
 // Command center for the browser side:
-//   * native-first dispatch (sendNativeMessage) with an HTTP API fallback and an
-//     on-demand desktop-app launch + retry;
+//   * HTTP-first dispatch: downloads are posted straight to the app's local API
+//     (http://127.0.0.1:24680/api/download), the normal IDM-style path. When the
+//     app is not running it is launched through the registered copper:// protocol
+//     and the request is retried;
 //   * settings engine (storage.local) driving capture/bar/menus/notifications;
 //   * dedupe + serialized batch queue so "download all page media" never floods
-//     the desktop app or the native host;
+//     the desktop app;
 //   * expanded context menus (link/image/video/audio/magnet/selection/page);
 //   * auto-capture of normal browser downloads (chrome.downloads.onCreated),
 //     honouring the app's include/exclude file-format filter.
@@ -15,10 +17,10 @@
 const STORAGE_KEY = "copperExtensionEnabled";
 const SETTINGS_KEY = "copperSettings";
 const LAST_RESULT_KEY = "copperLastResult";
-const HOST = "com.copper.dm";
 const STATUS_PAGE = "copper.html";
 const HTTP_API = "http://127.0.0.1:24680";
 const HTTP_TIMEOUT = 3000;
+const LAUNCH_RETRY_MS = 1500;
 
 const DEFAULT_SETTINGS = {
   autoCapture: true,    // intercept the browser's own downloads and hand to Copper
@@ -69,29 +71,12 @@ function rememberResult(ok, detail) {
 // Transports
 // ---------------------------------------------------------------------------
 
-function sendNativeMessage(message) {
-  return new Promise((resolve) => {
-    try {
-      chrome.runtime.sendNativeMessage(HOST, message, (response) => {
-        const err = chrome.runtime.lastError;
-        if (err || !response) {
-          resolve({ ok: false, error: err ? err.message : "no response" });
-          return;
-        }
-        resolve(response);
-      });
-    } catch (e) {
-      resolve({ ok: false, error: e.message });
-    }
-  });
-}
-
 function httpApi(path, method, body) {
   return new Promise((resolve) => {
     let timer;
     const controller = new AbortController();
     const opts = {
-      method,
+      method: method || "GET",
       cache: "no-store",
       signal: controller.signal,
     };
@@ -120,10 +105,16 @@ async function httpPing() {
   return res.status >= 200 && res.status < 500;
 }
 
-async function launchCopper() {
+// Launch (or raise) the desktop app through its registered copper:// protocol.
+// The app enforces autostart, protocol and pipe launch as part of startup.
+function launchCopper() {
   try {
-    await sendNativeMessage({ action: "open" });
+    chrome.tabs.create({ url: "copper://open" });
   } catch (e) { /* ignore */ }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ---------------------------------------------------------------------------
@@ -153,7 +144,7 @@ async function drainQueue() {
     const task = queue.shift();
     const result = await sendToCopper(task.url, task.filename, task.path, task.format);
     if (task.resolve) task.resolve(result.accepted);
-    await new Promise((r) => setTimeout(r, 250));
+    await sleep(250);
   }
   queueBusy = false;
 }
@@ -162,14 +153,8 @@ async function drainQueue() {
 // Injection core
 // ---------------------------------------------------------------------------
 
-function isNotInstalledReply(rep) {
-  if (!rep || rep.ok === undefined) return true;
-  if (rep.ok) return false;
-  const msg = (rep.error || "").toLowerCase();
-  return msg.includes("not found") || msg.includes("not installed");
-}
-
-// Send one download request through every transport until one succeeds.
+// Send one download request to the app over the local HTTP API. When the app is
+// not reachable it is launched via copper:// and the request is retried once.
 async function sendToCopper(url, filename = "", path = "", format = settings.defaultFormat) {
   const enabled = await getCurrentEnabledState();
   if (!enabled) {
@@ -177,13 +162,6 @@ async function sendToCopper(url, filename = "", path = "", format = settings.def
   }
 
   let rejectDetail = "";
-
-  const rep = await sendNativeMessage({ action: "download", url, filename, path, format });
-  if (rep && rep.ok) {
-    rememberResult(true, "native");
-    return { accepted: true, notInstalled: false, reason: "native" };
-  }
-  const notInstalled = isNotInstalledReply(rep);
 
   const h = await httpApi("/api/download", "POST", { url, filename, path, format });
   if (h.ok) {
@@ -194,13 +172,8 @@ async function sendToCopper(url, filename = "", path = "", format = settings.def
   if (definitiveReject && h.json && h.json.error) rejectDetail = h.json.error;
 
   if (!definitiveReject) {
-    await launchCopper();
-    await new Promise((r) => setTimeout(r, 900));
-    const rep2 = await sendNativeMessage({ action: "download", url, filename, path, format });
-    if (rep2 && rep2.ok) {
-      rememberResult(true, "native-after-launch");
-      return { accepted: true, notInstalled: false, reason: "native-after-launch" };
-    }
+    launchCopper();
+    await sleep(LAUNCH_RETRY_MS);
     const h2 = await httpApi("/api/download", "POST", { url, filename, path, format });
     if (h2.ok) {
       rememberResult(true, "http-after-launch");
@@ -212,7 +185,7 @@ async function sendToCopper(url, filename = "", path = "", format = settings.def
   rememberResult(false, definitiveReject ? "rejected" : "unreachable");
   return {
     accepted: false,
-    notInstalled: notInstalled || !definitiveReject,
+    notInstalled: !definitiveReject,
     reason: "failed",
     detail: rejectDetail,
   };
@@ -455,25 +428,6 @@ function collectPageMedia(opts) {
 }
 
 // ---------------------------------------------------------------------------
-// Registration with the desktop app
-// ---------------------------------------------------------------------------
-
-async function registerWithCopper() {
-  try {
-    const id = chrome.runtime.id;
-    if (!id) return;
-    const isFirefox = typeof browser !== "undefined" && typeof browser.runtime !== "undefined";
-    await sendNativeMessage({
-      action: "register",
-      browser: isFirefox ? "firefox" : "chrome",
-      extensionId: id,
-    });
-  } catch (e) {
-    // Not fatal; the app already registers Firefox's stable id and Chrome store id.
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Message API (status page, content script, devtools/testing)
 // ---------------------------------------------------------------------------
 
@@ -547,18 +501,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request && request.action === "openCopper") {
-    launchCopper().then(() => sendResponse({ success: true }));
+    launchCopper();
+    sendResponse({ success: true });
     return true;
   }
 
   if (request && request.action === "openManager") {
     openStatusTab(false);
     sendResponse({ success: true });
-    return true;
-  }
-
-  if (request && request.action === "register") {
-    registerWithCopper().then(() => sendResponse({ success: true }));
     return true;
   }
 
@@ -583,4 +533,3 @@ loadSettings(() => {
     if (settings.contextMenus && enabled) buildMenus();
   });
 });
-registerWithCopper();
