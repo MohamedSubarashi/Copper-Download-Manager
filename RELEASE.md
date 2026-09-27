@@ -44,21 +44,27 @@ Run the full integration suite against the deployed exe:
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `N passed, 0 failed` (35 cases as of v0.4.0). The suite covers
+Expected result: `N passed, 0 failed` (55 cases as of v0.2.0). The suite covers
 launch/intake, single-instance, protocol forwarding, chunked/truncated/
 unknown-length downloads, the copper:// flow, .torrent injection, the
-native-messaging host -> named-pipe injection (ping + byte-exact download), and
-auto-resume of an interrupted HTTP download after an app restart.
+native-messaging host -> named-pipe injection (ping + byte-exact download),
+auto-resume of an interrupted HTTP download after an app restart, and the
+playlist job model (one folder job per playlist, one row per item carrying its
+playlist position and video id, pause/resume/retry of the job).
+
+Note: the suite leaves rows in the app database between runs. Tests that look a
+job up by URL use a unique playlist id per run, so a leftover row from an
+earlier run cannot be mistaken for a new one.
 
 Extension manifest validation (offline, run in CI and locally):
 
 ```powershell
 python tests\validate_extensions.py
 ```
-Validates the MV3 shape, popup wiring, Firefox gecko.id + data-collection
-declaration, and that both extensions post downloads to the app's local HTTP
-API (`/api/download`) with a `copper://` launch fallback (no native-messaging
-dependency).
+Validates the MV3 shape, toolbar `action` + popup wiring, Firefox gecko.id +
+data-collection declaration, the required `downloads` permission, and that both
+extensions hand work to the app over native messaging (with a
+`http://127.0.0.1:24680/api/download` fallback while the host is unavailable).
 
 ## 4. Manual QA checklist
 
@@ -92,7 +98,24 @@ Run through these before publishing.
       missing-tool error points to Settings > Tools.
 - [ ] mp3/mp4 (merge) formats: confirm ffmpeg pre-flight check runs before the
       merge/extract step.
-- [ ] Playlist: confirm track-number naming (001, 002...) works.
+- [ ] Playlist: select a *subset* of items in the picker and confirm only those
+      files appear, numbered by their real playlist position (001, 002, ...).
+- [ ] Playlist: one folder row per item, each row advancing on its own while a
+      single yt-dlp process runs (check Task Manager: exactly one yt-dlp).
+- [ ] Playlist: pause mid-item, resume, and confirm the finished items stay
+      Completed and the partial one continues instead of restarting.
+- [ ] Playlist: kill the app mid-playlist, relaunch, and confirm the finished
+      items stay Completed and only the remainder is fetched.
+- [ ] Playlist: one unavailable item does not cancel the rest of the job.
+
+### Download info window
+- [ ] Right-click a row > Download Info (or double-click the row) opens a
+      per-download window with live progress, size, speed, and time left.
+- [ ] Pause / Resume / Retry / Cancel from that window drive the download.
+- [ ] With "Open the download window automatically" enabled in Settings, each new
+      download opens its own window; closing a window hides it and it can be
+      reopened from the same menu entry.
+- [ ] A playlist folder opens a single window listing its items.
 
 ### Torrents / aria2c
 - [ ] .torrent file: parse file list and start download.

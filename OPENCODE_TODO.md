@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.9.0
+Current version: 0.2.0
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 
@@ -99,10 +99,10 @@ The project is ready for the next milestone when the following are true:
 - [x] Browser extension to desktop integration is stable
 - [x] Torrent/media tools install and run without critical failures
 - [x] Settings and state recovery survive reopen/restart
-- [x] A basic automated regression suite exists for critical flows (38 integration cases + CI extension-lint, all green)
+- [x] A basic automated regression suite exists for critical flows (55 integration cases + CI extension-lint, all green)
 
 All Priority priorities (0-9) are complete as of this pass. Every remaining
-checkmark in this file has been verified by a build, the 38-case integration
+checkmark in this file has been verified by a build, the 55-case integration
 suite, or CI.
 
 ## Completed milestone: v0.5.3 (full playlist downloads + vivid multi-type intake)
@@ -245,6 +245,70 @@ suite, or CI.
 - [x] CI extension-lint validates the new native-messaging shape; integration
       suite covers host ping, host->pipe download, and pipe-injected byte-exact
       completion.
+
+## Completed milestone: v0.2.0 (playlists that finish, per-download window, real resume)
+
+- [x] **Playlists no longer die after a few items.** Root cause: every item spawned
+      its *own* yt-dlp process, and five concurrent extractors for one playlist got
+      the site throttling. A playlist is now **one** yt-dlp process, and the table
+      keeps one row per item: progress is parsed back out of the child's own
+      progress lines and attributed to the right row via the site video id, with the
+      playlist position as the fallback. Verified on a real 19-item playlist: one
+      process, per-row progress, all rows Completed, and an unavailable item no
+      longer aborts the job (`--ignore-errors --no-abort-on-error`).
+- [x] **A selected subset is honored.** The item picker's selection is turned into
+      `--playlist-items <positions>` from each row's playlist position, so picking
+      3 of 19 downloads 3 files. A row whose position is unknown falls back to the
+      whole playlist (a missing video beats a silently missing download).
+- [x] **IDM-style per-download window** (`DownloadInfoDialog`): live progress, size,
+      speed, time left, an item list for playlists, and Pause / Resume / Retry /
+      Cancel / Open Folder / Open File / Copy URL. Opened on demand (right-click,
+      double-click, or `Ctrl+I`) or automatically for every new download via the new
+      *Open the download window automatically* setting. Closing hides the window
+      instead of destroying it, so reopening is instant.
+- [x] **Resume that actually resumes.** Pause terminates the process tree and keeps
+      the `.part` files; resume relaunches yt-dlp with `--continue`. (The old
+      PowerShell `Suspend`/resume was removed: it froze the child, which the stall
+      watchdog then killed 60s later as a hang.) A stall watchdog warns on the first
+      timeout and only kills and reports a real failure on the second, and it is
+      never armed while paused.
+- [x] **Automatic retry with backoff**: a failed download is retried up to
+      *Maximum automatic retries* times (default 3) after 5s, 10s, 20s, ... The
+      attempt counter is persisted, is *not* reset on an automatic retry (only a
+      manual Retry resets it), and an item waiting out its backoff is skipped by
+      the queue starter so the backoff is actually honored. Plus **Retry now** and
+      **Retry all failed** in the File menu and the row context menu.
+- [x] **Auto-resume after a restart**: interrupted transfers are restored, and a
+      playlist job re-reads yt-dlp's download archive
+      (`<job folder>/.copper-archive.txt`) so finished items are adopted as
+      Completed and only the remainder is re-fetched. Folder jobs are governed by
+      the yt-dlp job limit instead of consuming a transfer slot from
+      *Maximum concurrent downloads* (which is now actually read from a setting
+      instead of a hard-coded 5).
+- [x] **Row state is honest.** Pausing or cancelling a job no longer downgrades
+      items that already finished; a job's progress ignores items the user
+      cancelled; item sizes are reconciled against the files on disk so a folder
+      never reads "209 MB / 99 MB"; a file that kept a yt-dlp fragment suffix
+      (`title.f616.mp4`) from an interrupted merge is renamed to its final name; and
+      an item whose name the app guessed wrong adopts the real file by its track
+      number.
+- [x] **New settings** (Settings > Downloads): *Maximum concurrent downloads*,
+      *Maximum concurrent yt-dlp jobs* (default 2), *yt-dlp fragments per item*
+      (default 4), *Maximum automatic retries*, and *Open the download window
+      automatically*.
+- [x] **DB schema v2** (migrated in place, guarded by `PRAGMA table_info`): adds
+      `audio_format`, `attempts`, `video_id`, `track_index`. `/api/downloads` now
+      also reports `parentId`, `isFolder`, `attempts`, `error`, `videoId` and
+      `trackIndex`.
+- [x] Playlist URLs arriving over CLI, the HTTP API, the native pipe, or
+      `copper://` now go through the item picker instead of the single-video path.
+- [x] New scriptable control arguments (used by the tests, handy from a shell):
+      `--playlist-dialog:<url>`, `--playlist-real:<url>[:<n>|:<a>,<b>..]`,
+      `pause-all:<id>`, `resume-all:<id>`, `retry:<id>`, `info:<id>`.
+- [x] Integration suite expanded to **55** cases (playlist job shape, per-item
+      attribution, pause/resume, retry) and all green against the deployed
+      `installer/release/0.2.0/` exe. Version bumped to **0.2.0** (CMake, `main.cpp`,
+      `app.rc`, DB User-Agent, THIRD-PARTY-NOTICES, Inno Setup, PKGBUILD).
 
 ## Suggested next milestone
 

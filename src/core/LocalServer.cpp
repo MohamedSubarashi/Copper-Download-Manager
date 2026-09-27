@@ -329,6 +329,17 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
             dlObj["totalSize"] = item.totalSize;
             dlObj["speed"] = item.speed;
             dlObj["type"] = item.type;
+            // A playlist/torrent folder owns its items, so consumers need the link
+            // and the folder flag to tell "one job with N items" from N transfers.
+            dlObj["parentId"] = item.parentId;
+            dlObj["isFolder"] = item.isFolder;
+            dlObj["attempts"] = item.attempts;
+            dlObj["error"] = item.error;
+            // Playlist attribution: which site video a row mirrors and where that
+            // video sits in its playlist. Both are what let a job tell its items
+            // apart when yt-dlp only reports progress for one at a time.
+            dlObj["videoId"] = item.videoId;
+            dlObj["trackIndex"] = item.trackIndex;
             downloadsArray.append(dlObj);
         }
 

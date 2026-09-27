@@ -15,6 +15,7 @@ class QSystemTrayIcon;
 class QMenu;
 class QObject;
 class QWidget;
+class DownloadInfoDialog;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -47,6 +48,9 @@ private slots:
     void onClearCompleted();
     void onPauseAll();
     void onResumeAll();
+    void onOpenDownloadInfo();
+    void onRetrySelected();
+    void onRetryAllFailed();
 
     void onDownloadAdded(int id, const QString& path, const QString& type, bool isFolder);
     void onDownloadProgress(int id, qint64 downloaded, qint64 total);
@@ -80,6 +84,9 @@ private:
     QString formatEta(qint64 remaining, qint64 speed) const;
     QColor statusColor(const QString& status) const;
     QIcon fileTypeIcon(const QString& filePath, bool isFolder) const;
+    // Shows (or raises) the individual info window for a download. A playlist
+    // folder has one window listing its items.
+    void openDownloadInfo(int id);
 
     QTableWidget* table;
     QListWidget* sidebar;
@@ -98,6 +105,10 @@ private:
     int currentFilter;
     QMap<int, qint64> downloadSpeeds;
     QSet<int> expandedGroups;
+    // One info window per download id, reused so opening it again raises the
+    // existing window instead of stacking duplicates.
+    QHash<int, DownloadInfoDialog*> infoDialogs;
+    QSet<int> infoWindowsAutoOpened;
 };
 
 #endif

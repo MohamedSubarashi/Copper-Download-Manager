@@ -4,10 +4,12 @@
 #include "ui/AboutDialog.h"
 #include "ui/DownloadManagerDialog.h"
 #include "ui/TorrentDetailsDialog.h"
+#include "ui/DownloadInfoDialog.h"
 #include "ui/DownloadItemDelegate.h"
 #include "utils/CopperLink.h"
 #include "utils/FileNameSanitizer.h"
 #include "utils/UrlDetector.h"
+#include "utils/YtDlpManager.h"
 #include "core/DownloadManager.h"
 #include "core/LocalServer.h"
 #include "core/PipeServer.h"
@@ -47,6 +49,7 @@
 #include <QMimeData>
 #include <QFileDialog>
 #include <QSettings>
+#include <QRegularExpression>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStandardPaths>
@@ -231,6 +234,15 @@ void MainWindow::setupMenuBar() {
 
     QAction* pauseAction = fileMenu->addAction(QIcon(":/icons/Pause.png"), "&Pause All");
     connect(pauseAction, &QAction::triggered, this, &MainWindow::onPauseAll);
+
+    fileMenu->addSeparator();
+
+    QAction* infoAction = fileMenu->addAction("Download &Info...");
+    infoAction->setShortcut(QKeySequence("Ctrl+I"));
+    connect(infoAction, &QAction::triggered, this, &MainWindow::onOpenDownloadInfo);
+
+    QAction* retryAction = fileMenu->addAction("&Retry Failed");
+    connect(retryAction, &QAction::triggered, this, &MainWindow::onRetryAllFailed);
 
     fileMenu->addSeparator();
 
@@ -644,10 +656,19 @@ void MainWindow::onResumeAll() {
 }
 
 void MainWindow::onDownloadAdded(int id, const QString& path, const QString& type, bool isFolder) {
-    Q_UNUSED(id);
     Q_UNUSED(path);
     Q_UNUSED(type);
     Q_UNUSED(isFolder);
+
+    // Optional IDM-style behaviour: pop up this download's own window as soon as
+    // it is queued. A playlist folder opens one window listing its items rather
+    // than one window per video.
+    if (DatabaseManager::instance().getSetting("autoOpenDownloadInfo", "false") == "true" &&
+        !infoWindowsAutoOpened.contains(id)) {
+        infoWindowsAutoOpened.insert(id);
+        openDownloadInfo(id);
+    }
+
     refreshTable();
 }
 
@@ -708,6 +729,13 @@ void MainWindow::onDownloadFailed(int id, const QString& error) {
 
 void MainWindow::onDownloadRemoved(int id) {
     downloadSpeeds.remove(id);
+    infoWindowsAutoOpened.remove(id);
+    // The info window of a removed download has nothing left to show, so close it
+    // rather than leaving a stale panel on screen.
+    if (DownloadInfoDialog* dlg = infoDialogs.take(id)) {
+        dlg->close();
+        dlg->deleteLater();
+    }
     refreshTable();
 }
 
@@ -1039,19 +1067,30 @@ void MainWindow::showContextMenu(const QPoint& pos) {
         } else if (dlItem.status == "Paused" || dlItem.status == "Failed") {
             menu.addAction(QIcon(":/icons/Start.png"), "Resume All", this, &MainWindow::onStartSelected);
         }
+        if (dlItem.status == "Failed" || dlItem.status == "Cancelled") {
+            menu.addAction(QIcon(":/icons/Start.png"), "Retry", this, &MainWindow::onRetrySelected);
+        }
+        menu.addAction("Download Info...", this, [this, id]() { openDownloadInfo(id); });
+        menu.addSeparator();
         menu.addAction(QIcon(":/icons/Delete.png"), "Remove All", this, &MainWindow::onDeleteSelected);
     } else {
         if (dlItem.status == "Downloading") {
             menu.addAction(QIcon(":/icons/Pause.png"), "Pause", this, &MainWindow::onPauseSelected);
             menu.addAction(QIcon(":/icons/Stop.png"), "Cancel", this, &MainWindow::onStopSelected);
-        } else if (dlItem.status == "Paused" || dlItem.status == "Failed") {
+        } else if (dlItem.status == "Paused" || dlItem.status == "Failed" || dlItem.status == "Cancelled") {
             menu.addAction(QIcon(":/icons/Start.png"), "Resume", this, &MainWindow::onStartSelected);
             menu.addAction(QIcon(":/icons/Stop.png"), "Cancel", this, &MainWindow::onStopSelected);
         } else if (dlItem.status == "Completed") {
             menu.addAction("Open File", this, &MainWindow::onOpenFile);
             menu.addAction("Open Folder", this, &MainWindow::onOpenFolder);
         }
+        if (dlItem.status == "Failed" || dlItem.status == "Cancelled") {
+            menu.addAction(QIcon(":/icons/Start.png"), "Retry", this, [this, id]() {
+                DownloadManager::instance().retryDownload(id);
+            });
+        }
         menu.addSeparator();
+        menu.addAction("Download Info...", this, [this, id]() { openDownloadInfo(id); });
         menu.addAction("Copy URL", this, &MainWindow::onCopyUrl);
         if (dlItem.type == "Torrent" && dlItem.aria2cId > 0) {
             menu.addAction("Torrent Details...", this, &MainWindow::onTorrentDetails);
@@ -1083,7 +1122,57 @@ void MainWindow::onTableDoubleClick(const QModelIndex& index) {
         refreshTable();
     } else if (item.status == "Completed") {
         QDesktopServices::openUrl(QUrl::fromLocalFile(item.filePath));
+    } else {
+        // A row that is not a finished file opens its own info window, which is
+        // the IDM behaviour: double-click to watch/pause one specific transfer.
+        openDownloadInfo(id);
     }
+}
+
+void MainWindow::openDownloadInfo(int id) {
+    if (id <= 0) return;
+
+    auto it = infoDialogs.constFind(id);
+    if (it != infoDialogs.constEnd() && it.value()) {
+        DownloadInfoDialog* dlg = it.value();
+        dlg->refresh();
+        dlg->show();
+        dlg->raise();
+        dlg->activateWindow();
+        return;
+    }
+
+    DownloadInfoDialog* dlg = new DownloadInfoDialog(id, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose, false);
+    connect(dlg, &QObject::destroyed, this, [this, id]() { infoDialogs.remove(id); });
+    infoDialogs.insert(id, dlg);
+    dlg->show();
+}
+
+void MainWindow::onOpenDownloadInfo() {
+    QTableWidgetItem* idItem = table->item(table->currentRow(), 0);
+    if (!idItem) return;
+    openDownloadInfo(idItem->data(Qt::UserRole).toInt());
+}
+
+void MainWindow::onRetrySelected() {
+    QList<QTableWidgetItem*> selected = table->selectedItems();
+    QSet<int> retried;
+    for (QTableWidgetItem* cell : selected) {
+        QTableWidgetItem* idItem = table->item(cell->row(), 0);
+        if (!idItem) continue;
+        int id = idItem->data(Qt::UserRole).toInt();
+        if (id <= 0 || retried.contains(id)) continue;
+        retried.insert(id);
+        DownloadManager::instance().retryDownload(id);
+    }
+    refreshTable();
+}
+
+void MainWindow::onRetryAllFailed() {
+    DownloadManager::instance().retryAllFailed();
+    refreshTable();
+    statusBarWidget->showMessage("Retrying all failed downloads", 4000);
 }
 
 void MainWindow::onTableCollapse() {
@@ -1109,6 +1198,139 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
 
     if (arg == "show") {
         refreshTable();
+        return;
+    }
+
+    // Non-interactive test hook: creates a playlist job exactly the way the item
+    // picker does, but without the modal dialog, so a headless run can verify that
+    // a playlist URL really becomes ONE job with one row per item.
+    if (arg.startsWith("--playlist-dialog:")) {
+        QString playlistUrl = arg.mid(QString("--playlist-dialog:").size()).trimmed();
+        Logger::instance().info("Playlist dialog bypass requested for " + playlistUrl.left(80));
+        if (playlistUrl.isEmpty() ||
+            !(UrlDetector::isPlaylistUrl(playlistUrl) || UrlDetector::detect(playlistUrl) == UrlPlaylist)) {
+            Logger::instance().warning("Playlist dialog bypass ignored: not a playlist URL");
+            return;
+        }
+        QVector<PlaylistEntry> entries;
+        for (int i = 1; i <= 3; i++) {
+            PlaylistEntry entry;
+            entry.index = i;
+            entry.videoId = QString("coppertest%1").arg(i, 8, 10, QChar('0'));
+            entry.title = "Copper Test Item " + QString::number(i);
+            entry.url = "https://www.youtube.com/watch?v=" + entry.videoId;
+            entry.extension = "mp4";
+            entry.selected = true;
+            entries.append(entry);
+        }
+        QString outDir = DatabaseManager::instance().getSetting("downloadPath", "");
+        if (outDir.isEmpty()) {
+            outDir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        }
+        outDir += "/copper-playlist-test";
+        int jobId = DownloadManager::instance().addPlaylistDownload(entries, outDir, "YtDlp",
+                                                                   true, "mp4", "", "", playlistUrl);
+        refreshTable();
+        Logger::instance().info("Playlist dialog bypass created job id " + QString::number(jobId));
+        return;
+    }
+
+    // Same hook, but with the real item list fetched from the site, so the whole
+    // playlist pipeline can be exercised end to end without the modal picker.
+    // "--playlist-real:<url>" with an optional selection tail:
+    //   ":<n>"       -> the first n items
+    //   ":<a>,<b>.." -> exactly those 1-based playlist positions
+    if (arg.startsWith("--playlist-real:")) {
+        QString rest = arg.mid(QString("--playlist-real:").size()).trimmed();
+        QString url = rest;
+        QString selection;
+        // The URL itself contains colons, so the optional selection can only be
+        // read from the very end of the argument.
+        int lastColon = rest.lastIndexOf(':');
+        if (lastColon > 0) {
+            QString tail = rest.mid(lastColon + 1);
+            static const QRegularExpression specRe("^\\d+(?:[,-]\\d+)*$");
+            if (specRe.match(tail).hasMatch()) {
+                selection = tail;
+                url = rest.left(lastColon).trimmed();
+            }
+        }
+        Logger::instance().info("Real playlist job requested for " + url.left(80) +
+                                " (selection: " + (selection.isEmpty() ? "all" : selection) + ")");
+        YtDlpManager::instance().fetchPlaylistInfo(url, [this, url, selection](const QVector<PlaylistEntry>& found) {
+            QVector<PlaylistEntry> entries = found;
+            if (!selection.isEmpty()) {
+                bool firstCount = !selection.contains(',') && !selection.contains('-');
+                QSet<int> wanted;
+                if (firstCount) {
+                    for (int i = 1; i <= selection.toInt(); i++) wanted.insert(i);
+                } else {
+                    for (const QString& part : selection.split(',')) {
+                        QString piece = part.trimmed();
+                        int dash = piece.indexOf('-');
+                        if (dash > 0) {
+                            int from = piece.left(dash).toInt();
+                            int to = piece.mid(dash + 1).toInt();
+                            for (int i = qMin(from, to); i <= qMax(from, to); i++) wanted.insert(i);
+                        } else {
+                            // A bare number is ONE position, not a range from 1.
+                            wanted.insert(piece.toInt());
+                        }
+                    }
+                }
+                for (PlaylistEntry& e : entries) e.selected = wanted.contains(e.index);
+            }
+            if (entries.isEmpty()) {
+                Logger::instance().error("Real playlist job found no items for " + url.left(80));
+                return;
+            }
+            QString outDir = DatabaseManager::instance().getSetting("downloadPath", "");
+            if (outDir.isEmpty()) {
+                outDir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+            }
+            outDir += "/copper-playlist-test";
+            int jobId = DownloadManager::instance().addPlaylistDownload(entries, outDir, "YtDlp",
+                                                                       true, "mp4", "", "", url);
+            refreshTable();
+            Logger::instance().info("Real playlist job created id " + QString::number(jobId) +
+                                    " with " + QString::number(entries.size()) + " listed item(s)");
+        });
+        return;
+    }
+
+    // Scriptable control of one download (used by the automated tests, and handy
+    // for driving the app from a script). "<verb>:<id>" where verb is pause-all,
+    // resume-all or retry.
+    static const QStringList verbs = {"pause-all", "resume-all", "retry"};
+    for (const QString& verb : verbs) {
+        if (!arg.startsWith(verb + ":")) continue;
+        bool ok = false;
+        int targetId = arg.mid(verb.size() + 1).toInt(&ok);
+        if (!ok || targetId <= 0) {
+            Logger::instance().warning("Ignoring malformed control argument: " + arg.left(60));
+            return;
+        }
+        if (verb == "pause-all") {
+            DownloadManager::instance().pauseDownload(targetId);
+        } else if (verb == "resume-all") {
+            DownloadManager::instance().resumeDownload(targetId);
+        } else {
+            DownloadManager::instance().retryDownload(targetId);
+        }
+        refreshTable();
+        return;
+    }
+
+    // Open the IDM-style per-download window for one download.
+    if (arg.startsWith("info:")) {
+        bool ok = false;
+        const int targetId = arg.mid(5).toInt(&ok);
+        if (!ok || targetId <= 0) {
+            Logger::instance().warning("Ignoring malformed info argument: " + arg.left(60));
+            return;
+        }
+        openDownloadInfo(targetId);
+        Logger::instance().info("Opened download info window for " + QString::number(targetId));
         return;
     }
 
@@ -1153,8 +1375,27 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
         }
     } else if (arg.startsWith("http://") || arg.startsWith("https://") || arg.startsWith("ftp://")) {
         UrlType detected = UrlDetector::detect(arg);
+        if (detected == UrlPlaylist) {
+            // A playlist is a single yt-dlp job: the items and folder are picked
+            // in the same dialog the rest of the app uses.
+            QString savePath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+            DownloadManagerDialog dialog(SourceVideo, arg, savePath, this);
+            if (dialog.exec() == QDialog::Accepted) {
+                QVector<PlaylistEntry> selected = dialog.getSelectedEntries();
+                QString outputPath = dialog.getOutputPath();
+                bool useTracks = dialog.getUseTrackNumbers();
+                QString fmt = dialog.getAudioFormat();
+                if (fmt.isEmpty()) fmt = "mp4";
+                if (!selected.isEmpty()) {
+                    DownloadManager::instance().addPlaylistDownload(selected, outputPath, "YtDlp",
+                                                                     useTracks, fmt, "", "", arg);
+                }
+            }
+            refreshTable();
+            return;
+        }
         int addId = -2; // negative => not yet attempted
-        if (detected == UrlPlaylist || detected == UrlYtDlp) {
+        if (detected == UrlYtDlp) {
             addId = DownloadManager::instance().addDownload(arg, "", "YtDlp");
         } else {
             addId = DownloadManager::instance().addDownload(arg, "", "HTTP");
@@ -1209,10 +1450,30 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
                     bool wantMp3 = cl.format.compare("mp3", Qt::CaseInsensitive) == 0;
                     bool wantPlaylist = cl.format.startsWith("playlist-", Qt::CaseInsensitive);
                     bool wantPlaylistMp3 = cl.format.compare("playlist-mp3", Qt::CaseInsensitive) == 0;
-                    if (wantMp3 || wantPlaylist ||
-                        UrlDetector::isYtDlpUrl(cl.url) || UrlDetector::isPlaylistUrl(cl.url)) {
-                        QString audioFmt = wantMp3 || wantPlaylistMp3 ? "mp3" : "mp4";
-                        int addId = DownloadManager::instance().addDownload(cl.url, fullSavePath, "YtDlp", 16, audioFmt);
+                    bool urlIsPlaylist = UrlDetector::isPlaylistUrl(cl.url)
+                                         || UrlDetector::detect(cl.url) == UrlPlaylist;
+                    if (wantPlaylist || urlIsPlaylist) {
+                        // A playlist runs as ONE yt-dlp job, so the items and the
+                        // output folder have to be chosen up front - the same dialog
+                        // the Add-URL flow uses.
+                        QString startDir = cl.path.isEmpty()
+                            ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)
+                            : cl.path;
+                        DownloadManagerDialog dialog(SourceVideo, cl.url, startDir, this);
+                        dialog.setAudioFormat(wantMp3 || wantPlaylistMp3 ? "mp3" : "mp4");
+                        if (dialog.exec() == QDialog::Accepted) {
+                            QVector<PlaylistEntry> selected = dialog.getSelectedEntries();
+                            QString outputPath = dialog.getOutputPath();
+                            bool useTracks = dialog.getUseTrackNumbers();
+                            QString fmt = dialog.getAudioFormat();
+                            if (fmt.isEmpty()) fmt = "mp4";
+                            if (!selected.isEmpty()) {
+                                DownloadManager::instance().addPlaylistDownload(selected, outputPath, "YtDlp",
+                                                                                 useTracks, fmt, "", "", cl.url);
+                            }
+                        }
+                    } else if (wantMp3 || UrlDetector::isYtDlpUrl(cl.url)) {
+                        int addId = DownloadManager::instance().addDownload(cl.url, fullSavePath, "YtDlp", 16, "mp3");
                         if (addId < 0) {
                             Logger::instance().info("copper:// download blocked by file-format filter: " + cl.url);
                             statusBarWidget->showMessage("Blocked by file-format filter: " + cl.url.left(60), 8000);

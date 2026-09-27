@@ -45,6 +45,11 @@ private:
     QLabel* aria2cVersionLabel;
     QLabel* handlerStatusLabel;
     QSpinBox* speedLimitSpin;
+    QSpinBox* maxConcurrentSpin;
+    QSpinBox* maxYtDlpJobsSpin;
+    QSpinBox* ytDlpFragmentsSpin;
+    QSpinBox* maxRetriesSpin;
+    QCheckBox* autoOpenInfoCheck;
     QComboBox* seedTimeCombo;
     QLineEdit* userAgentEdit;
 };

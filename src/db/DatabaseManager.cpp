@@ -46,7 +46,11 @@ bool DatabaseManager::init() {
                "error TEXT, "
                "progress REAL DEFAULT 0, "
                "isFolder INTEGER DEFAULT 0, "
-               "parent_id INTEGER DEFAULT -1"
+               "parent_id INTEGER DEFAULT -1, "
+               "audio_format TEXT DEFAULT '', "
+               "attempts INTEGER DEFAULT 0, "
+               "video_id TEXT DEFAULT '', "
+               "track_index INTEGER DEFAULT 0"
                ")");
 
     query.exec("CREATE TABLE IF NOT EXISTS settings ("
@@ -69,26 +73,58 @@ int DatabaseManager::getSchemaVersion() {
 }
 
 void DatabaseManager::migrate(int from) {
-    const int targetVersion = 1;
+    const int targetVersion = 2;
     QSqlQuery query(db);
+
+    // Column presence check shared by the migrations below: a database created by
+    // a newer build (or a partially migrated one) must never get a duplicate
+    // column, so every ALTER is guarded by a PRAGMA table_info lookup.
+    auto hasColumn = [this](const QString& name) {
+        QSqlQuery cols(db);
+        if (!cols.exec("PRAGMA table_info(downloads)")) return true; // can't tell: assume present
+        while (cols.next()) {
+            if (cols.value("name").toString() == name) return true;
+        }
+        return false;
+    };
 
     // A pre-0.3.x database may predate the parent_id column (playlist / torrent
     // folder children). Add it defensively so inserts never fail after upgrade.
     if (from < 1) {
-        bool hasParent = false;
-        QSqlQuery cols(db);
-        if (cols.exec("PRAGMA table_info(downloads)")) {
-            while (cols.next()) {
-                if (cols.value("name").toString() == "parent_id") { hasParent = true; break; }
-            }
-        }
-        if (!hasParent) {
+        if (!hasColumn("parent_id")) {
             if (!query.exec("ALTER TABLE downloads ADD COLUMN parent_id INTEGER DEFAULT -1")) {
                 Logger::instance().error("Migration to v1 failed: " + query.lastError().text());
                 return;
             }
         }
         from = 1;
+    }
+
+    // audio_format + attempts: without the requested output format a resumed
+    // yt-dlp/playlist transfer would restart as MP4 after an app restart (a
+    // "resume" that silently downloads the wrong thing), and the automatic retry
+    // policy needs its attempt counter to survive a restart.
+    if (from < 2) {
+        bool ok = true;
+        if (!hasColumn("audio_format")) {
+            ok = query.exec("ALTER TABLE downloads ADD COLUMN audio_format TEXT DEFAULT ''") && ok;
+        }
+        if (!hasColumn("attempts")) {
+            ok = query.exec("ALTER TABLE downloads ADD COLUMN attempts INTEGER DEFAULT 0") && ok;
+        }
+        // Needed to attribute a single playlist process's output to its rows again
+        // after a restart.
+        if (!hasColumn("video_id")) {
+            ok = query.exec("ALTER TABLE downloads ADD COLUMN video_id TEXT DEFAULT ''") && ok;
+        }
+        if (!hasColumn("track_index")) {
+            ok = query.exec("ALTER TABLE downloads ADD COLUMN track_index INTEGER DEFAULT 0") && ok;
+        }
+        if (!ok) {
+            Logger::instance().error("Migration to v2 failed: " + query.lastError().text());
+            return;
+        }
+        from = 2;
     }
 
     if (from < targetVersion) {
@@ -101,8 +137,8 @@ void DatabaseManager::migrate(int from) {
 
 void DatabaseManager::addDownload(const DownloadItem& item) {
     QSqlQuery query(db);
-    query.prepare("INSERT INTO downloads (id, url, filePath, type, downloadedSize, totalSize, status, addedAt, completedAt, error, progress, isFolder, parent_id) "
-                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    query.prepare("INSERT INTO downloads (id, url, filePath, type, downloadedSize, totalSize, status, addedAt, completedAt, error, progress, isFolder, parent_id, audio_format, attempts, video_id, track_index) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     query.addBindValue(item.id);
     query.addBindValue(item.url);
     query.addBindValue(item.filePath);
@@ -116,6 +152,10 @@ void DatabaseManager::addDownload(const DownloadItem& item) {
     query.addBindValue(item.progress);
     query.addBindValue(item.isFolder ? 1 : 0);
     query.addBindValue(item.parentId);
+    query.addBindValue(item.audioFormat);
+    query.addBindValue(item.attempts);
+    query.addBindValue(item.videoId);
+    query.addBindValue(item.trackIndex);
 
     if (!query.exec()) {
         Logger::instance().error("Add download failed: " + query.lastError().text());
@@ -125,7 +165,8 @@ void DatabaseManager::addDownload(const DownloadItem& item) {
 void DatabaseManager::updateDownload(const DownloadItem& item) {
     QSqlQuery query(db);
     query.prepare("UPDATE downloads SET url=?, filePath=?, type=?, downloadedSize=?, totalSize=?, status=?, "
-                  "addedAt=?, completedAt=?, error=?, progress=?, isFolder=?, parent_id=? WHERE id=?");
+                  "addedAt=?, completedAt=?, error=?, progress=?, isFolder=?, parent_id=?, audio_format=?, "
+                  "attempts=?, video_id=?, track_index=? WHERE id=?");
     query.addBindValue(item.url);
     query.addBindValue(item.filePath);
     query.addBindValue(item.type);
@@ -138,6 +179,10 @@ void DatabaseManager::updateDownload(const DownloadItem& item) {
     query.addBindValue(item.progress);
     query.addBindValue(item.isFolder ? 1 : 0);
     query.addBindValue(item.parentId);
+    query.addBindValue(item.audioFormat);
+    query.addBindValue(item.attempts);
+    query.addBindValue(item.videoId);
+    query.addBindValue(item.trackIndex);
     query.addBindValue(item.id);
 
     if (!query.exec()) {
@@ -191,6 +236,10 @@ QVector<DownloadItem> DatabaseManager::getAllDownloads() {
         item.progress = query.value("progress").toDouble();
         item.isFolder = query.value("isFolder").toBool();
         item.parentId = query.value("parent_id").toInt();
+        item.audioFormat = query.value("audio_format").toString();
+        item.attempts = query.value("attempts").toInt();
+        item.videoId = query.value("video_id").toString();
+        item.trackIndex = query.value("track_index").toInt();
         items.append(item);
     }
 
@@ -220,6 +269,10 @@ QVector<DownloadItem> DatabaseManager::getDownloadsByStatus(const QString& statu
         item.progress = query.value("progress").toDouble();
         item.isFolder = query.value("isFolder").toBool();
         item.parentId = query.value("parent_id").toInt();
+        item.audioFormat = query.value("audio_format").toString();
+        item.attempts = query.value("attempts").toInt();
+        item.videoId = query.value("video_id").toString();
+        item.trackIndex = query.value("track_index").toInt();
         items.append(item);
     }
 
@@ -248,6 +301,10 @@ DownloadItem DatabaseManager::getDownload(int id) {
         item.progress = query.value("progress").toDouble();
         item.isFolder = query.value("isFolder").toBool();
         item.parentId = query.value("parent_id").toInt();
+        item.audioFormat = query.value("audio_format").toString();
+        item.attempts = query.value("attempts").toInt();
+        item.videoId = query.value("video_id").toString();
+        item.trackIndex = query.value("track_index").toInt();
         return item;
     }
 
@@ -294,7 +351,7 @@ QString DatabaseManager::getSetting(const QString& key, const QString& defaultVa
 QString DatabaseManager::getUserAgent() {
     QString ua = getSetting("userAgent", "");
     if (ua.trimmed().isEmpty()) {
-        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 CopperDownloadManager/" + QString::fromLatin1("0.1.0");
+        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 CopperDownloadManager/" + QString::fromLatin1("0.2.0");
     }
     return ua.trimmed();
 }

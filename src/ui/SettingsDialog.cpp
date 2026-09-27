@@ -112,6 +112,84 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     speedBoxLayout->addLayout(speedLayout);
     downloadsLayout->addWidget(speedGroup);
 
+    QGroupBox* concurrencyGroup = new QGroupBox("Parallelism & Retries");
+    QVBoxLayout* concurrencyLayout = new QVBoxLayout(concurrencyGroup);
+
+    QHBoxLayout* maxLayout = new QHBoxLayout();
+    QLabel* maxLabel = new QLabel("Maximum simultaneous downloads:");
+    maxLabel->setBuddy(maxConcurrentSpin = new QSpinBox());
+    maxLayout->addWidget(maxLabel);
+    maxConcurrentSpin->setAccessibleName("Maximum simultaneous downloads");
+    maxConcurrentSpin->setRange(1, 20);
+    maxConcurrentSpin->setValue(qBound(1, DatabaseManager::instance().getSetting("maxConcurrentDownloads", "5").toInt(), 20));
+    maxLayout->addWidget(maxConcurrentSpin);
+    concurrencyLayout->addLayout(maxLayout);
+
+    QHBoxLayout* jobsLayout = new QHBoxLayout();
+    QLabel* jobsLabel = new QLabel("Maximum simultaneous yt-dlp jobs:");
+    jobsLabel->setBuddy(maxYtDlpJobsSpin = new QSpinBox());
+    jobsLayout->addWidget(jobsLabel);
+    maxYtDlpJobsSpin->setAccessibleName("Maximum simultaneous yt-dlp jobs");
+    maxYtDlpJobsSpin->setRange(1, 8);
+    maxYtDlpJobsSpin->setValue(qBound(1, DatabaseManager::instance().getSetting("maxYtDlpJobs", "2").toInt(), 8));
+    jobsLayout->addWidget(maxYtDlpJobsSpin);
+    concurrencyLayout->addLayout(jobsLayout);
+
+    QLabel* jobsHint = new QLabel(
+        "A playlist counts as ONE yt-dlp job. Running several at once is what gets "
+        "requests throttled and makes playlists fail, so keep this low.");
+    jobsHint->setWordWrap(true);
+    jobsHint->setStyleSheet("color: gray; font-size: 11px;");
+    concurrencyLayout->addWidget(jobsHint);
+
+    QHBoxLayout* fragsLayout = new QHBoxLayout();
+    QLabel* fragsLabel = new QLabel("Fragments downloaded in parallel per video:");
+    fragsLabel->setBuddy(ytDlpFragmentsSpin = new QSpinBox());
+    fragsLayout->addWidget(fragsLabel);
+    ytDlpFragmentsSpin->setAccessibleName("Fragments downloaded in parallel per video");
+    ytDlpFragmentsSpin->setRange(1, 16);
+    ytDlpFragmentsSpin->setValue(qBound(1, DatabaseManager::instance().getSetting("ytDlpFragments", "4").toInt(), 16));
+    fragsLayout->addWidget(ytDlpFragmentsSpin);
+    concurrencyLayout->addLayout(fragsLayout);
+
+    QLabel* fragsHint = new QLabel(
+        "Playlists download one video at a time; parallel fragments make up for it.");
+    fragsHint->setWordWrap(true);
+    fragsHint->setStyleSheet("color: gray; font-size: 11px;");
+    concurrencyLayout->addWidget(fragsHint);
+
+    QHBoxLayout* retriesLayout = new QHBoxLayout();
+    QLabel* retriesLabel = new QLabel("Automatic retries for a failed download:");
+    retriesLabel->setBuddy(maxRetriesSpin = new QSpinBox());
+    retriesLayout->addWidget(retriesLabel);
+    maxRetriesSpin->setAccessibleName("Automatic retries for a failed download");
+    maxRetriesSpin->setRange(0, 10);
+    maxRetriesSpin->setValue(qBound(0, DatabaseManager::instance().getSetting("maxRetries", "3").toInt(), 10));
+    retriesLayout->addWidget(maxRetriesSpin);
+    concurrencyLayout->addLayout(retriesLayout);
+
+    QLabel* retriesHint = new QLabel(
+        "Retries run with a growing delay and continue the partial file. 0 disables them.");
+    retriesHint->setWordWrap(true);
+    retriesHint->setStyleSheet("color: gray; font-size: 11px;");
+    concurrencyLayout->addWidget(retriesHint);
+
+    downloadsLayout->addWidget(concurrencyGroup);
+
+    QGroupBox* windowGroup = new QGroupBox("Download Windows");
+    QVBoxLayout* windowLayout = new QVBoxLayout(windowGroup);
+    autoOpenInfoCheck = new QCheckBox("Open a download-info window for every new download");
+    autoOpenInfoCheck->setAccessibleName("Open a download-info window for every new download");
+    autoOpenInfoCheck->setChecked(DatabaseManager::instance().getSetting("autoOpenDownloadInfo", "false") == "true");
+    windowLayout->addWidget(autoOpenInfoCheck);
+    QLabel* windowHint = new QLabel(
+        "The info window can always be opened from the row's context menu or with Ctrl+I. "
+        "A playlist opens one window listing all of its items.");
+    windowHint->setWordWrap(true);
+    windowHint->setStyleSheet("color: gray; font-size: 11px;");
+    windowLayout->addWidget(windowHint);
+    downloadsLayout->addWidget(windowGroup);
+
     QGroupBox* uaGroup = new QGroupBox("User-Agent");
     QVBoxLayout* uaLayout = new QVBoxLayout(uaGroup);
     QHBoxLayout* uaRow = new QHBoxLayout();
@@ -503,6 +581,13 @@ void SettingsDialog::onSave() {
     DatabaseManager::instance().saveSetting("downloadPath", downloadPathEdit->text());
     DatabaseManager::instance().saveSetting("chunks", chunkCombo->currentText());
     DatabaseManager::instance().saveSetting("speedLimit", QString::number(speedLimitSpin->value()));
+    DatabaseManager::instance().saveSetting("maxConcurrentDownloads", QString::number(maxConcurrentSpin->value()));
+    DatabaseManager::instance().saveSetting("maxYtDlpJobs", QString::number(maxYtDlpJobsSpin->value()));
+    DatabaseManager::instance().saveSetting("ytDlpFragments", QString::number(ytDlpFragmentsSpin->value()));
+    DatabaseManager::instance().saveSetting("maxRetries", QString::number(maxRetriesSpin->value()));
+    DatabaseManager::instance().saveSetting("autoOpenDownloadInfo", autoOpenInfoCheck->isChecked() ? "true" : "false");
+
+    DownloadManager::instance().updateMaxConcurrent(maxConcurrentSpin->value());
     DatabaseManager::instance().saveSetting("seedTime", QString::number(seedTimeCombo->currentData().toInt()));
     DatabaseManager::instance().saveSetting("userAgent", userAgentEdit->text().trimmed());
 

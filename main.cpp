@@ -180,7 +180,7 @@ int main(int argc, char* argv[]) {
 
     QApplication app(argc, argv);
     app.setApplicationName("Copper Download Manager");
-    app.setApplicationVersion("0.1.0");
+    app.setApplicationVersion("0.2.0");
     app.setOrganizationName("Copper");
 
     Logger::instance().info("========================================");
@@ -402,7 +402,7 @@ int main(int argc, char* argv[]) {
                 bool useTracks = dialog.getUseTrackNumbers();
                 QString fmt = dialog.getAudioFormat();
                 if (!selected.isEmpty()) {
-                    DownloadManager::instance().addPlaylistDownload(selected, outputPath, "YtDlp", useTracks, fmt);
+                    DownloadManager::instance().addPlaylistDownload(selected, outputPath, "YtDlp", useTracks, fmt, "", "", url);
                 } else {
                     DownloadManager::instance().addDownload(url, outputPath, "YtDlp");
                 }

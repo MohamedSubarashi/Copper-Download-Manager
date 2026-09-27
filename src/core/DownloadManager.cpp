@@ -8,6 +8,8 @@
 #include "utils/FileNameSanitizer.h"
 #include "db/DatabaseManager.h"
 #include <QFileInfo>
+#include <QFile>
+#include <QSet>
 #include <QUrl>
 #include <QStandardPaths>
 #include <QDateTime>
@@ -15,11 +17,26 @@
 #include <QProcess>
 #include <QRegularExpression>
 
+// yt-dlp's download archive for a playlist job. It records every item that
+// finished successfully, so restarting a job continues with the remaining items
+// instead of downloading the whole playlist again.
+static QString jobArchivePath(const QString& folder) {
+    return folder + "/.copper-archive.txt";
+}
+
 
 DownloadManager::DownloadManager() : nextId(1), maxConcurrent(5), speedLimit(0), speedLimitAccumulator(0) {
     speedLimitTimer = new QTimer(this);
     connect(speedLimitTimer, &QTimer::timeout, this, &DownloadManager::processSpeedLimit);
     speedLimitTimer->start(100);
+
+    // Honor the configured concurrency instead of the old hard-coded 5. The value
+    // used to be ignored entirely, which is part of why playlists over-subscribed
+    // the extractor and every queued video was fed into a throttled process.
+    QString savedMax = DatabaseManager::instance().getSetting("maxConcurrentDownloads", "");
+    bool ok = false;
+    int configured = savedMax.toInt(&ok);
+    if (ok && configured > 0) maxConcurrent = configured;
 
     int maxId = DatabaseManager::instance().getMaxDownloadId();
     if (maxId >= nextId) {
@@ -27,8 +44,12 @@ DownloadManager::DownloadManager() : nextId(1), maxConcurrent(5), speedLimit(0),
     }
 
     connect(&YtDlpManager::instance(), &YtDlpManager::downloadProgress, this, &DownloadManager::onYtDlpProgress);
+    connect(&YtDlpManager::instance(), &YtDlpManager::downloadSpeed, this, &DownloadManager::onYtDlpSpeed);
     connect(&YtDlpManager::instance(), &YtDlpManager::downloadFinished, this, &DownloadManager::onYtDlpFinished);
     connect(&YtDlpManager::instance(), &YtDlpManager::downloadFailed, this, &DownloadManager::onYtDlpFailed);
+    connect(&YtDlpManager::instance(), &YtDlpManager::videoProgress, this, &DownloadManager::onYtDlpVideoProgress);
+    connect(&YtDlpManager::instance(), &YtDlpManager::videoPath, this, &DownloadManager::onYtDlpVideoPath);
+    connect(&YtDlpManager::instance(), &YtDlpManager::playlistFinished, this, &DownloadManager::onYtDlpPlaylistFinished);
 
     // Restore interrupted downloads once the event loop is running (after the
     // window and its signal connections exist) so resumed transfers show up in
@@ -45,6 +66,11 @@ void DownloadManager::shutdown() {
     // Cancel every in-flight download and stop all spawned external processes
     // (yt-dlp, ffmpeg children, chunked transfers) so nothing is orphaned on exit.
     speedLimitTimer->stop();
+
+    for (QTimer* timer : retryTimers) {
+        timer->stop();
+    }
+    retryTimers.clear();
 
     for (int id : activeChunkedDownloaders.keys()) {
         if (activeChunkedDownloaders.contains(id)) {
@@ -308,6 +334,22 @@ void DownloadManager::restoreFromDatabase() {
     const QStringList interrupted = {"Downloading", "Queued", "Paused", "Resuming"};
     QVector<int> startOrder;
 
+    // Children of a yt-dlp playlist job are mirrors of the single process that
+    // drives the whole playlist - they are never transfers of their own. Their
+    // persisted "Downloading" status would otherwise count as one active transfer
+    // per item and block every other download from ever starting after a restart.
+    for (int id : downloads.keys()) {
+        if (!downloads.contains(id)) continue;
+        DownloadItem& child = downloads[id];
+        if (child.parentId == -1) continue;
+        if (!downloads.contains(child.parentId)) continue;
+        if (downloads[child.parentId].type != "YtDlp") continue;
+        if (child.status != "Completed") {
+            child.status = "Queued";
+            child.speed = 0;
+        }
+    }
+
     for (DownloadItem& item : downloads) {
         if (item.parentId != -1) continue;  // children mirror their folder parent
         if (!interrupted.contains(item.status)) continue;
@@ -331,8 +373,16 @@ void DownloadManager::restoreFromDatabase() {
             }
         }
 
+        if (item.type == "YtDlp" && item.isFolder) {
+            // Items yt-dlp already finished are recorded in its download archive;
+            // re-running the job skips them, so mirror that here instead of
+            // showing every track as pending again.
+            markJobChildrenFromDisk(item.id);
+        }
+
         // Interrupted and resumable: queue it; start below up to maxConcurrent.
         item.status = "Queued";
+        item.speed = 0;
         DatabaseManager::instance().updateDownload(item);
         startOrder.append(item.id);
     }
@@ -342,20 +392,25 @@ void DownloadManager::restoreFromDatabase() {
         if (d.status == "Downloading" && !d.isFolder) activeCount++;
     }
     int started = 0;
+    int startedJobs = 0;
     for (int id : startOrder) {
-        if (activeCount + started >= maxConcurrent) break;
         if (!downloads.contains(id)) continue;
         DownloadItem& item = downloads[id];
+        // Folder jobs (a playlist is one yt-dlp process) are governed by the yt-dlp
+        // job limit, not by maxConcurrent, so they must not consume a transfer slot.
+        if (!item.isFolder && activeCount + started >= maxConcurrent) break;
         bool isHttp = item.type == "HTTP" || item.type == "HTTPS" || item.type == "FTP";
         if (isHttp) {
             createChunkedDownloaderFor(id, true);
+            activeCount++;
         } else {
             // Torrent / YtDlp: go through resumeDownload, which re-adds the
             // torrent to aria2 (resuming via its .aria2 control file) or
             // restarts yt-dlp. resumeDownload accepts Queued status.
             resumeDownload(id);
         }
-        started++;
+        if (item.isFolder) startedJobs++;
+        else started++;
     }
 
     // Force one table refresh so persisted history + resumed items are shown.
@@ -363,10 +418,11 @@ void DownloadManager::restoreFromDatabase() {
         emit downloadAdded(all.first().id, all.first().filePath, all.first().type, all.first().isFolder);
     }
 
-    Logger::instance().info("Download restore finished, started " + QString::number(started) + " transfer(s)");
+    Logger::instance().info("Download restore finished, started " + QString::number(started) +
+                            " transfer(s) and " + QString::number(startedJobs) + " job(s)");
 }
 
-void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries, const QString& path, const QString& type, bool useTrackNumbers, const QString& audioFormat, const QString& torrentSourceUrl, const QString& folderName) {
+int DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries, const QString& path, const QString& type, bool useTrackNumbers, const QString& audioFormat, const QString& torrentSourceUrl, const QString& folderName, const QString& playlistUrl) {
     Logger::instance().info("Adding playlist download: " + QString::number(entries.size()) + " files, type: " + type + ", tracks: " + (useTrackNumbers ? "yes" : "no") + ", format: " + audioFormat);
 
     QString outputBase = path.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) : path;
@@ -516,21 +572,33 @@ void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries,
             emit downloadFailed(parentItem.id, "Failed to start aria2c");
             emit statusChanged(parentItem.id, "Failed");
         }
-        return;
+        return parentItem.id;
     }
+
+    // A yt-dlp playlist is downloaded by ONE yt-dlp process, and its per-video
+    // progress lines are mirrored onto one table row per item. Spawning one
+    // process per video is what made playlists fail: several extractors hitting
+    // the same site at once get throttled, the app saw the quiet children as
+    // stalled and killed them, and the queue then fed the next videos into the
+    // same trap. yt-dlp itself already handles retries, resumes .part files and
+    // skips dead items, so one process is both simpler and far more reliable.
+    QString jobUrl = playlistUrl;
+    if (jobUrl.isEmpty()) jobUrl = entries.isEmpty() ? QString() : entries[0].url;
 
     DownloadItem playlistItem;
     playlistItem.id = nextId++;
-    playlistItem.url = entries.isEmpty() ? "" : entries[0].url;
+    playlistItem.url = jobUrl;
+    playlistItem.audioFormat = audioFormat.isEmpty() ? "mp4" : audioFormat;
 
     QString playlistFolderPath;
-    if (type == "YtDlp" && !folderName.isEmpty()) {
+    if (!folderName.isEmpty()) {
         playlistFolderPath = path + "/" + folderName;
-    } else if (type == "YtDlp" && entries.size() > 1) {
+    } else if (entries.size() > 1) {
         QString cleanName = entries[0].title;
         QRegularExpression re("[\\\\/:*?\"<>|]");
         cleanName.replace(re, "_");
         if (cleanName.length() > 60) cleanName = cleanName.left(57) + "...";
+        cleanName = sanitizeFileName(cleanName, "playlist");
         playlistFolderPath = path + "/" + cleanName;
     } else {
         playlistFolderPath = path;
@@ -540,33 +608,57 @@ void DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries,
     playlistItem.filePath = playlistFolderPath;
     playlistItem.fileName = folderName.isEmpty() ? QFileInfo(playlistFolderPath).fileName() : folderName;
     playlistItem.type = type;
-    playlistItem.status = "Downloading";
+    playlistItem.status = "Queued";
     playlistItem.isFolder = true;
     playlistItem.progress = 0;
     playlistItem.addedAt = QDateTime::currentDateTime();
+    // Register the parent before the children: addChildDownload() appends to the
+    // parent's childIds, so inserting it afterwards would drop every child.
     downloads[playlistItem.id] = playlistItem;
 
-    DatabaseManager::instance().addDownload(playlistItem);
-    emit downloadAdded(playlistItem.id, playlistFolderPath, type, true);
-
+    // One row per selected item. The names only need to be close to what yt-dlp
+    // will write: every finished file reports its real path back (after_move)
+    // and the row adopts it.
     int total = entries.size();
     for (int i = 0; i < entries.size(); i++) {
         const PlaylistEntry& entry = entries[i];
         if (!entry.selected) continue;
 
+        QString ext = entry.extension.isEmpty() ? "mp4" : entry.extension;
+        if (playlistItem.audioFormat == "mp3") ext = "mp3";
+        // Number files by their real playlist position so the name matches the
+        // row the table shows and stays stable no matter which items are selected.
         QString childFileName;
         if (useTrackNumbers) {
-            QString trackPrefix = TrackNumber::formatTrack(i + 1, total);
-            QString ext = entry.extension.isEmpty() ? "mp4" : entry.extension;
-            childFileName = trackPrefix + "." + entry.title + "." + ext;
+            childFileName = TrackNumber::formatTrack(entry.index, total) + "." +
+                            sanitizeFileName(entry.title, "track_" + QString::number(entry.index)) +
+                            "." + ext;
         } else {
-            QString ext = entry.extension.isEmpty() ? "mp4" : entry.extension;
-            childFileName = entry.title + "." + ext;
+            childFileName = sanitizeFileName(entry.title, "track_" + QString::number(entry.index)) + "." + ext;
         }
         QString childPath = playlistFolderPath + "/" + childFileName;
 
-        addChildDownload(playlistItem.id, entry.url, childPath, type, audioFormat);
+        addChildDownload(playlistItem.id, entry.url, childPath, type, playlistItem.audioFormat);
+        if (!downloads.contains(playlistItem.id)) continue;
+        const QList<int> kids = downloads[playlistItem.id].childIds;
+        if (kids.isEmpty()) continue;
+        DownloadItem& child = downloads[kids.last()];
+        child.videoId = entry.videoId;
+        child.trackIndex = entry.index;
+        DatabaseManager::instance().updateDownload(child);
     }
+
+    DatabaseManager::instance().addDownload(playlistItem);
+    emit downloadAdded(playlistItem.id, playlistFolderPath, type, true);
+
+    // The job itself is a single transfer: it takes one concurrency slot and one
+    // yt-dlp slot, no matter how many videos the playlist holds.
+    if (ytDlpSlotAvailable()) {
+        startYtDlpPlaylistJob(playlistItem.id);
+    } else {
+        Logger::instance().info("Playlist job queued: all yt-dlp job slots are busy");
+    }
+    return playlistItem.id;
 }
 
 void DownloadManager::addChildDownload(int parentId, const QString& url, const QString& path, const QString& type, const QString& audioFormat) {
@@ -596,6 +688,11 @@ void DownloadManager::addChildDownload(int parentId, const QString& url, const Q
     DatabaseManager::instance().addDownload(child);
     emit downloadAdded(child.id, path, type, false);
 
+    // A yt-dlp child is driven by its folder parent's single process, so it must
+    // never start a process of its own. Only independently-queued HTTP children
+    // (torrent file lists included) start here.
+    if (type == "YtDlp") return;
+
     int activeCount = 0;
     for (const DownloadItem& d : downloads) {
         if (d.status == "Downloading" && !d.isFolder) activeCount++;
@@ -604,10 +701,6 @@ void DownloadManager::addChildDownload(int parentId, const QString& url, const Q
     if (activeCount < maxConcurrent) {
         if (type == "HTTP" || type == "HTTPS" || type == "FTP") {
             createChunkedDownloaderFor(child.id, false);
-        } else if (type == "YtDlp") {
-            downloads[child.id].status = "Downloading";
-            YtDlpManager::instance().startDownload(url, path, child.id, audioFormat);
-            emit statusChanged(child.id, "Downloading");
         }
     }
 }
@@ -630,12 +723,25 @@ void DownloadManager::pauseDownload(int id) {
     }
 
     if (item.type == "YtDlp") {
+        // Terminates the process and keeps the .part files; resume relaunches it
+        // with --continue.
         YtDlpManager::instance().pauseDownload(id);
     }
 
-    if (item.isFolder && item.type == "Torrent") {
+    if (item.isFolder) {
         for (int cid : item.childIds) {
-            if (downloads.contains(cid)) downloads[cid].status = "Paused";
+            if (!downloads.contains(cid)) continue;
+            // Items that already reached a terminal state stay that way: a pause
+            // must not turn a finished file back into a pending one, or the job
+            // would look like it still has work to do.
+            const QString childStatus = downloads[cid].status;
+            if (childStatus == "Completed" || childStatus == "Cancelled") continue;
+            downloads[cid].status = "Paused";
+            downloads[cid].speed = 0;
+            // Persist each item too, so a restart does not resurrect items that the
+            // user had already paused.
+            DatabaseManager::instance().updateDownload(downloads[cid]);
+            emit statusChanged(cid, "Paused");
         }
     }
 
@@ -649,6 +755,47 @@ void DownloadManager::resumeDownload(int id) {
     DownloadItem& item = downloads[id];
 
     if (item.status != "Paused" && item.status != "Failed" && item.status != "Queued") return;
+
+    // A playlist item is driven by its folder's single yt-dlp process. Starting it
+    // on its own would spawn a second process per video - the exact behavior that
+    // got the extractor throttled and broke playlists.
+    if (isPlaylistJobItem(id)) {
+        Logger::instance().info("Playlist item " + QString::number(id) +
+                                " is driven by its job, not started on its own");
+        return;
+    }
+
+    // A playlist job is a single yt-dlp process, so resuming it is just a matter
+    // of relaunching that process with --continue. Handled first so that "no free
+    // job slot" leaves the row queued instead of claiming to be downloading.
+    if (item.type == "YtDlp" && item.isFolder) {
+        if (!ytDlpSlotAvailable()) {
+            Logger::instance().info("Playlist job " + QString::number(id) + " stays queued: all yt-dlp job slots busy");
+            return;
+        }
+        if (item.status == "Failed") {
+            retryDownload(id);
+            return;
+        }
+        // Whatever the previous run finished is adopted from the archive first, so
+        // the rows show the truth and yt-dlp only fetches what is left.
+        markJobChildrenFromDisk(id);
+        for (int cid : item.childIds) {
+            if (!downloads.contains(cid)) continue;
+            if (downloads[cid].status == "Completed" || downloads[cid].status == "Cancelled") continue;
+            // Items left Paused/Queued by the pause must become active again,
+            // otherwise their progress lines are ignored and they never finish.
+            downloads[cid].status = "Queued";
+            downloads[cid].speed = 0;
+            DatabaseManager::instance().updateDownload(downloads[cid]);
+            emit statusChanged(cid, "Queued");
+        }
+        item.status = "Queued";
+        Logger::instance().info("Playlist job resumed: " + QString::number(id));
+        startYtDlpPlaylistJob(id);
+        emit downloadResumed(id);
+        return;
+    }
 
     item.status = "Downloading";
     Logger::instance().info("Download resumed: " + QString::number(id));
@@ -782,7 +929,15 @@ void DownloadManager::cancelDownload(int id) {
     if (!downloads.contains(id)) return;
     DownloadItem& item = downloads[id];
 
+    // A queued automatic retry must not fire after the user cancelled the item.
+    if (QTimer* pending = retryTimers.take(id)) {
+        pending->stop();
+        pending->deleteLater();
+    }
+
     item.status = "Cancelled";
+    item.speed = 0;
+    item.eta = 0;
     Logger::instance().info("Download cancelled: " + QString::number(id));
 
     if (activeChunkedDownloaders.contains(id)) {
@@ -805,18 +960,24 @@ void DownloadManager::cancelDownload(int id) {
 
     if (item.isFolder) {
         for (int cid : item.childIds) {
-            if (downloads.contains(cid)) {
-                if (downloads[cid].type == "YtDlp") {
-                    YtDlpManager::instance().cancelDownload(cid);
-                }
-                downloads[cid].status = "Cancelled";
-                DatabaseManager::instance().updateDownload(downloads[cid]);
+            if (!downloads.contains(cid)) continue;
+            if (QTimer* pendingChild = retryTimers.take(cid)) {
+                pendingChild->stop();
+                pendingChild->deleteLater();
             }
+            // Files that already finished stay Completed: cancelling the job stops
+            // the remaining items, it does not undo the ones on disk.
+            if (downloads[cid].status == "Completed") continue;
+            downloads[cid].status = "Cancelled";
+            downloads[cid].speed = 0;
+            DatabaseManager::instance().updateDownload(downloads[cid]);
+            emit statusChanged(cid, "Cancelled");
         }
     }
 
     DatabaseManager::instance().updateDownload(item);
     emit statusChanged(id, "Cancelled");
+    startNextQueued();
 }
 
 void DownloadManager::removeDownload(int id) {
@@ -883,11 +1044,19 @@ void DownloadManager::startNextQueued() {
     }
 
     for (int id : downloads.keys()) {
-        if (activeCount >= maxConcurrent) break;
-        if (downloads[id].status == "Queued") {
-            resumeDownload(id);
-            activeCount++;
-        }
+        if (!downloads.contains(id)) continue;
+        if (downloads[id].status != "Queued" || isPlaylistJobItem(id)) continue;
+        // An item waiting out its automatic-retry backoff belongs to its retry
+        // timer: starting it here would defeat the backoff and hammer a source
+        // that has only just failed.
+        if (retryTimers.contains(id)) continue;
+        // Folder jobs are governed by the yt-dlp job limit rather than by
+        // maxConcurrent, so they must not consume a transfer slot - and they must
+        // still be considered once the transfer slots are full.
+        const bool isFolder = downloads[id].isFolder;
+        if (!isFolder && activeCount >= maxConcurrent) continue;
+        resumeDownload(id);
+        if (!isFolder) activeCount++;
     }
 }
 
@@ -902,22 +1071,31 @@ void DownloadManager::updateAggregateProgress(int parentId) {
     qint64 totalDownloaded = 0;
     qint64 totalSize = 0;
     int completedCount = 0;
+    int counted = 0;
 
     for (int childId : parent.childIds) {
-        if (downloads.contains(childId)) {
-            const DownloadItem& child = downloads[childId];
-            totalProgress += child.progress;
-            totalDownloaded += child.downloadedSize;
-            totalSize += child.totalSize;
-            if (child.status == "Completed") completedCount++;
-        }
+        if (!downloads.contains(childId)) continue;
+        const DownloadItem& child = downloads[childId];
+        // Items the user cancelled are not part of what this folder was asked to
+        // deliver, so they must not drag the folder's progress down forever.
+        if (child.status == "Cancelled") continue;
+        totalProgress += child.progress;
+        totalDownloaded += child.downloadedSize;
+        totalSize += child.totalSize;
+        counted++;
+        if (child.status == "Completed") completedCount++;
     }
 
-    parent.progress = totalProgress / parent.childIds.size();
+    if (counted == 0) return;
+
+    parent.progress = totalProgress / counted;
     parent.downloadedSize = totalDownloaded;
     parent.totalSize = totalSize;
 
-    if (completedCount == parent.childIds.size()) {
+    if (completedCount == counted && parent.type != "YtDlp") {
+        // A yt-dlp playlist job is only complete when its process says so: an item
+        // reports "finished" per format, so every child can read as completed
+        // while ffmpeg is still merging the last one.
         parent.status = "Completed";
         parent.completedAt = QDateTime::currentDateTime();
         DatabaseManager::instance().updateDownload(parent);
@@ -1034,8 +1212,512 @@ void DownloadManager::onYtDlpProgress(int id, qint64 downloaded, qint64 total) {
     }
 }
 
+void DownloadManager::onYtDlpSpeed(int id, qint64 spd) {
+    if (!downloads.contains(id)) return;
+    downloads[id].speed = spd;
+    emit downloadSpeed(id, spd);
+}
+
+int DownloadManager::childCount(int id) const {
+    return downloads.value(id).childIds.size();
+}
+
+int DownloadManager::maxRetries() const {
+    return qBound(0, DatabaseManager::instance().getSetting("maxRetries", "3").toInt(), 10);
+}
+
+int DownloadManager::ytDlpPlaylistJobWidth(int jobId) const {
+    auto job = downloads.constFind(jobId);
+    if (job == downloads.constEnd()) return 3;
+    int maxIndex = 0;
+    for (int cid : job.value().childIds) {
+        if (downloads.contains(cid)) maxIndex = qMax(maxIndex, downloads[cid].trackIndex);
+    }
+    // Must match TrackNumber::formatTrack() so the row's placeholder name lines
+    // up with the file yt-dlp actually writes.
+    return maxIndex >= 1000 ? 4 : 3;
+}
+
+int DownloadManager::activeYtDlpJobCount() const {
+    int count = 0;
+    for (const DownloadItem& item : downloads) {
+        if (item.type != "YtDlp") continue;
+        if (item.status != "Downloading") continue;
+        if (YtDlpManager::instance().isRunning(item.id)) count++;
+    }
+    return count;
+}
+
+bool DownloadManager::ytDlpSlotAvailable() const {
+    // Playlist downloads are a single process, so this caps how many extractors
+    // the app runs at once. A handful of parallel processes is what triggers the
+    // site-side throttling that used to break playlists.
+    int maxJobs = qBound(1, DatabaseManager::instance().getSetting("maxYtDlpJobs", "2").toInt(), 8);
+    return activeYtDlpJobCount() < maxJobs;
+}
+
+bool DownloadManager::isPlaylistJobItem(int id) const {
+    auto item = downloads.constFind(id);
+    if (item == downloads.constEnd() || item.value().parentId == -1) return false;
+    auto parent = downloads.constFind(item.value().parentId);
+    if (parent == downloads.constEnd()) return false;
+    return parent.value().isFolder && parent.value().type == "YtDlp";
+}
+
+QString DownloadManager::findJobFileForTrack(const QString& folder, int trackIndex) const {
+    if (trackIndex <= 0 || folder.isEmpty()) return QString();
+    QDir dir(folder);
+    if (!dir.exists()) return QString();
+    // Files are written as "<NNN>.<title>.<ext>", so the leading number identifies
+    // the playlist position no matter what yt-dlp did to the rest of the name.
+    const QStringList names = dir.entryList(QDir::Files, QDir::Name);
+    for (const QString& name : names) {
+        if (name.startsWith('.')) continue;
+        const int dot = name.indexOf('.');
+        if (dot <= 0) continue;
+        bool ok = false;
+        const int index = name.left(dot).toInt(&ok);
+        if (!ok || index != trackIndex) continue;
+        const QFileInfo info(dir.filePath(name));
+        if (info.size() <= 0) continue;
+        return info.absoluteFilePath();
+    }
+    return QString();
+}
+
+QString DownloadManager::tidyJobFilePath(const QString& path) {
+    if (path.isEmpty()) return path;
+
+    // A download that is interrupted and then continued can end up as the fragment
+    // yt-dlp was writing ("<title>.f616.mp4") instead of the merged "<title>.mp4".
+    // That is a valid, complete file, just badly named, so give it the name the
+    // playlist row advertises.
+    static const QRegularExpression fragmentRe("\\.f\\d+(\\.[A-Za-z0-9]{1,5})$");
+    const QRegularExpressionMatch m = fragmentRe.match(path);
+    if (!m.hasMatch()) return path;
+
+    QString clean = path;
+    clean.remove(m.capturedStart(0), m.capturedLength(0));
+    const QFileInfo cleanInfo(clean);
+    if (cleanInfo.exists() || clean.isEmpty()) return path;   // never clobber a real file
+
+    const QFileInfo source(path);
+    if (!source.exists() || source.size() <= 0) return path;
+    if (!QFile::rename(path, clean)) return path;
+
+    Logger::instance().info("Renamed interrupted fragment to the final name: " +
+                            source.fileName() + " -> " + cleanInfo.fileName());
+    return clean;
+}
+
+int DownloadManager::findChildByVideoId(int parentId, const QString& videoId) const {
+    if (videoId.isEmpty()) return -1;
+    auto parent = downloads.constFind(parentId);
+    if (parent == downloads.constEnd()) return -1;
+    for (int cid : parent.value().childIds) {
+        if (downloads.contains(cid) && downloads[cid].videoId == videoId) return cid;
+    }
+    return -1;
+}
+
+int DownloadManager::findChildByTrackIndex(int parentId, int trackIndex) const {
+    if (trackIndex <= 0) return -1;
+    auto parent = downloads.constFind(parentId);
+    if (parent == downloads.constEnd()) return -1;
+    for (int cid : parent.value().childIds) {
+        if (downloads.contains(cid) && downloads[cid].trackIndex == trackIndex) return cid;
+    }
+    return -1;
+}
+
+int DownloadManager::findChildForPath(int parentId, int playlistIndex, const QString& path) const {
+    auto parent = downloads.constFind(parentId);
+    if (parent == downloads.constEnd()) return -1;
+
+    int cid = playlistIndex > 0 ? findChildByTrackIndex(parentId, playlistIndex) : -1;
+    if (cid != -1) return cid;
+
+    // A path without a usable playlist index (an unnumbered playlist, or rows
+    // saved before the position was recorded) is matched by the file name the row
+    // already shows, then by "the one item still to do".
+    const QString baseName = QFileInfo(path).completeBaseName();
+    for (int kid : parent.value().childIds) {
+        if (!downloads.contains(kid)) continue;
+        if (downloads[kid].status == "Completed" || downloads[kid].status == "Cancelled") continue;
+        if (downloads[kid].filePath == path) return kid;
+        if (!baseName.isEmpty() && QFileInfo(downloads[kid].filePath).completeBaseName() == baseName) return kid;
+    }
+    for (int kid : parent.value().childIds) {
+        if (!downloads.contains(kid)) continue;
+        if (downloads[kid].status == "Queued" || downloads[kid].status == "Downloading") return kid;
+    }
+    return -1;
+}
+
+void DownloadManager::startYtDlpPlaylistJob(int jobId) {
+    if (!downloads.contains(jobId)) return;
+    DownloadItem& job = downloads[jobId];
+    if (!job.isFolder || job.type != "YtDlp") return;
+    if (YtDlpManager::instance().isRunning(jobId)) return;
+
+    if (!ytDlpSlotAvailable()) {
+        Logger::instance().info("Playlist job " + QString::number(jobId) + " stays queued: all yt-dlp job slots busy");
+        return;
+    }
+
+    // Items yt-dlp already finished are skipped through its download archive.
+    markJobChildrenFromDisk(jobId);
+
+    for (int cid : job.childIds) {
+        if (!downloads.contains(cid)) continue;
+        DownloadItem& child = downloads[cid];
+        if (child.status == "Completed" || child.status == "Cancelled") continue;
+        if (child.status == "Queued") emit statusChanged(cid, "Queued");
+    }
+
+    QString format = job.audioFormat.isEmpty() ? "mp4" : job.audioFormat;
+    int fragments = qBound(1, DatabaseManager::instance().getSetting("ytDlpFragments", "4").toInt(), 16);
+
+    // The rows are the user's selection, so yt-dlp must be told to fetch exactly
+    // those playlist positions. A row without a known position cannot be turned
+    // into --playlist-items, so a job that has any such row falls back to the whole
+    // playlist (a missing video is better than a silently missing download).
+    QVector<int> selected;
+    bool hasUnknownPosition = false;
+    for (int cid : job.childIds) {
+        if (!downloads.contains(cid)) continue;
+        const DownloadItem& child = downloads.value(cid);
+        if (child.status == "Cancelled") continue;
+        if (child.trackIndex > 0) {
+            selected.append(child.trackIndex);
+        } else {
+            hasUnknownPosition = true;
+        }
+    }
+    if (hasUnknownPosition) {
+        if (!selected.isEmpty()) {
+            Logger::instance().info("Playlist job " + QString::number(jobId) +
+                                    " has rows without a playlist position: downloading the whole playlist");
+        }
+        selected.clear();
+    }
+
+    job.status = "Downloading";
+    job.speed = 0;
+    job.error.clear();
+    // The attempt counter is deliberately NOT reset here: it is owned by the retry
+    // policy, and clearing it on every (re)start would make a permanently failing
+    // job retry forever.
+    DatabaseManager::instance().updateDownload(job);
+    emit statusChanged(jobId, "Downloading");
+
+    YtDlpManager::instance().startPlaylistJob(jobId, job.url, job.filePath,
+                                              ytDlpPlaylistJobWidth(jobId), format, fragments,
+                                              selected);
+    Logger::instance().info("Started yt-dlp playlist job " + QString::number(jobId) +
+                            " (" + QString::number(job.childIds.size()) + " item(s)" +
+                            (selected.isEmpty() ? ", whole playlist"
+                                                : ", positions " + QString::number(selected.size())) +
+                            ") -> " + job.filePath);
+}
+
+void DownloadManager::markJobChildrenFromDisk(int jobId, bool includePaused) {
+    if (!downloads.contains(jobId)) return;
+    const QString folder = downloads[jobId].filePath;
+    const QString archive = jobArchivePath(folder);
+
+    // yt-dlp appends "<extractor> <video id>" per finished item to the download
+    // archive and skips those on the next run, so it is the authoritative record
+    // of what a restarted job will not download again.
+    QSet<QString> archived;
+    QFile file(archive);
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        while (!file.atEnd()) {
+            QString line = QString::fromUtf8(file.readLine()).trimmed();
+            int sp = line.indexOf(' ');
+            if (sp > 0) archived.insert(line.mid(sp + 1));
+        }
+        file.close();
+    }
+
+    for (int cid : downloads[jobId].childIds) {
+        if (!downloads.contains(cid)) continue;
+        DownloadItem& child = downloads[cid];
+        if (child.status == "Completed" || child.status == "Cancelled") continue;
+        if (child.status == "Paused" && !includePaused) continue;
+
+        const QFileInfo info(child.filePath);
+        bool onDisk = !child.filePath.isEmpty() && info.exists() && info.size() > 0;
+        bool inArchive = !child.videoId.isEmpty() && archived.contains(child.videoId);
+
+        if (onDisk || inArchive) {
+            if (!onDisk) {
+                // Finished, but under a name we did not predict: adopt the real file
+                // so the row's path (and "Open file") points at the right thing.
+                QString actual = findJobFileForTrack(folder, child.trackIndex);
+                if (!actual.isEmpty()) {
+                    child.filePath = tidyJobFilePath(actual);
+                    child.fileName = QFileInfo(child.filePath).fileName();
+                }
+            } else {
+                child.filePath = tidyJobFilePath(child.filePath);
+                child.fileName = QFileInfo(child.filePath).fileName();
+            }
+            const QFileInfo real(child.filePath);
+            child.status = "Completed";
+            child.progress = 100.0;
+            child.speed = 0;
+            child.error.clear();
+            child.completedAt = QDateTime::currentDateTime();
+            if (real.exists() && real.size() > 0) {
+                child.downloadedSize = real.size();
+                child.totalSize = real.size();
+            }
+            DatabaseManager::instance().updateDownload(child);
+            Logger::instance().info("Playlist item already on disk: " + QString::number(cid) +
+                                    " -> " + child.fileName);
+            emit statusChanged(cid, "Completed");
+        } else if (child.status != "Queued") {
+            child.status = "Queued";
+            emit statusChanged(cid, "Queued");
+        }
+    }
+}
+
+void DownloadManager::onYtDlpVideoProgress(int id, const QString& videoId, const QString& state,
+                                           qint64 downloaded, qint64 total, qint64 speed, qint64 eta,
+                                           int fragmentIndex, int fragmentCount) {
+    Q_UNUSED(fragmentIndex);
+    Q_UNUSED(fragmentCount);
+    if (!downloads.contains(id)) return;
+
+    if (!downloads[id].isFolder) {
+        // Single video: the job and the row are the same thing.
+        DownloadItem& item = downloads[id];
+        if (state == "finished") { onYtDlpFinished(id); return; }
+        if (item.status == "Completed" || item.status == "Cancelled") return;
+        if (downloaded >= 0) item.downloadedSize = downloaded;
+        if (total > 0) item.totalSize = total;
+        if (item.totalSize > 0) {
+            item.progress = qBound(0.0, (double)item.downloadedSize / item.totalSize * 100.0, 100.0);
+        }
+        item.speed = qMax<qint64>(0, speed);
+        item.eta = qMax<qint64>(0, eta);
+        emit downloadProgress(id, item.downloadedSize, item.totalSize);
+        emit downloadSpeed(id, item.speed);
+        return;
+    }
+
+    // Playlist job: attribute the line to the row of the item it belongs to.
+    int cid = findChildByVideoId(id, videoId);
+    if (cid == -1) return;
+    DownloadItem& child = downloads[cid];
+    if (child.status == "Completed" || child.status == "Cancelled" || child.status == "Paused") return;
+
+    if (state == "finished") {
+        noteYtDlpChildFinished(id, cid, QString());
+        return;
+    }
+
+    if (child.status != "Downloading") {
+        child.status = "Downloading";
+        emit statusChanged(cid, "Downloading");
+    }
+    if (downloaded >= 0) child.downloadedSize = downloaded;
+    if (total > 0) child.totalSize = total;
+    if (child.totalSize > 0) {
+        child.progress = qBound(0.0, (double)child.downloadedSize / child.totalSize * 100.0, 100.0);
+    }
+    child.speed = qMax<qint64>(0, speed);
+    child.eta = qMax<qint64>(0, eta);
+    emit downloadProgress(cid, child.downloadedSize, child.totalSize);
+    emit downloadSpeed(cid, child.speed);
+
+    // The folder row shows the speed of whatever the single process is fetching.
+    downloads[id].speed = child.speed;
+    emit downloadSpeed(id, child.speed);
+
+    // Throttle SQLite writes per row: a fragment-parallel job can report several
+    // progress lines per second and must not turn that into a disk write storm.
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    auto it = lastProgressToDbMs.constFind(cid);
+    if (it == lastProgressToDbMs.constEnd() || now - it.value() >= 500) {
+        DatabaseManager::instance().updateDownloadProgress(cid, child.downloadedSize, child.totalSize, child.progress);
+        lastProgressToDbMs[cid] = now;
+    }
+
+    updateAggregateProgress(id);
+}
+
+void DownloadManager::onYtDlpVideoPath(int id, int playlistIndex, const QString& path) {
+    if (!downloads.contains(id) || path.isEmpty()) return;
+
+    if (!downloads[id].isFolder) {
+        DownloadItem& item = downloads[id];
+        const QString real = tidyJobFilePath(path);
+        if (item.filePath == real) return;
+        // Adopt the name yt-dlp actually used so "open folder" and the completed
+        // file always agree with the row.
+        item.filePath = real;
+        item.fileName = QFileInfo(real).fileName();
+        DatabaseManager::instance().updateDownload(item);
+        emit statusChanged(id, item.status);
+        return;
+    }
+
+    int cid = findChildForPath(id, playlistIndex, path);
+    if (cid == -1) return;
+    DownloadItem& child = downloads[cid];
+    if (child.status == "Cancelled") return;
+
+    const QString real = tidyJobFilePath(path);
+    if (child.filePath != real) {
+        child.filePath = real;
+        child.fileName = QFileInfo(real).fileName();
+    }
+    // The file only exists once the merge finished, so this is the point where the
+    // real size is known.
+    const QFileInfo info(child.filePath);
+    if (info.exists() && info.size() > 0) {
+        child.downloadedSize = info.size();
+        child.totalSize = info.size();
+        if (child.status == "Completed") child.progress = 100.0;
+    }
+    DatabaseManager::instance().updateDownload(child);
+    emit statusChanged(cid, child.status);
+    updateAggregateProgress(id);
+}
+
+void DownloadManager::noteYtDlpChildFinished(int id, int childId, const QString& path) {
+    if (!downloads.contains(childId)) return;
+    DownloadItem& child = downloads[childId];
+    if (child.status == "Cancelled") return;
+
+    if (!path.isEmpty()) {
+        child.filePath = tidyJobFilePath(path);
+        child.fileName = QFileInfo(child.filePath).fileName();
+    }
+    if (child.status == "Completed") {
+        DatabaseManager::instance().updateDownload(child);
+        return;   // a merged video reports "finished" once per format
+    }
+
+    child.status = "Completed";
+    child.progress = 100.0;
+    child.speed = 0;
+    child.eta = 0;
+    child.error.clear();
+    child.completedAt = QDateTime::currentDateTime();
+    const QFileInfo info(child.filePath);
+    if (info.exists() && info.size() > 0) {
+        child.downloadedSize = info.size();
+        child.totalSize = info.size();
+    }
+    DatabaseManager::instance().updateDownload(child);
+    Logger::instance().info("Playlist item completed: " + QString::number(childId) + " -> " + child.fileName);
+    emit downloadFinished(childId);
+    emit statusChanged(childId, "Completed");
+    updateAggregateProgress(id);
+}
+
+void DownloadManager::onYtDlpPlaylistFinished(int id, bool ok, const QString& error) {
+    if (!downloads.contains(id) || !downloads[id].isFolder) return;
+    DownloadItem& job = downloads[id];
+    if (job.status == "Cancelled") return;
+
+    // Terminal sweep: settle every item the process never reported on. yt-dlp
+    // skips archived items and silently drops unavailable ones, so whatever is
+    // still pending here is a genuine failure. Items are also reconciled against
+    // the download archive, which is what a skipped item leaves behind.
+    markJobChildrenFromDisk(id, /*includePaused=*/true);
+
+    int completed = 0, failed = 0, cancelled = 0;
+    for (int cid : job.childIds) {
+        if (!downloads.contains(cid)) continue;
+        DownloadItem& child = downloads[cid];
+        if (child.status == "Cancelled") { cancelled++; continue; }
+
+        const QFileInfo info(child.filePath);
+        if (info.exists() && info.size() > 0) {
+            if (child.status != "Completed") {
+                child.status = "Completed";
+                child.progress = 100.0;
+                child.completedAt = QDateTime::currentDateTime();
+                child.speed = 0;
+                child.error.clear();
+                DatabaseManager::instance().updateDownload(child);
+                emit statusChanged(cid, "Completed");
+            }
+            // The file on disk is the truth for both numbers, so the folder's
+            // "downloaded / total" always adds up and never reads as 209 MB / 99 MB.
+            child.downloadedSize = info.size();
+            child.totalSize = info.size();
+            completed++;
+        } else if (child.status == "Completed") {
+            // Marked complete from the archive but the file is gone.
+            child.status = "Failed";
+            child.error = "The downloaded file is missing.";
+            failed++;
+            DatabaseManager::instance().updateDownload(child);
+            emit statusChanged(cid, "Failed");
+        } else {
+            child.status = "Failed";
+            child.speed = 0;
+            child.error = error.isEmpty() ? "Item could not be downloaded." : error;
+            failed++;
+            DatabaseManager::instance().updateDownload(child);
+            emit statusChanged(cid, "Failed");
+        }
+    }
+
+    if (failed > 0 && completed == 0) {
+        // Nothing at all got downloaded - report the job as failed so the
+        // automatic retry policy can take a second run at it.
+        job.status = "Failed";
+        job.error = error;
+        job.speed = 0;
+        DatabaseManager::instance().updateDownload(job);
+        Logger::instance().error("Playlist job failed (" + QString::number(failed) + " item(s)): " + error);
+        emit downloadFailed(id, error);
+        emit statusChanged(id, "Failed");
+        scheduleRetry(id, error);
+    } else {
+        // A partial success is still a success: the failed items are individually
+        // retryable and the folder must not be shown as a failed transfer.
+        job.status = "Completed";
+        // Cancelled items are not part of what the job was asked to deliver, so
+        // they stay out of the denominator - otherwise a job the user stopped
+        // early could never read as 100%.
+        const int settled = completed + failed;
+        job.progress = settled > 0 ? (double)completed / settled * 100.0 : 100.0;
+        job.downloadedSize = 0;
+        job.totalSize = 0;
+        for (int cid : job.childIds) {
+            if (!downloads.contains(cid)) continue;
+            job.downloadedSize += downloads[cid].downloadedSize;
+            job.totalSize += downloads[cid].totalSize;
+        }
+        job.completedAt = QDateTime::currentDateTime();
+        job.speed = 0;
+        job.error = failed > 0 ? QString("%1 of %2 item(s) could not be downloaded. Right-click the item and choose Retry.")
+                                     .arg(failed).arg(settled)
+                               : QString();
+        DatabaseManager::instance().updateDownload(job);
+        Logger::instance().info("Playlist job finished: " + QString::number(completed) + " completed, " +
+                                QString::number(failed) + " failed, " + QString::number(cancelled) + " cancelled");
+        emit downloadFinished(id);
+        emit statusChanged(id, "Completed");
+    }
+
+    lastProgressToDbMs.remove(id);
+    startNextQueued();
+}
+
 void DownloadManager::onYtDlpFinished(int id) {
     if (!downloads.contains(id)) return;
+    // A playlist job settles itself in onYtDlpPlaylistFinished(), which also has
+    // to resolve the individual items.
+    if (downloads[id].isFolder) return;
     DownloadItem& item = downloads[id];
 
     item.status = "Completed";
@@ -1068,12 +1750,17 @@ void DownloadManager::onYtDlpFinished(int id) {
 
 void DownloadManager::onYtDlpFailed(int id, const QString& error) {
     if (!downloads.contains(id)) return;
+    // Playlist jobs report their outcome through playlistFinished().
+    if (downloads[id].isFolder) return;
     DownloadItem& item = downloads[id];
+
+    if (item.status == "Cancelled") return;
 
     item.status = "Failed";
     item.error = error;
     item.speed = 0;
-
+    item.eta = 0;
+    // Keep the partial file: a retry continues it instead of starting over.
     DatabaseManager::instance().updateDownload(item);
     Logger::instance().error("yt-dlp download failed: " + QString::number(id) + " - " + error);
     emit downloadFailed(id, error);
@@ -1084,6 +1771,146 @@ void DownloadManager::onYtDlpFailed(int id, const QString& error) {
     }
 
     startNextQueued();
+
+    // Automatic retry with backoff. Playlist items are not re-queued on their own:
+    // they are re-fetched by re-running their job, which skips the items its
+    // download archive already recorded.
+    if (item.parentId == -1) scheduleRetry(id, error);
+}
+
+void DownloadManager::scheduleRetry(int id, const QString& error) {
+    if (!downloads.contains(id)) return;
+    DownloadItem& item = downloads[id];
+    if (item.status == "Cancelled" || item.status == "Completed") return;
+
+    int limit = maxRetries();
+    if (limit <= 0 || item.attempts >= limit) {
+        Logger::instance().info("Not retrying download " + QString::number(id) + ": attempt limit reached");
+        return;
+    }
+
+    item.attempts++;
+    item.status = "Queued";
+    item.error = error;
+    DatabaseManager::instance().updateDownload(item);
+    emit statusChanged(id, "Queued");
+
+    // Back off between attempts so a throttled or briefly unreachable source is
+    // not hammered immediately again.
+    int delaySec = qMin(5 * (1 << (item.attempts - 1)), 120);
+    if (QTimer* existing = retryTimers.take(id)) {
+        existing->stop();
+        existing->deleteLater();
+    }
+    QTimer* timer = new QTimer(this);
+    timer->setSingleShot(true);
+    connect(timer, &QTimer::timeout, this, [this, id, timer]() {
+        timer->deleteLater();
+        retryTimers.remove(id);
+        if (!downloads.contains(id)) return;
+        if (downloads[id].status != "Queued") return;   // paused/cancelled meanwhile
+        retryDownload(id, /*resetAttempts=*/false);
+    });
+    retryTimers.insert(id, timer);
+    timer->start(delaySec * 1000);
+
+    Logger::instance().info("Scheduled automatic retry " + QString::number(item.attempts) + "/" +
+                            QString::number(limit) + " for download " + QString::number(id) +
+                            " in " + QString::number(delaySec) + "s");
+}
+
+void DownloadManager::retryDownload(int id, bool resetAttempts) {
+    if (!downloads.contains(id)) return;
+
+    // Retrying an item inside a folder re-queues the folder instead: the folder
+    // is the real transfer, and starting a second process for one of its items
+    // would fight the job that owns it.
+    if (downloads[id].parentId != -1) {
+        int parentId = downloads[id].parentId;
+        if (downloads.contains(parentId) &&
+            (downloads[parentId].type == "Torrent" || downloads[parentId].type == "YtDlp")) {
+            retryDownload(parentId);
+            return;
+        }
+    }
+
+    DownloadItem& item = downloads[id];
+    if (item.status == "Downloading") return;
+    if (item.status == "Completed" && !item.isFolder) return;
+
+    if (QTimer* pending = retryTimers.take(id)) {
+        pending->stop();
+        pending->deleteLater();
+    }
+
+    // A retry the user asked for starts a fresh attempt budget; an automatic retry
+    // keeps counting, so the retry limit is actually reached.
+    if (resetAttempts) {
+        item.attempts = 0;
+    }
+    item.error.clear();
+    item.completedAt = QDateTime();
+
+    if (item.isFolder) {
+        bool anyFailedChild = false;
+        for (int cid : item.childIds) {
+            if (downloads.contains(cid) && downloads[cid].status == "Failed") anyFailedChild = true;
+        }
+        // Re-running a fully finished job is a deliberate re-download, so the
+        // archive that makes yt-dlp skip finished items is dropped. When only some
+        // items failed it is kept, and the retry re-fetches just those.
+        if (item.status == "Completed" && !anyFailedChild) {
+            QFile::remove(jobArchivePath(item.filePath));
+        }
+        for (int cid : item.childIds) {
+            if (!downloads.contains(cid)) continue;
+            DownloadItem& child = downloads[cid];
+            child.status = "Queued";
+            child.progress = 0;
+            child.downloadedSize = 0;
+            child.totalSize = 0;
+            child.speed = 0;
+            child.eta = 0;
+            if (resetAttempts) {
+                child.attempts = 0;
+            }
+            child.error.clear();
+            emit statusChanged(cid, "Queued");
+        }
+    }
+
+    item.status = "Queued";
+    DatabaseManager::instance().updateDownload(item);
+    emit statusChanged(id, "Queued");
+
+    // A retry is an explicit user action, so it starts now rather than waiting for
+    // the automatic backoff - unless every yt-dlp job slot is busy.
+    if (item.type == "YtDlp" && !ytDlpSlotAvailable()) {
+        Logger::instance().info("Retry of " + QString::number(id) + " stays queued: all yt-dlp job slots busy");
+        startNextQueued();
+        return;
+    }
+    resumeDownload(id);
+}
+
+void DownloadManager::retryAllFailed() {
+    QVector<DownloadItem> failed = getDownloadsByStatus("Failed");
+    QSet<int> retried;
+    int count = 0;
+    for (const DownloadItem& item : failed) {
+        // A folder child is retried through its folder, so several failed items of
+        // the same job must not start the job several times.
+        int target = item.id;
+        if (item.parentId != -1 && downloads.contains(item.parentId) &&
+            (downloads[item.parentId].type == "Torrent" || downloads[item.parentId].type == "YtDlp")) {
+            target = item.parentId;
+        }
+        if (retried.contains(target)) continue;
+        retried.insert(target);
+        retryDownload(target);
+        count++;
+    }
+    Logger::instance().info("Retried " + QString::number(count) + " failed download(s)");
 }
 
 void DownloadManager::processSpeedLimit() {

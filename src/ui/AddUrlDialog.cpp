@@ -154,10 +154,14 @@ void AddUrlDialog::onAdd() {
             QString fmt = dialog.getAudioFormat();
             if (fmt.isEmpty()) fmt = audioFormat;
             if (!selected.isEmpty()) {
-                DownloadManager::instance().addPlaylistDownload(selected, outputPath, "YtDlp", useTracks, fmt);
+                DownloadManager::instance().addPlaylistDownload(selected, outputPath, "YtDlp", useTracks, fmt, "", "", url);
             } else {
                 QString savePath = path.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) : path;
-                DownloadManager::instance().addDownload(url, savePath, "YtDlp");
+                int id = DownloadManager::instance().addDownload(url, savePath, "YtDlp");
+                if (id < 0) {
+                    statusLabel->setText("Blocked by file-format filter (Settings > Downloads)");
+                    return;
+                }
             }
         }
         accept();
@@ -176,7 +180,7 @@ void AddUrlDialog::onAdd() {
                 QString fmt = dialog.getAudioFormat();
                 if (fmt.isEmpty()) fmt = audioFormat;
                 if (!selected.isEmpty()) {
-                    DownloadManager::instance().addPlaylistDownload(selected, outputPath, "YtDlp", useTracks, fmt);
+                    DownloadManager::instance().addPlaylistDownload(selected, outputPath, "YtDlp", useTracks, fmt, "", "", url);
                 } else {
                     QString savePath = path.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) : path;
                     DownloadManager::instance().addDownload(url, savePath, "YtDlp");

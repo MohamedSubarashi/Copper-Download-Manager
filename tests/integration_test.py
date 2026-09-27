@@ -21,6 +21,7 @@ import tempfile
 import shutil
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote
 
@@ -526,13 +527,104 @@ def main():
             })
             check("add playlist download -> 200", st == 200, f"status={st}")
             pid = j.get("id") if isinstance(j, dict) else None
-            d = wait_download_status(port, pid, {"Failed", "Completed"}, timeout=30.0)
+            # A permanently unreachable playlist is retried automatically (3 attempts
+            # with 5/10/20s backoff, and the row reads "Queued" while it waits for
+            # the next attempt), so this needs a generous window to see the final
+            # Failed state.
+            d = wait_download_status(port, pid, {"Failed", "Completed"}, timeout=75.0)
             check("playlist URL routed to yt-dlp engine",
                   d is not None and d.get("type") == "YtDlp",
                   f"type={d.get('type') if d else None}")
             check("playlist without yt-dlp fails clearly",
                   d is not None and d.get("status") == "Failed",
                   f"status={d.get('status') if d else None}")
+
+            # 5c) Playlist job shape: a playlist URL must become ONE folder job with
+            #     one child row per item, not N independent yt-dlp processes. The
+            #     old code spawned one process per video, which is what got the
+            #     extractor throttled and made playlists fail after a few items.
+            #     Driven through the --playlist-dialog: hook so the modal item
+            #     picker is skipped while the real job-creation path still runs.
+            #     The playlist id is unique per run: the job is looked up by URL, and
+            #     a fixed id would collide with rows left by an earlier run. It does
+            #     not exist, so yt-dlp fails on it - exactly like the old 5c case.
+            fake_playlist = ("https://www.youtube.com/playlist?list=PLcoppertest"
+                             + uuid.uuid4().hex[:8])
+            st, _ = http_request(port, "POST", "/api/forward",
+                                 {"argument": f"--playlist-dialog:{fake_playlist}"})
+            check("playlist dialog bypass accepted", st == 200, f"status={st}")
+
+            job = None
+            kids = []
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                _, jl = http_request(port, "GET", "/api/downloads")
+                all_dl = jl.get("downloads", [])
+                job = next((x for x in all_dl
+                            if x.get("url") == fake_playlist), None)
+                if job:
+                    kids = [x for x in all_dl if x.get("parentId") == job.get("id")]
+                    if len(kids) == 3:
+                        break
+                time.sleep(0.4)
+
+            check("playlist becomes a single folder job",
+                  job is not None and job.get("isFolder") is True,
+                  f"job={job}")
+            check("playlist job has one row per item",
+                  len(kids) == 3, f"children={len(kids)}")
+            check("playlist items are not folder rows",
+                  all(k.get("isFolder") is False for k in kids),
+                  str([k.get("isFolder") for k in kids]))
+            # The rows must carry their playlist position and site video id: that is
+            # what lets one yt-dlp process drive the whole playlist and still report
+            # each item's progress on its own row (and it becomes the
+            # --playlist-items selection, so a missing position would silently
+            # download videos the user never picked).
+            check("playlist items carry their playlist position",
+                  sorted(k.get("trackIndex") for k in kids) == [1, 2, 3],
+                  str(sorted(k.get("trackIndex") for k in kids)))
+            check("playlist items carry distinct video ids",
+                  len({k.get("videoId") for k in kids}) == 3 and
+                  all(k.get("videoId") for k in kids),
+                  str([k.get("videoId") for k in kids]))
+            check("playlist job starts as Queued or Downloading",
+                  job is not None and job.get("status") in ("Queued", "Downloading", "Failed"),
+                  f"status={job.get('status') if job else None}")
+
+            # 5d) Pause/resume state machine on a playlist job. Pausing must keep
+            #     the job (and its items) rather than cancelling them, and resuming
+            #     must put it back into a running state.
+            if job:
+                mid = job.get("id")
+                http_request(port, "POST", "/api/forward", {"argument": f"pause-all:{mid}"})
+                d = wait_download_status(port, mid, {"Paused"}, timeout=10.0)
+                check("playlist job can be paused",
+                      d is not None and d.get("status") == "Paused",
+                      f"status={d.get('status') if d else None}")
+
+                _, jl = http_request(port, "GET", "/api/downloads")
+                paused_kids = [x for x in jl.get("downloads", [])
+                               if x.get("parentId") == mid]
+                check("pausing a job pauses its items too",
+                      all(k.get("status") == "Paused" for k in paused_kids) and paused_kids,
+                      str([k.get("status") for k in paused_kids]))
+
+                http_request(port, "POST", "/api/forward", {"argument": f"resume-all:{mid}"})
+                d = wait_download_status(port, mid,
+                                         {"Downloading", "Failed", "Completed"}, timeout=15.0)
+                check("paused playlist job can be resumed",
+                      d is not None and d.get("status") != "Paused",
+                      f"status={d.get('status') if d else None}")
+
+                # 5e) Retry must clear the error/attempt state of a failed job.
+                http_request(port, "POST", "/api/forward", {"argument": f"retry:{mid}"})
+                d = wait_download_status(port, mid,
+                                         {"Queued", "Downloading", "Failed", "Completed"},
+                                         timeout=15.0)
+                check("retry does not leave the job stuck",
+                      d is not None and d.get("status") != "Paused",
+                      f"status={d.get('status') if d else None}")
 
             # 6) Native-messaging host -> named pipe injection (the IDM model).
             #    The host exe sits next to the app exe and forwards a browser
