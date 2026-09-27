@@ -53,6 +53,14 @@ public:
 
     // Download-item introspection for the per-download info window.
     int childCount(int id) const;
+    // The transfer that actually controls this row: for a row inside a yt-dlp
+    // playlist job that is the job itself, because one yt-dlp process drives
+    // every file of the playlist and an individual item therefore cannot be
+    // paused, resumed or cancelled on its own. Returns -1 when the row is its own
+    // transfer. The UI uses this to label the controls honestly, and pause /
+    // resume / cancel route through it so no entry point can act on a row that
+    // has no process behind it.
+    int controllingJobId(int id) const;
 
 signals:
     void downloadAdded(int id, const QString& path, const QString& type, bool isFolder);

@@ -707,6 +707,21 @@ void DownloadManager::addChildDownload(int parentId, const QString& url, const Q
 
 void DownloadManager::pauseDownload(int id) {
     if (!downloads.contains(id)) return;
+
+    // A row inside a yt-dlp playlist job has no process of its own: the job's
+    // single yt-dlp process is the transfer, so pausing one file means pausing the
+    // job. Routing here rather than only in the info window keeps every entry
+    // point honest - the table's context menu, the per-download window and the
+    // IPC hooks all go through this function. Without it, pausing a child only
+    // relabelled that row while the job kept transferring.
+    if (isPlaylistJobItem(id)) {
+        const int jobId = downloads[id].parentId;
+        Logger::instance().info("Pause of playlist item " + QString::number(id) +
+                                " routed to its job " + QString::number(jobId));
+        pauseDownload(jobId);
+        return;
+    }
+
     DownloadItem& item = downloads[id];
 
     if (item.status != "Downloading" && item.status != "Queued") return;
@@ -756,12 +771,15 @@ void DownloadManager::resumeDownload(int id) {
 
     if (item.status != "Paused" && item.status != "Failed" && item.status != "Queued") return;
 
-    // A playlist item is driven by its folder's single yt-dlp process. Starting it
-    // on its own would spawn a second process per video - the exact behavior that
-    // got the extractor throttled and broke playlists.
+    // A playlist item is driven by its folder's single yt-dlp process, so it can
+    // only be resumed by resuming that job. Routing to the parent is also what
+    // keeps this from spawning a second process per video - the exact behavior
+    // that got the extractor throttled and broke playlists.
     if (isPlaylistJobItem(id)) {
-        Logger::instance().info("Playlist item " + QString::number(id) +
-                                " is driven by its job, not started on its own");
+        const int jobId = downloads[id].parentId;
+        Logger::instance().info("Resume of playlist item " + QString::number(id) +
+                                " routed to its job " + QString::number(jobId));
+        resumeDownload(jobId);
         return;
     }
 
@@ -927,6 +945,19 @@ void DownloadManager::resumeDownload(int id) {
 
 void DownloadManager::cancelDownload(int id) {
     if (!downloads.contains(id)) return;
+
+    // yt-dlp cannot drop a single file from a playlist it is already downloading,
+    // so cancelling one file of a playlist means cancelling the job. The row
+    // itself would otherwise sit at "Cancelled" while its neighbours kept
+    // transferring inside the same process.
+    if (isPlaylistJobItem(id)) {
+        const int jobId = downloads[id].parentId;
+        Logger::instance().info("Cancel of playlist item " + QString::number(id) +
+                                " routed to its job " + QString::number(jobId));
+        cancelDownload(jobId);
+        return;
+    }
+
     DownloadItem& item = downloads[id];
 
     // A queued automatic retry must not fire after the user cancelled the item.
@@ -1262,6 +1293,10 @@ bool DownloadManager::isPlaylistJobItem(int id) const {
     auto parent = downloads.constFind(item.value().parentId);
     if (parent == downloads.constEnd()) return false;
     return parent.value().isFolder && parent.value().type == "YtDlp";
+}
+
+int DownloadManager::controllingJobId(int id) const {
+    return isPlaylistJobItem(id) ? downloads.value(id).parentId : -1;
 }
 
 QString DownloadManager::findJobFileForTrack(const QString& folder, int trackIndex) const {

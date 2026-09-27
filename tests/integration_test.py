@@ -626,6 +626,77 @@ def main():
                       d is not None and d.get("status") != "Paused",
                       f"status={d.get('status') if d else None}")
 
+            # 5f) Pausing a row INSIDE a playlist job must act on the job, not just
+            #     relabel the row. yt-dlp runs one process for the whole playlist, so
+            #     a single file cannot be suspended on its own. Before the fix,
+            #     pausing a child flipped only that row to "Paused" while the job
+            #     kept transferring, and resuming it did nothing at all.
+            if job and kids:
+                child = kids[0]
+                job_id = job.get("id")
+
+                def rows():
+                    _, body = http_request(port, "GET", "/api/downloads")
+                    return {x.get("id"): x for x in body.get("downloads", [])}
+
+                before = rows()
+                # pauseDownload/cancelDownload only act on a Queued or Downloading
+                # row, and the retry above may have left the job Failed. Record
+                # what was pausable so the checks below assert the right thing
+                # instead of failing for a reason that has nothing to do with
+                # routing.
+                was_pausable = before.get(job_id, {}).get("status") in ("Queued", "Downloading")
+
+                http_request(port, "POST", "/api/forward",
+                             {"argument": f"pause-all:{child['id']}"})
+                time.sleep(1.0)
+                after = rows()
+                j, c = after.get(job_id, {}), after.get(child["id"], {})
+
+                # The defect itself: the item claimed to be Paused while the job it
+                # does not own carried on transferring. This holds no matter what
+                # state the job was in - if the job was not pausable, the pause was
+                # legitimately refused for the item too, and both agree.
+                check("a playlist item is never Paused while its job is still running",
+                      not (c.get("status") == "Paused" and
+                           j.get("status") in ("Queued", "Downloading")),
+                      f"item={c.get('status')} job={j.get('status')}")
+
+                if was_pausable:
+                    check("pausing a playlist item pauses the job that owns it",
+                          j.get("status") == "Paused",
+                          f"job status={j.get('status')} while item status="
+                          f"{c.get('status')}")
+
+                # Resuming the item must move the job, not just the row. It used to
+                # be a no-op that only logged a line.
+                if j.get("status") == "Paused":
+                    http_request(port, "POST", "/api/forward",
+                                 {"argument": f"resume-all:{child['id']}"})
+                    time.sleep(1.0)
+                    r = rows()
+                    check("resuming a playlist item resumes the job that owns it",
+                          r.get(job_id, {}).get("status") != "Paused",
+                          f"job status={r.get(job_id, {}).get('status')}")
+                    check("a resumed item is not left Paused behind a running job",
+                          not (r.get(child["id"], {}).get("status") == "Paused" and
+                               r.get(job_id, {}).get("status") in ("Queued", "Downloading")),
+                          f"item={r.get(child['id'], {}).get('status')} "
+                          f"job={r.get(job_id, {}).get('status')}")
+
+                # The API has to report the controlling job so the UI can label the
+                # controls; without it the window acts on the whole playlist
+                # without saying so.
+                now = rows()
+                now_kids = [v for k, v in now.items() if v.get("parentId") == job_id]
+                check("playlist items report the job that controls them",
+                      bool(now_kids) and
+                      all(k.get("controlledByJob") == job_id for k in now_kids),
+                      str([k.get("controlledByJob") for k in now_kids]))
+                check("a job row is its own transfer",
+                      now.get(job_id, {}).get("controlledByJob", -1) == -1,
+                      "the folder row must not point at a parent job")
+
             # 6) Native-messaging host -> named pipe injection (the IDM model).
             #    The host exe sits next to the app exe and forwards a browser
             #    native-messaging message to the app over the QLocalServer pipe.

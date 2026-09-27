@@ -11,9 +11,15 @@ class QTreeWidget;
 class QTimer;
 
 // The per-download panel, in the spirit of IDM's individual download windows:
-// one window per transfer (a playlist folder gets one window with a list of its
-// items) showing live progress, size, speed, remaining time and controls for
-// pause/resume/cancel/retry.
+// one window per transfer, showing live progress, size, speed, remaining time and
+// controls for pause/resume/cancel/retry. A playlist folder gets one window with
+// a list of its items, and any single item of that playlist can also get its own
+// window.
+//
+// A playlist item is not a transfer of its own - the job's single yt-dlp process
+// downloads every file - so for those rows the window says so and the controls
+// act on the job (see DownloadManager::controllingJobId). Silently relabelling
+// one row "Paused" while the job kept transferring was the bug this replaces.
 //
 // The window follows the download instead of owning it: DownloadManager emits
 // the signals, the dialog just re-reads the current DownloadItem on a timer and
@@ -56,6 +62,7 @@ private:
     QLabel* m_timeLabel;
     QLabel* m_urlLabel;
     QLabel* m_errorLabel;
+    QLabel* m_noteLabel;
     QLabel* m_itemsLabel;
     QProgressBar* m_progress;
     QPushButton* m_pauseButton;

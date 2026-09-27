@@ -340,6 +340,11 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
             // apart when yt-dlp only reports progress for one at a time.
             dlObj["videoId"] = item.videoId;
             dlObj["trackIndex"] = item.trackIndex;
+            // The job that really controls this row, or -1 when the row is its own
+            // transfer. A playlist item reports its job here, which is what the UI
+            // uses to label the controls and what tells a client that pausing this
+            // row pauses the whole playlist.
+            dlObj["controlledByJob"] = DownloadManager::instance().controllingJobId(item.id);
             downloadsArray.append(dlObj);
         }
 

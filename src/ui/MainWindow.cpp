@@ -1074,12 +1074,17 @@ void MainWindow::showContextMenu(const QPoint& pos) {
         menu.addSeparator();
         menu.addAction(QIcon(":/icons/Delete.png"), "Remove All", this, &MainWindow::onDeleteSelected);
     } else {
+        // A playlist file is downloaded by its job's single yt-dlp process, so
+        // these actions act on the whole job. The handlers route through
+        // DownloadManager, which does that; the labels have to agree with it.
+        const bool viaJob = DownloadManager::instance().controllingJobId(id) != -1;
+        const QString scope = viaJob ? " Playlist" : "";
         if (dlItem.status == "Downloading") {
-            menu.addAction(QIcon(":/icons/Pause.png"), "Pause", this, &MainWindow::onPauseSelected);
-            menu.addAction(QIcon(":/icons/Stop.png"), "Cancel", this, &MainWindow::onStopSelected);
+            menu.addAction(QIcon(":/icons/Pause.png"), "Pause" + scope, this, &MainWindow::onPauseSelected);
+            menu.addAction(QIcon(":/icons/Stop.png"), "Cancel" + scope, this, &MainWindow::onStopSelected);
         } else if (dlItem.status == "Paused" || dlItem.status == "Failed" || dlItem.status == "Cancelled") {
-            menu.addAction(QIcon(":/icons/Start.png"), "Resume", this, &MainWindow::onStartSelected);
-            menu.addAction(QIcon(":/icons/Stop.png"), "Cancel", this, &MainWindow::onStopSelected);
+            menu.addAction(QIcon(":/icons/Start.png"), "Resume" + scope, this, &MainWindow::onStartSelected);
+            menu.addAction(QIcon(":/icons/Stop.png"), "Cancel" + scope, this, &MainWindow::onStopSelected);
         } else if (dlItem.status == "Completed") {
             menu.addAction("Open File", this, &MainWindow::onOpenFile);
             menu.addAction("Open Folder", this, &MainWindow::onOpenFolder);

@@ -163,6 +163,15 @@ void DownloadInfoDialog::buildUi() {
     m_errorLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     root->addWidget(m_errorLabel);
 
+    // Explains that a playlist file is not its own transfer, so the controls
+    // below act on the whole playlist job.
+    m_noteLabel = new QLabel(this);
+    m_noteLabel->setWordWrap(true);
+    m_noteLabel->setVisible(false);
+    m_noteLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_noteLabel->setStyleSheet("color: " + QColor(120, 120, 120).name());
+    root->addWidget(m_noteLabel);
+
     // Playlist folders list their items here, so one window covers the whole
     // playlist instead of forcing one window per video.
     m_itemTree = new QTreeWidget(this);
@@ -258,6 +267,17 @@ void DownloadInfoDialog::refresh() {
         m_errorLabel->setStyleSheet("color: " + QColor(200, 0, 0).name());
     }
 
+    // A playlist file is downloaded by its job's single yt-dlp process, so it
+    // cannot be paused or resumed on its own. Say that here rather than letting
+    // the button quietly act on the whole playlist behind the user's back.
+    const int jobId = DownloadManager::instance().controllingJobId(m_id);
+    m_noteLabel->setVisible(jobId != -1);
+    if (jobId != -1) {
+        m_noteLabel->setText(QStringLiteral(
+            "Part of playlist job #%1, which downloads every file in one transfer. "
+            "Pausing, resuming or cancelling here affects the whole playlist.").arg(jobId));
+    }
+
     // Playlist item list.
     const QVector<DownloadItem> all = DownloadManager::instance().getDownloads();
     QVector<int> childIds;
@@ -316,18 +336,26 @@ void DownloadInfoDialog::updateButtons() {
         return;
     }
 
+    // The controls act on the job, not on this row, so they have to say so.
+    const bool viaJob = DownloadManager::instance().controllingJobId(m_id) != -1;
+    const QString scope = viaJob ? QStringLiteral(" playlist") : QString();
+
     if (item.status == "Downloading") {
-        m_pauseButton->setText("Pause");
+        m_pauseButton->setText("Pause" + scope);
         m_pauseButton->setEnabled(true);
     } else if (item.status == "Paused") {
-        m_pauseButton->setText("Resume");
+        m_pauseButton->setText("Resume" + scope);
         m_pauseButton->setEnabled(true);
     } else if (item.status == "Queued") {
-        m_pauseButton->setText("Pause");
+        m_pauseButton->setText("Pause" + scope);
         m_pauseButton->setEnabled(false);
     } else {
         m_pauseButton->setEnabled(false);
     }
+
+    m_pauseButton->setToolTip(viaJob
+        ? "Pause the whole playlist job this file belongs to, keeping the partial files"
+        : "Pause the transfer, keeping the partial file so it can continue later");
 
     const bool retryable = item.status == "Failed" || item.status == "Cancelled" || item.status == "Paused";
     m_retryButton->setEnabled(retryable);
@@ -335,6 +363,10 @@ void DownloadInfoDialog::updateButtons() {
     const bool cancellable = item.status == "Downloading" || item.status == "Queued" ||
                              item.status == "Paused" || item.status == "Failed";
     m_cancelButton->setEnabled(cancellable);
+    m_cancelButton->setText("Cancel" + scope);
+    m_cancelButton->setToolTip(viaJob
+        ? "Cancel the whole playlist job this file belongs to"
+        : "Stop this download and remove it from the list");
 }
 
 void DownloadInfoDialog::onPauseResume() {
