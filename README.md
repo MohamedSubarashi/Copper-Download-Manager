@@ -7,7 +7,7 @@ A high-performance, cross-platform download manager written in C++17 with Qt6.
 - **Multi-chunk HTTP downloads** — Split files into multiple chunks for maximum speed
 - **Torrent & Magnet support** — Via aria2c integration
 - **YouTube/video downloads** — Via yt-dlp integration with format selection
-- **Browser extension** — Chrome & Firefox extensions to intercept downloads automatically ([get the extension](#browser-extensions))
+- **Browser extension** — Chrome, Firefox & Edge extensions to intercept downloads automatically ([get the extension](#browser-extensions))
 - **Playlist support** — Download entire playlists with track numbering
 - **Speed limiter** — Set download/upload speed limits
 - **Resume & pause** — Pause and resume downloads at any time
@@ -106,11 +106,11 @@ Copper Download Manager app. It is free and open source.
 |----------|-------|--------|
 | Firefox | [addons.mozilla.org](https://addons.mozilla.org/en-US/firefox/addon/copper-download-manager) | **Available** |
 | Chrome | [chromewebstore.google.com](https://chromewebstore.google.com/detail/copper-download-manager/cmokehdedogdpbfhlamopeifgogaihni) | **Available** |
+| Edge | [microsoftedge.microsoft.com](https://microsoftedge.microsoft.com/addons/detail/copper-download-manager/fnganciafgifhelimkoeiiapdcdmnnlb) | **Available** |
 | Opera | — | Coming soon |
-| Edge | — | Coming soon |
 
-> Chromium-based Opera and Edge can already use the Chrome build in developer
-> mode until their store listings go live.
+> Opera is Chromium-based, so the Chrome build can be sideloaded in developer
+> mode until its store listing goes live.
 
 ## Author
 
