@@ -16,6 +16,7 @@
 #include <QDir>
 #include <QProcess>
 #include <QRegularExpression>
+#include <algorithm>
 
 // yt-dlp's download archive for a playlist job. It records every item that
 // finished successfully, so restarting a job continues with the remaining items
@@ -324,6 +325,12 @@ void DownloadManager::restoreFromDatabase() {
     for (const DownloadItem& item : all) {
         if (item.parentId >= 0) children[item.parentId].append(item.id);
     }
+    // getAllDownloads() reads newest-first, so the rows arrive here in reverse
+    // creation order. Child order decides both how a playlist lists its items and
+    // how they are numbered, so it has to match the order they were created in.
+    for (auto it = children.begin(); it != children.end(); ++it) {
+        std::sort(it->begin(), it->end());
+    }
     downloads.clear();
     for (const DownloadItem& item : all) {
         DownloadItem copy = item;
@@ -466,14 +473,21 @@ int DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries, 
         for (const PlaylistEntry& entry : entries) {
             if (!entry.selected) continue;
             QString childPath = QDir(torrentFolderPath).filePath(entry.title);
+            const int kidsBefore = downloads.contains(parentItem.id)
+                                       ? downloads[parentItem.id].childIds.size()
+                                       : 0;
             addChildDownload(parentItem.id, torrentSourceUrl, childPath, "Torrent", audioFormat);
-            if (downloads.contains(parentItem.id) && !downloads[parentItem.id].childIds.isEmpty()) {
-                int lastChildId = downloads[parentItem.id].childIds.last();
-                if (downloads.contains(lastChildId)) {
-                    downloads[lastChildId].status = "Downloading";
-                    downloads[lastChildId].totalSize = entry.fileSizeBytes;
-                    emit statusChanged(lastChildId, "Downloading");
-                }
+            if (!downloads.contains(parentItem.id)) continue;
+            const QList<int> kids = downloads[parentItem.id].childIds;
+            // The file-format filter can refuse a row; without this guard the
+            // assignment below would land on the PREVIOUS child and give it this
+            // entry's size.
+            if (kids.size() <= kidsBefore) continue;
+            const int lastChildId = kids.last();
+            if (downloads.contains(lastChildId)) {
+                downloads[lastChildId].status = "Downloading";
+                downloads[lastChildId].totalSize = entry.fileSizeBytes;
+                emit statusChanged(lastChildId, "Downloading");
             }
         }
 
@@ -612,25 +626,39 @@ int DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries, 
     playlistItem.isFolder = true;
     playlistItem.progress = 0;
     playlistItem.addedAt = QDateTime::currentDateTime();
+    playlistItem.trackNumbers = useTrackNumbers;
+
+    // The selection belongs to the job. It is recorded BEFORE the rows exist so
+    // that a row that later loses its playlist position can never widen the
+    // download: yt-dlp is always told exactly these positions.
+    int total = 0;
+    for (const PlaylistEntry& e : entries) {
+        if (e.selected) {
+            total++;
+            if (e.index > 0 && !playlistItem.selectedIndices.contains(e.index)) {
+                playlistItem.selectedIndices.append(e.index);
+            }
+        }
+    }
+
     // Register the parent before the children: addChildDownload() appends to the
     // parent's childIds, so inserting it afterwards would drop every child.
     downloads[playlistItem.id] = playlistItem;
 
-    // One row per selected item. The names only need to be close to what yt-dlp
-    // will write: every finished file reports its real path back (after_move)
-    // and the row adopts it.
-    int total = entries.size();
+    // One row per selected item. The row's number is the position in the user's
+    // SELECTION (001, 002, ...) because that is what the file will be renamed to
+    // when it lands; the row adopts the real path after the rename anyway.
+    int seq = 0;
     for (int i = 0; i < entries.size(); i++) {
         const PlaylistEntry& entry = entries[i];
         if (!entry.selected) continue;
+        ++seq;
 
         QString ext = entry.extension.isEmpty() ? "mp4" : entry.extension;
         if (playlistItem.audioFormat == "mp3") ext = "mp3";
-        // Number files by their real playlist position so the name matches the
-        // row the table shows and stays stable no matter which items are selected.
         QString childFileName;
         if (useTrackNumbers) {
-            childFileName = TrackNumber::formatTrack(entry.index, total) + "." +
+            childFileName = TrackNumber::formatTrack(seq, total) + "." +
                             sanitizeFileName(entry.title, "track_" + QString::number(entry.index)) +
                             "." + ext;
         } else {
@@ -638,13 +666,20 @@ int DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries, 
         }
         QString childPath = playlistFolderPath + "/" + childFileName;
 
+        const int kidsBefore = downloads.contains(playlistItem.id)
+                                   ? downloads[playlistItem.id].childIds.size()
+                                   : 0;
         addChildDownload(playlistItem.id, entry.url, childPath, type, playlistItem.audioFormat);
         if (!downloads.contains(playlistItem.id)) continue;
         const QList<int> kids = downloads[playlistItem.id].childIds;
-        if (kids.isEmpty()) continue;
+        // The file-format filter can refuse a child. Without this guard the
+        // assignment below would land on the PREVIOUS child and overwrite its
+        // video id and playlist position.
+        if (kids.size() <= kidsBefore) continue;
         DownloadItem& child = downloads[kids.last()];
         child.videoId = entry.videoId;
         child.trackIndex = entry.index;
+        child.trackNumbers = useTrackNumbers;
         DatabaseManager::instance().updateDownload(child);
     }
 
@@ -784,13 +819,8 @@ void DownloadManager::resumeDownload(int id) {
     }
 
     // A playlist job is a single yt-dlp process, so resuming it is just a matter
-    // of relaunching that process with --continue. Handled first so that "no free
-    // job slot" leaves the row queued instead of claiming to be downloading.
+    // of relaunching that process with --continue.
     if (item.type == "YtDlp" && item.isFolder) {
-        if (!ytDlpSlotAvailable()) {
-            Logger::instance().info("Playlist job " + QString::number(id) + " stays queued: all yt-dlp job slots busy");
-            return;
-        }
         if (item.status == "Failed") {
             retryDownload(id);
             return;
@@ -810,6 +840,12 @@ void DownloadManager::resumeDownload(int id) {
         }
         item.status = "Queued";
         Logger::instance().info("Playlist job resumed: " + QString::number(id));
+        // The slot check lives in startYtDlpPlaylistJob(): with every yt-dlp slot
+        // busy it leaves the job Queued, and startNextQueued() launches it when a
+        // slot frees. Checking here and returning instead was the bug: the row was
+        // never moved off Paused, and the pump only looks at Queued rows, so a
+        // Resume pressed while the slots were busy did nothing at all until it was
+        // pressed a second time.
         startYtDlpPlaylistJob(id);
         emit downloadResumed(id);
         return;
@@ -1260,13 +1296,11 @@ int DownloadManager::maxRetries() const {
 int DownloadManager::ytDlpPlaylistJobWidth(int jobId) const {
     auto job = downloads.constFind(jobId);
     if (job == downloads.constEnd()) return 3;
-    int maxIndex = 0;
-    for (int cid : job.value().childIds) {
-        if (downloads.contains(cid)) maxIndex = qMax(maxIndex, downloads[cid].trackIndex);
-    }
-    // Must match TrackNumber::formatTrack() so the row's placeholder name lines
-    // up with the file yt-dlp actually writes.
-    return maxIndex >= 1000 ? 4 : 3;
+    // The prefix on both the row and the finished file is the number in the
+    // USER'S SELECTION (001, 002, ...), so the width follows how many items the
+    // job holds, not where they sit in the playlist. Must match
+    // TrackNumber::formatTrack().
+    return job.value().childIds.size() >= 1000 ? 4 : 3;
 }
 
 int DownloadManager::activeYtDlpJobCount() const {
@@ -1345,6 +1379,59 @@ QString DownloadManager::tidyJobFilePath(const QString& path) {
     return clean;
 }
 
+int DownloadManager::sequentialTrackNumber(int jobId, int childId) const {
+    auto job = downloads.constFind(jobId);
+    if (job == downloads.constEnd()) return 0;
+    const DownloadItem& parent = job.value();
+    const int child = parent.childIds.indexOf(childId);
+    if (child < 0) return 0;
+
+    // The number is the row's place in the list the user ticked: in a 19-item
+    // playlist the row for position 11 is 001 when it is the first of two ticked
+    // rows. Going by the stored selection keeps that number true even when the
+    // rows are ordered differently - after a restart childIds are rebuilt from
+    // whatever order the database handed them over in.
+    auto kid = downloads.constFind(childId);
+    if (!parent.selectedIndices.isEmpty() && kid != downloads.constEnd()) {
+        const int inSelection = parent.selectedIndices.indexOf(kid.value().trackIndex);
+        if (inSelection >= 0) return inSelection + 1;
+    }
+    return child + 1;
+}
+
+QString DownloadManager::applyTrackNumber(const QString& path, int playlistPosition, int trackNumber) const {
+    if (path.isEmpty() || trackNumber <= 0) return path;
+
+    const QFileInfo source(path);
+    if (!source.exists() || source.size() <= 0) return path;
+
+    const QString name = source.fileName();
+    const int dot = name.indexOf('.');
+    if (dot <= 0) return path;
+
+    bool ok = false;
+    const int written = name.left(dot).toInt(&ok);
+    if (!ok) return path;   // no numeric prefix: numbering is off, leave it alone
+
+    // Only the file this row owns may ever be renamed.
+    if (written != playlistPosition && written != trackNumber) return path;
+
+    const QString target = TrackNumber::formatTrack(trackNumber, 0) + "." + name.mid(dot + 1);
+    if (target == name) return path;
+
+    const QString targetPath = source.dir().filePath(target);
+    if (QFileInfo::exists(targetPath)) {
+        Logger::instance().info("Track number not applied, target already exists: " + target);
+        return path;
+    }
+    if (!QFile::rename(path, targetPath)) {
+        Logger::instance().info("Track number rename failed: " + name + " -> " + target);
+        return path;
+    }
+    Logger::instance().info("Track number applied: " + name + " -> " + target);
+    return targetPath;
+}
+
 int DownloadManager::findChildByVideoId(int parentId, const QString& videoId) const {
     if (videoId.isEmpty()) return -1;
     auto parent = downloads.constFind(parentId);
@@ -1413,28 +1500,69 @@ void DownloadManager::startYtDlpPlaylistJob(int jobId) {
     QString format = job.audioFormat.isEmpty() ? "mp4" : job.audioFormat;
     int fragments = qBound(1, DatabaseManager::instance().getSetting("ytDlpFragments", "4").toInt(), 16);
 
-    // The rows are the user's selection, so yt-dlp must be told to fetch exactly
-    // those playlist positions. A row without a known position cannot be turned
-    // into --playlist-items, so a job that has any such row falls back to the whole
-    // playlist (a missing video is better than a silently missing download).
-    QVector<int> selected;
-    bool hasUnknownPosition = false;
-    for (int cid : job.childIds) {
-        if (!downloads.contains(cid)) continue;
-        const DownloadItem& child = downloads.value(cid);
-        if (child.status == "Cancelled") continue;
-        if (child.trackIndex > 0) {
-            selected.append(child.trackIndex);
-        } else {
-            hasUnknownPosition = true;
+    // yt-dlp must be told exactly the positions the user picked. The job carries
+    // that selection itself, so a row that lost its playlist position (or never
+    // had one) can no longer widen the job: deriving the request from the rows
+    // used to silently fall back to downloading the WHOLE playlist, which is how
+    // gigabytes of videos nobody ticked ended up on disk.
+    QVector<int> selected = job.selectedIndices;
+    if (selected.isEmpty()) {
+        // Job created before the selection was stored on it: the rows are the
+        // only record left, so rebuild from them - but only from rows that have
+        // a position, and never by falling back to "everything".
+        for (int cid : job.childIds) {
+            if (!downloads.contains(cid)) continue;
+            const int position = downloads.value(cid).trackIndex;
+            if (position > 0 && !selected.contains(position)) selected.append(position);
         }
-    }
-    if (hasUnknownPosition) {
         if (!selected.isEmpty()) {
             Logger::instance().info("Playlist job " + QString::number(jobId) +
-                                    " has rows without a playlist position: downloading the whole playlist");
+                                    ": selection reconstructed from its rows (" +
+                                    QString::number(selected.size()) + " position(s))");
         }
-        selected.clear();
+    } else {
+        // Cancelling a row must still keep its file off disk, so take the stored
+        // selection minus the rows the user cancelled.
+        for (int cid : job.childIds) {
+            if (!downloads.contains(cid)) continue;
+            const DownloadItem& child = downloads.value(cid);
+            if (child.status == "Cancelled" && child.trackIndex > 0) {
+                selected.removeAll(child.trackIndex);
+            }
+        }
+    }
+
+    // A row with no playlist position can never be asked for on its own, and
+    // leaving it Queued would make the row hang forever while the job looks
+    // finished. Say why it is dead instead.
+    for (int cid : job.childIds) {
+        if (!downloads.contains(cid)) continue;
+        DownloadItem& child = downloads[cid];
+        if (child.status == "Completed" || child.status == "Cancelled" ||
+            child.status == "Failed") {
+            continue;
+        }
+        if (child.trackIndex > 0) continue;
+        child.status = "Failed";
+        child.error = "This item has no playlist position, so it cannot be requested.";
+        child.speed = 0;
+        DatabaseManager::instance().updateDownload(child);
+        emit statusChanged(cid, "Failed");
+    }
+
+    if (selected.isEmpty()) {
+        // Refusing to start is the only safe answer: the alternative is fetching
+        // the whole playlist when nothing is selected.
+        const QString reason = "Nothing is selected in this playlist. Tick at least one file and retry.";
+        Logger::instance().error("Playlist job " + QString::number(jobId) +
+                                 " refused to start: empty selection");
+        job.status = "Failed";
+        job.error = reason;
+        job.speed = 0;
+        DatabaseManager::instance().updateDownload(job);
+        emit statusChanged(jobId, "Failed");
+        emit downloadFailed(jobId, reason);
+        return;
     }
 
     job.status = "Downloading";
@@ -1446,19 +1574,23 @@ void DownloadManager::startYtDlpPlaylistJob(int jobId) {
     DatabaseManager::instance().updateDownload(job);
     emit statusChanged(jobId, "Downloading");
 
+    std::sort(selected.begin(), selected.end());
+    QStringList positionList;
+    for (int position : selected) positionList << QString::number(position);
+    Logger::instance().info("Starting yt-dlp playlist job " + QString::number(jobId) +
+                            " (" + QString::number(job.childIds.size()) + " row(s), positions " +
+                            positionList.join(",") + ", track numbers " +
+                            (job.trackNumbers ? "on" : "off") + ") -> " + job.filePath);
+
     YtDlpManager::instance().startPlaylistJob(jobId, job.url, job.filePath,
                                               ytDlpPlaylistJobWidth(jobId), format, fragments,
-                                              selected);
-    Logger::instance().info("Started yt-dlp playlist job " + QString::number(jobId) +
-                            " (" + QString::number(job.childIds.size()) + " item(s)" +
-                            (selected.isEmpty() ? ", whole playlist"
-                                                : ", positions " + QString::number(selected.size())) +
-                            ") -> " + job.filePath);
+                                              selected, job.trackNumbers);
 }
 
 void DownloadManager::markJobChildrenFromDisk(int jobId, bool includePaused) {
     if (!downloads.contains(jobId)) return;
     const QString folder = downloads[jobId].filePath;
+    const bool numberFiles = downloads[jobId].trackNumbers;
     const QString archive = jobArchivePath(folder);
 
     // yt-dlp appends "<extractor> <video id>" per finished item to the download
@@ -1490,12 +1622,22 @@ void DownloadManager::markJobChildrenFromDisk(int jobId, bool includePaused) {
                 // Finished, but under a name we did not predict: adopt the real file
                 // so the row's path (and "Open file") points at the right thing.
                 QString actual = findJobFileForTrack(folder, child.trackIndex);
+                if (actual.isEmpty()) {
+                    // It may already carry the number it has in the selection
+                    // instead of its playlist position (renamed by an earlier pass).
+                    actual = findJobFileForTrack(folder, sequentialTrackNumber(jobId, cid));
+                }
                 if (!actual.isEmpty()) {
                     child.filePath = tidyJobFilePath(actual);
                     child.fileName = QFileInfo(child.filePath).fileName();
                 }
             } else {
                 child.filePath = tidyJobFilePath(child.filePath);
+                child.fileName = QFileInfo(child.filePath).fileName();
+            }
+            if (numberFiles && !child.filePath.isEmpty()) {
+                child.filePath = applyTrackNumber(child.filePath, child.trackIndex,
+                                                  sequentialTrackNumber(jobId, cid));
                 child.fileName = QFileInfo(child.filePath).fileName();
             }
             const QFileInfo real(child.filePath);
@@ -1602,10 +1744,16 @@ void DownloadManager::onYtDlpVideoPath(int id, int playlistIndex, const QString&
 
     int cid = findChildForPath(id, playlistIndex, path);
     if (cid == -1) return;
+    const bool numberFiles = downloads[id].trackNumbers;
     DownloadItem& child = downloads[cid];
     if (child.status == "Cancelled") return;
 
-    const QString real = tidyJobFilePath(path);
+    QString real = tidyJobFilePath(path);
+    if (numberFiles) {
+        // The file arrives named by its playlist position, while the row already
+        // advertises its number in the selection. Make the file match the row.
+        real = applyTrackNumber(real, child.trackIndex, sequentialTrackNumber(id, cid));
+    }
     if (child.filePath != real) {
         child.filePath = real;
         child.fileName = QFileInfo(real).fileName();
@@ -1629,7 +1777,11 @@ void DownloadManager::noteYtDlpChildFinished(int id, int childId, const QString&
     if (child.status == "Cancelled") return;
 
     if (!path.isEmpty()) {
-        child.filePath = tidyJobFilePath(path);
+        QString real = tidyJobFilePath(path);
+        if (childId != id && downloads.contains(id) && downloads[id].trackNumbers) {
+            real = applyTrackNumber(real, child.trackIndex, sequentialTrackNumber(id, childId));
+        }
+        child.filePath = real;
         child.fileName = QFileInfo(child.filePath).fileName();
     }
     if (child.status == "Completed") {

@@ -50,6 +50,7 @@
 #include <QFileDialog>
 #include <QSettings>
 #include <QRegularExpression>
+#include <algorithm>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStandardPaths>
@@ -162,6 +163,10 @@ void MainWindow::setupUI() {
     sidebar->setMaximumWidth(200);
     sidebar->setMinimumWidth(150);
     sidebar->setIconSize(QSize(20, 20));
+    // Both panels draw a frame by default, and together with the splitter handle
+    // that leaves a visible light strip between the sidebar and the table. Neither
+    // side needs its own border - the handle is the divider.
+    sidebar->setFrameShape(QFrame::NoFrame);
     splitter->addWidget(sidebar);
 
     QWidget* rightWidget = new QWidget(this);
@@ -190,6 +195,7 @@ void MainWindow::setupUI() {
     table->setContextMenuPolicy(Qt::CustomContextMenu);
     table->setDragDropMode(QAbstractItemView::NoDragDrop);
     table->setShowGrid(false);
+    table->setFrameShape(QFrame::NoFrame);
 
     // Draw a live progress bar in the Progress column (IDM-style) for every row.
     table->setItemDelegateForColumn(3, new DownloadItemDelegate(table));
@@ -325,21 +331,77 @@ void MainWindow::setupToolBar() {
         connect(btn, &QToolButton::clicked, this, spec.slot);
         lay->addWidget(btn);
     }
+
+    // Browser add-ons: one button holding every store listing, each entry wearing
+    // its OWN store's logo. The button wears the Chrome logo because the Chrome
+    // Web Store is this application's default add-on page - clicking it goes
+    // straight to the listing for that browser.
+    QToolButton* storeBtn = new QToolButton(container);
+    storeBtn->setObjectName("ExtensionsButton");
+    storeBtn->setIcon(QIcon(":/icons/StoreChrome.png"));
+    storeBtn->setToolTip("Browser add-ons\nOpen the store listing for your browser");
+    storeBtn->setPopupMode(QToolButton::InstantPopup);
+    storeBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    storeBtn->setMinimumSize(44, 44);
+    storeBtn->setIconSize(QSize(60, 60));
+
+    QMenu* storeMenu = new QMenu(storeBtn);
+    // Tooltips stay visible so the Opera entry can say why it does nothing yet.
+    storeMenu->setToolTipsVisible(true);
+    struct StoreSpec {
+        const char* icon;
+        const char* name;
+        const char* url;
+        const char* tip;
+    };
+    const StoreSpec stores[] = {
+        {":/icons/StoreChrome.png", "Chrome Web Store",
+         "https://chromewebstore.google.com/detail/copper-download-manager/cmokehdedogdpbfhlamopeifgogaihni",
+         "Open this listing in the Chrome Web Store"},
+        {":/icons/StoreFirefox.png", "Firefox Add-ons",
+         "https://addons.mozilla.org/en-US/firefox/addon/copper-download-manager",
+         "Open this listing on addons.mozilla.org"},
+        {":/icons/StoreEdge.png", "Edge Add-ons",
+         "https://microsoftedge.microsoft.com/addons/detail/copper-download-manager/fnganciafgifhelimkoeiiapdcdmnnlb",
+         "Open this listing in Microsoft Edge Add-ons"},
+        {":/icons/StoreOpera.png", "Opera",
+         "",
+         "Not published for Opera yet - coming soon"}
+    };
+    for (const StoreSpec& store : stores) {
+        QAction* action = storeMenu->addAction(QIcon(store.icon), QString(store.name));
+        action->setToolTip(store.tip);
+        const QString url = QString(store.url);
+        if (url.isEmpty()) {
+            action->setEnabled(false);   // nothing to open until it is published
+        } else {
+            connect(action, &QAction::triggered, this, [url]() {
+                QDesktopServices::openUrl(QUrl(url));
+            });
+        }
+    }
+    storeBtn->setMenu(storeMenu);
+    lay->addWidget(storeBtn);
+
     toolBar->addWidget(container);
 }
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
     // Keep the toolbar icons sized to the available space so they grow and
-    // shrink together with the window layout.
+    // shrink together with the window layout. The count comes from the buttons
+    // themselves: it changed when the add-ons button was added, and a literal
+    // would silently size the bar for the wrong number of buttons.
     if (obj == toolBar && event->type() == QEvent::Resize) {
-        const qreal count = 8.0;
-        const qreal marginH = 20.0;   // 10px left + 10px right
-        const qreal spacing = 8.0;
-        qreal widthPer = (toolBar->width() - marginH - spacing * (count - 1.0)) / count;
-        int icon = qBound(32, qMin(qRound(widthPer) - 12, toolBar->height() - 12), 64);
         const QList<QToolButton*> buttons = toolBar->findChildren<QToolButton*>();
-        for (QToolButton* btn : buttons) {
-            btn->setIconSize(QSize(icon, icon));
+        if (!buttons.isEmpty()) {
+            const qreal count = buttons.size();
+            const qreal marginH = 20.0;   // 10px left + 10px right
+            const qreal spacing = 8.0;
+            qreal widthPer = (toolBar->width() - marginH - spacing * (count - 1.0)) / count;
+            int icon = qBound(32, qMin(qRound(widthPer) - 12, toolBar->height() - 12), 64);
+            for (QToolButton* btn : buttons) {
+                btn->setIconSize(QSize(icon, icon));
+            }
         }
     }
     return QMainWindow::eventFilter(obj, event);
@@ -1196,6 +1258,43 @@ void MainWindow::onTableCollapse() {
     refreshTable();
 }
 
+namespace {
+// "--playlist-dialog:<url>" and "--playlist-real:<url>" both take an optional
+// selection tail. It is read from the very END of the argument because the URL
+// itself contains colons:
+//   ":<n>"        -> the first n items (":0" selects nothing)
+//   ":<a>,<b>,.." -> exactly those 1-based playlist positions
+// Returns true when a tail was present; wanted then holds the positions. An
+// empty set for ":0" is a real answer ("nothing is selected"), not "no tail".
+bool splitPlaylistHook(const QString& rest, QString& url, QSet<int>& wanted) {
+    url = rest;
+    const int lastColon = rest.lastIndexOf(':');
+    if (lastColon <= 0) return false;
+    const QString tail = rest.mid(lastColon + 1);
+    static const QRegularExpression specRe("^\\d+(?:[,-]\\d+)*$");
+    if (!specRe.match(tail).hasMatch()) return false;
+    url = rest.left(lastColon).trimmed();
+
+    if (!tail.contains(',') && !tail.contains('-')) {
+        for (int i = 1; i <= tail.toInt(); i++) wanted.insert(i);
+        return true;
+    }
+    for (const QString& part : tail.split(',')) {
+        const QString piece = part.trimmed();
+        const int dash = piece.indexOf('-');
+        if (dash > 0) {
+            const int from = piece.left(dash).toInt();
+            const int to = piece.mid(dash + 1).toInt();
+            for (int i = qMin(from, to); i <= qMax(from, to); i++) wanted.insert(i);
+        } else {
+            // A bare number is ONE position, not a range from 1.
+            wanted.insert(piece.toInt());
+        }
+    }
+    return true;
+}
+} // namespace
+
 void MainWindow::onArgumentForwarded(const QString& arg) {
     show();
     raise();
@@ -1208,10 +1307,16 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
 
     // Non-interactive test hook: creates a playlist job exactly the way the item
     // picker does, but without the modal dialog, so a headless run can verify that
-    // a playlist URL really becomes ONE job with one row per item.
+    // a playlist URL really becomes ONE job with one row per item - and that only
+    // the ticked rows are recorded as the selection. The optional ":<selection>"
+    // tail plays the part of the user unticking rows in that picker.
     if (arg.startsWith("--playlist-dialog:")) {
-        QString playlistUrl = arg.mid(QString("--playlist-dialog:").size()).trimmed();
-        Logger::instance().info("Playlist dialog bypass requested for " + playlistUrl.left(80));
+        const QString rest = arg.mid(QString("--playlist-dialog:").size()).trimmed();
+        QString playlistUrl;
+        QSet<int> wanted;
+        const bool hasSelection = splitPlaylistHook(rest, playlistUrl, wanted);
+        Logger::instance().info("Playlist dialog bypass requested for " + playlistUrl.left(80) +
+                                (hasSelection ? " (subset requested)" : ""));
         if (playlistUrl.isEmpty() ||
             !(UrlDetector::isPlaylistUrl(playlistUrl) || UrlDetector::detect(playlistUrl) == UrlPlaylist)) {
             Logger::instance().warning("Playlist dialog bypass ignored: not a playlist URL");
@@ -1225,7 +1330,7 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
             entry.title = "Copper Test Item " + QString::number(i);
             entry.url = "https://www.youtube.com/watch?v=" + entry.videoId;
             entry.extension = "mp4";
-            entry.selected = true;
+            entry.selected = !hasSelection || wanted.contains(i);
             entries.append(entry);
         }
         QString outDir = DatabaseManager::instance().getSetting("downloadPath", "");
@@ -1246,43 +1351,23 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
     //   ":<n>"       -> the first n items
     //   ":<a>,<b>.." -> exactly those 1-based playlist positions
     if (arg.startsWith("--playlist-real:")) {
-        QString rest = arg.mid(QString("--playlist-real:").size()).trimmed();
-        QString url = rest;
-        QString selection;
-        // The URL itself contains colons, so the optional selection can only be
-        // read from the very end of the argument.
-        int lastColon = rest.lastIndexOf(':');
-        if (lastColon > 0) {
-            QString tail = rest.mid(lastColon + 1);
-            static const QRegularExpression specRe("^\\d+(?:[,-]\\d+)*$");
-            if (specRe.match(tail).hasMatch()) {
-                selection = tail;
-                url = rest.left(lastColon).trimmed();
-            }
+        const QString rest = arg.mid(QString("--playlist-real:").size()).trimmed();
+        QString url;
+        QSet<int> wanted;
+        const bool hasSelection = splitPlaylistHook(rest, url, wanted);
+        QString selectionText = "all";
+        if (hasSelection) {
+            QStringList parts;
+            for (int position : wanted) parts << QString::number(position);
+            std::sort(parts.begin(), parts.end(),
+                      [](const QString& a, const QString& b) { return a.toInt() < b.toInt(); });
+            selectionText = parts.join(",");
         }
         Logger::instance().info("Real playlist job requested for " + url.left(80) +
-                                " (selection: " + (selection.isEmpty() ? "all" : selection) + ")");
-        YtDlpManager::instance().fetchPlaylistInfo(url, [this, url, selection](const QVector<PlaylistEntry>& found) {
+                                " (selection: " + selectionText + ")");
+        YtDlpManager::instance().fetchPlaylistInfo(url, [this, url, wanted, hasSelection](const QVector<PlaylistEntry>& found) {
             QVector<PlaylistEntry> entries = found;
-            if (!selection.isEmpty()) {
-                bool firstCount = !selection.contains(',') && !selection.contains('-');
-                QSet<int> wanted;
-                if (firstCount) {
-                    for (int i = 1; i <= selection.toInt(); i++) wanted.insert(i);
-                } else {
-                    for (const QString& part : selection.split(',')) {
-                        QString piece = part.trimmed();
-                        int dash = piece.indexOf('-');
-                        if (dash > 0) {
-                            int from = piece.left(dash).toInt();
-                            int to = piece.mid(dash + 1).toInt();
-                            for (int i = qMin(from, to); i <= qMax(from, to); i++) wanted.insert(i);
-                        } else {
-                            // A bare number is ONE position, not a range from 1.
-                            wanted.insert(piece.toInt());
-                        }
-                    }
-                }
+            if (hasSelection) {
                 for (PlaylistEntry& e : entries) e.selected = wanted.contains(e.index);
             }
             if (entries.isEmpty()) {

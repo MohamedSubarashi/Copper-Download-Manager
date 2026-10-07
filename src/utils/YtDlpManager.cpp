@@ -275,14 +275,18 @@ void YtDlpManager::startDownload(const QString& url, const QString& outputPath, 
 
 void YtDlpManager::startPlaylistJob(int jobId, const QString& playlistUrl, const QString& outputDir,
                                     int trackNumberWidth, const QString& format, int fragments,
-                                    const QVector<int>& selectedItems) {
+                                    const QVector<int>& selectedItems, bool trackNumbers) {
+    // These two are reported through playlistFinished(), not downloadFailed():
+    // DownloadManager ignores downloadFailed for folder rows (a folder reports
+    // through playlistFinished), so emitting it here would leave the job sitting
+    // in "Downloading" forever with no reason shown.
     if (!isInstalled()) {
-        emit downloadFailed(jobId, "yt-dlp not installed");
+        emit playlistFinished(jobId, false, "yt-dlp not installed");
         return;
     }
 
     if (!hasFfmpegFor(format)) {
-        emit downloadFailed(jobId,
+        emit playlistFinished(jobId, false,
             "FFmpeg is required for \"" + format + "\" output but is not installed. "
             "Install it from Settings > Tools, then retry the download.");
         return;
@@ -291,11 +295,15 @@ void YtDlpManager::startPlaylistJob(int jobId, const QString& playlistUrl, const
     int width = trackNumberWidth > 0 ? trackNumberWidth : 3;
     YtDlpJobSpec spec;
     spec.url = playlistUrl;
-    // Number files by their real playlist position so the name matches the row
-    // the table shows and stays stable no matter which items are selected.
-    spec.outputTemplate = QString("%1/%(playlist_index)0%2d.%(title)s.%(ext)s")
-                              .arg(outputDir)
-                              .arg(width, 2, 10, QChar('0'));
+    // yt-dlp can only number by playlist position. With track numbers on, this
+    // template is only the shape the file is written in: DownloadManager renames
+    // it to its number in the user's selection once it lands. Without them the
+    // prefix must not appear at all (the checkbox used to do nothing here).
+    spec.outputTemplate = trackNumbers
+                              ? QString("%1/%(playlist_index)0%2d.%(title)s.%(ext)s")
+                                    .arg(outputDir)
+                                    .arg(width, 2, 10, QChar('0'))
+                              : outputDir + "/%(title)s.%(ext)s";
     spec.format = format;
     spec.isPlaylist = true;
     spec.fragments = qBound(1, fragments, 16);
@@ -388,6 +396,15 @@ void YtDlpManager::launchJob(int id, const YtDlpJobSpec& spec) {
 
     connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
             [this, id](int exitCode, QProcess::ExitStatus) { finalizeJob(id, exitCode); });
+
+    // Log the exact command line. "Was the user's selection honoured?" can only
+    // be answered from what was actually asked for, and the URL alone does not
+    // say it.
+    QStringList printable;
+    for (const QString& a : args) {
+        printable << (a.contains(' ') ? "\"" + a + "\"" : a);
+    }
+    Logger::instance().info("yt-dlp argv: " + printable.join(" "));
 
     process->start(getYtDlpPath(), args);
 }

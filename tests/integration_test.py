@@ -697,6 +697,199 @@ def main():
                       now.get(job_id, {}).get("controlledByJob", -1) == -1,
                       "the folder row must not point at a parent job")
 
+            # 5g) "Download only the files I ticked". The picker's ticks used to
+            #     reach a code path that silently widened the request to the WHOLE
+            #     playlist the moment any row had no known position - that is how
+            #     gigabytes nobody asked for landed on disk - and the "add track
+            #     numbers" box changed nothing about the names. Both are asserted
+            #     on the contract the job carries, which needs no network.
+            def jobs_for(url):
+                _, body = http_request(port, "GET", "/api/downloads")
+                return sorted([x for x in body.get("downloads", [])
+                               if x.get("url") == url and (x.get("parentId") or -1) < 0],
+                              key=lambda x: x.get("id") or 0)
+
+            subset_url = "https://www.youtube.com/playlist?list=PLcoppertest" + uuid.uuid4().hex[:8]
+            st, _ = http_request(port, "POST", "/api/forward",
+                                 {"argument": f"--playlist-dialog:{subset_url}:1,3"})
+            check("subset playlist hook accepted", st == 200, f"status={st}")
+
+            subset_job = None
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                found = jobs_for(subset_url)
+                if found:
+                    subset_job = found[-1]
+                    break
+                time.sleep(0.3)
+            check("ticked subset creates one job", subset_job is not None, f"url={subset_url}")
+
+            if subset_job:
+                # The selection is stored ON the job: it is what yt-dlp is told to
+                # fetch, so it has to outlive the rows and a restart.
+                check("job remembers exactly the ticked positions",
+                      subset_job.get("selectedPositions") == [1, 3],
+                      str(subset_job.get("selectedPositions")))
+                check("job keeps the track-number choice",
+                      subset_job.get("trackNumbers") is True,
+                      str(subset_job.get("trackNumbers")))
+
+                _, body = http_request(port, "GET", "/api/downloads")
+                sub_kids = sorted([x for x in body.get("downloads", [])
+                                   if x.get("parentId") == subset_job.get("id")],
+                                  key=lambda x: x.get("trackIndex") or 0)
+                check("only the ticked rows are created",
+                      [k.get("trackIndex") for k in sub_kids] == [1, 3],
+                      str([(k.get("trackIndex"), k.get("fileName")) for k in sub_kids]))
+                # Numbering runs over the SELECTION (positions 1 and 3 become 001
+                # and 002), so a partial pick reads as a complete set on disk
+                # instead of showing up as gaps at 002, 004, ...
+                check("rows are numbered over the selection, not the playlist",
+                      [k.get("fileName") for k in sub_kids] ==
+                      ["001.Copper Test Item 1.mp4", "002.Copper Test Item 3.mp4"],
+                      str([k.get("fileName") for k in sub_kids]))
+                check("every row repeats its job's track-number choice",
+                      all(k.get("trackNumbers") is True for k in sub_kids),
+                      str([k.get("trackNumbers") for k in sub_kids]))
+
+            # 5h) Nothing ticked must be REFUSED, never answered with "the whole
+            #     playlist". ":0" is the picker with every box cleared.
+            empty_url = "https://www.youtube.com/playlist?list=PLcoppertest" + uuid.uuid4().hex[:8]
+            st, _ = http_request(port, "POST", "/api/forward",
+                                 {"argument": f"--playlist-dialog:{empty_url}:0"})
+            check("empty-selection hook accepted", st == 200, f"status={st}")
+
+            empty_job = None
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                found = jobs_for(empty_url)
+                if found:
+                    empty_job = found[-1]
+                    break
+                time.sleep(0.3)
+            check("a job with nothing ticked is still recorded",
+                  empty_job is not None, f"url={empty_url}")
+
+            if empty_job:
+                check("empty selection is recorded as empty, not as everything",
+                      empty_job.get("selectedPositions") == [],
+                      str(empty_job.get("selectedPositions")))
+                settled = wait_download_status(port, empty_job.get("id"),
+                                                {"Failed"}, timeout=20.0)
+                check("empty selection refuses to start instead of downloading all",
+                      settled is not None and settled.get("status") == "Failed" and
+                      "selected" in (settled.get("error") or "").lower(),
+                      f"status={settled.get('status') if settled else None} "
+                      f"error={settled.get('error') if settled else None}")
+
+            # 5i) End to end against a real playlist: two NON-CONTIGUOUS positions
+            #     must yield exactly two files, numbered 001/002 over the pick.
+            #     This is the user-visible defect: a pick of items 9 and 11 either
+            #     dragged in the whole playlist or produced 009./011. files.
+            #     Opt-in because it needs BOTH the network and yt-dlp installed in
+            #     the app's tools folder, and the rest of the suite is offline:
+            #         set COPPER_IT_REAL_PLAYLIST=1
+            if os.environ.get("COPPER_IT_REAL_PLAYLIST") != "1":
+                print("  SKIP real playlist end-to-end (set COPPER_IT_REAL_PLAYLIST=1)")
+            else:
+                real_url = "https://www.youtube.com/playlist?list=PLbpi6ZahtOH6Blw3RGYpWkSByi_T7Rygb"
+
+                # An earlier run leaves its own job for this playlist behind (the
+                # app resumes interrupted jobs at startup) and two jobs writing
+                # one folder makes the result unreadable, so park them first.
+                leftovers = jobs_for(real_url)
+                for old in leftovers:
+                    http_request(port, "POST", "/api/forward",
+                                 {"argument": f"pause-all:{old.get('id')}"})
+                if leftovers:
+                    print(f"  parked {len(leftovers)} earlier job(s) for this playlist")
+                    time.sleep(2.0)
+
+                # Rows left over by earlier runs all match this URL, so remember
+                # the newest id BEFORE asking for the probe: a probe loop that
+                # accepts any row would hand back an old job, and every later
+                # "newer than the probe" filter would then be wrong.
+                before_probe = max([x.get("id") or 0 for x in jobs_for(real_url)],
+                                   default=-1)
+
+                # A ":0" job reports the playlist's folder without downloading
+                # anything, which is what lets this run start from a clean
+                # directory: leftovers (and the download archive) from an earlier
+                # run would make yt-dlp skip the very files this test looks for.
+                st, _ = http_request(port, "POST", "/api/forward",
+                                     {"argument": f"--playlist-real:{real_url}:0"})
+                check("real playlist probe accepted", st == 200, f"status={st}")
+
+                probe = None
+                deadline = time.time() + 45
+                while time.time() < deadline:
+                    found = [x for x in jobs_for(real_url)
+                             if (x.get("id") or 0) > before_probe]
+                    if found:
+                        probe = found[-1]
+                        break
+                    time.sleep(0.5)
+                check("real playlist probe created (needs network + yt-dlp)",
+                      probe is not None and bool(probe.get("filePath")),
+                      f"job={probe}")
+
+                scratch = probe.get("filePath") if probe else None
+                if scratch and os.path.isdir(scratch):
+                    for name in os.listdir(scratch):
+                        try:
+                            if os.path.isfile(os.path.join(scratch, name)):
+                                os.remove(os.path.join(scratch, name))
+                        except OSError:
+                            pass
+
+                if scratch:
+                    st, _ = http_request(port, "POST", "/api/forward",
+                                         {"argument": f"--playlist-real:{real_url}:11,18"})
+                    check("real playlist subset accepted", st == 200, f"status={st}")
+
+                    real_job = None
+                    # Identified by what it is asked to fetch, not just by being
+                    # newer than the probe: the probe itself is newer than
+                    # nothing and carries an empty selection.
+                    deadline = time.time() + 45
+                    while time.time() < deadline:
+                        found = [x for x in jobs_for(real_url)
+                                 if (x.get("id") or 0) > before_probe and
+                                 x.get("selectedPositions") == [11, 18]]
+                        if found:
+                            real_job = found[-1]
+                            break
+                        time.sleep(0.5)
+                    check("subset job created for the real playlist",
+                          real_job is not None and
+                          real_job.get("selectedPositions") == [11, 18],
+                          f"job={real_job}")
+
+                    if real_job:
+                        done = wait_download_status(port, real_job.get("id"),
+                                                    {"Completed", "Failed"}, timeout=420)
+                        check("two-item playlist job finishes",
+                              done is not None and done.get("status") == "Completed",
+                              f"status={done.get('status') if done else None} "
+                              f"error={done.get('error') if done else None}")
+
+                        on_disk = sorted(n for n in os.listdir(scratch)
+                                         if os.path.isfile(os.path.join(scratch, n)))
+                        numbered = [n for n in on_disk
+                                    if len(n) > 4 and n[:3].isdigit() and n[3] == '.']
+                        check("exactly the two picked files are on disk",
+                              len(numbered) == 2 and
+                              all(n.startswith(("001.", "002.")) for n in numbered),
+                              str(on_disk))
+
+                        _, body = http_request(port, "GET", "/api/downloads")
+                        rows = [x for x in body.get("downloads", [])
+                                if x.get("parentId") == real_job.get("id")]
+                        check("rows follow the renamed files",
+                              sorted((x.get("fileName") or "") for x in rows) == numbered,
+                              str(sorted((x.get("trackIndex"), x.get("fileName"))
+                                         for x in rows)))
+
             # 6) Native-messaging host -> named pipe injection (the IDM model).
             #    The host exe sits next to the app exe and forwards a browser
             #    native-messaging message to the app over the QLocalServer pipe.

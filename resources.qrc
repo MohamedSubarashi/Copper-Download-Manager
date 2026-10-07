@@ -15,6 +15,10 @@
         <file alias="icons/Resume.png">Assets/Resume.png</file>
         <file alias="icons/Settings.png">Assets/Settings.png</file>
         <file alias="icons/Start.png">Assets/Start.png</file>
+        <file alias="icons/StoreChrome.png">Assets/StoreChrome.png</file>
+        <file alias="icons/StoreEdge.png">Assets/StoreEdge.png</file>
+        <file alias="icons/StoreFirefox.png">Assets/StoreFirefox.png</file>
+        <file alias="icons/StoreOpera.png">Assets/StoreOpera.png</file>
         <file alias="icons/Stop.png">Assets/Stop.png</file>
     </qresource>
 </RCC>

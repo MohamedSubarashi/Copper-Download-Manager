@@ -322,6 +322,10 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
             QJsonObject dlObj;
             dlObj["id"] = item.id;
             dlObj["url"] = item.url;
+            // Where the row writes. For a folder job this is the directory its
+            // files land in - the only way a client can tell where to look for
+            // them, since the folder is named after the playlist.
+            dlObj["filePath"] = item.filePath;
             dlObj["fileName"] = item.fileName;
             dlObj["status"] = item.status;
             dlObj["progress"] = item.progress;
@@ -340,6 +344,15 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
             // apart when yt-dlp only reports progress for one at a time.
             dlObj["videoId"] = item.videoId;
             dlObj["trackIndex"] = item.trackIndex;
+            // What the job was asked to fetch (the positions the user ticked) and
+            // whether files get a track-number prefix. This is the contract for
+            // "download exactly what was selected", so it is asserted from outside.
+            {
+                QJsonArray positions;
+                for (int position : item.selectedIndices) positions.append(position);
+                dlObj["selectedPositions"] = positions;
+            }
+            dlObj["trackNumbers"] = item.trackNumbers;
             // The job that really controls this row, or -1 when the row is its own
             // transfer. A playlist item reports its job here, which is what the UI
             // uses to label the controls and what tells a client that pausing this

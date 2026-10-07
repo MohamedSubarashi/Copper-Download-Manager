@@ -27,6 +27,10 @@ struct DownloadItem {
     QString audioFormat;
     QString torrentSourceUrl;
     QVector<int> selectedIndices;
+    // Torrents: the indices the user ticked. Playlist jobs reuse the same field
+    // for the positions the user picked - it is the authoritative "download only
+    // these" list for both, and it is persisted so a restart cannot widen the
+    // download back to everything.
     int aria2cId = -1;
     int connectedPeers = 0;
     int leechers = 0;
@@ -38,6 +42,9 @@ struct DownloadItem {
     // Number of failed attempts so far. Used by the automatic retry policy:
     // a failed transfer is re-queued with a backoff while attempts < maxRetries.
     int attempts = 0;
+    // Whether playlist files get a 001., 002. prefix. It changes the name yt-dlp
+    // is told to write, so it has to survive a restart.
+    bool trackNumbers = true;
     // Seconds remaining for this transfer (0 when unknown). yt-dlp reports it in
     // its progress template; the HTTP engine leaves it at 0 and it is derived
     // from speed/remaining bytes in the UI.

@@ -46,6 +46,10 @@ private:
     void fetchTorrentFileListFrom(const QString& source);
     void showFileList(const QVector<PlaylistEntry>& entries);
     void showTorrentInfo(const TorrentInfo& info);
+    // Rewrites the list so each ticked row shows the number its FILE will get
+    // (001, 002, ... over the selection when track numbers are on). Unticked rows
+    // are not numbered at all - they are not being downloaded.
+    void renumberRows();
 
     SourceType sourceType;
     QString url;
@@ -67,6 +71,9 @@ private:
     QLabel* torrentSizeLabel;
     QLabel* torrentFilesLabel;
     QLabel* torrentTrackersLabel;
+    // setItemText() emits itemChanged, which calls renumberRows() again: without
+    // this guard the two would call each other forever.
+    bool renumbering = false;
 };
 
 #endif

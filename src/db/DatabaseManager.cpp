@@ -50,7 +50,9 @@ bool DatabaseManager::init() {
                "audio_format TEXT DEFAULT '', "
                "attempts INTEGER DEFAULT 0, "
                "video_id TEXT DEFAULT '', "
-               "track_index INTEGER DEFAULT 0"
+               "track_index INTEGER DEFAULT 0, "
+               "selected_items TEXT DEFAULT '', "
+               "track_numbers INTEGER DEFAULT 1"
                ")");
 
     query.exec("CREATE TABLE IF NOT EXISTS settings ("
@@ -73,7 +75,7 @@ int DatabaseManager::getSchemaVersion() {
 }
 
 void DatabaseManager::migrate(int from) {
-    const int targetVersion = 2;
+    const int targetVersion = 3;
     QSqlQuery query(db);
 
     // Column presence check shared by the migrations below: a database created by
@@ -127,6 +129,25 @@ void DatabaseManager::migrate(int from) {
         from = 2;
     }
 
+    // The user's selection is a property of the JOB, not of the rows that happen
+    // to exist for it: a row that loses its playlist position must never widen the
+    // download back to the whole playlist, and the "add track numbers" choice has
+    // to survive a restart (it changes the file name yt-dlp is told to write).
+    if (from < 3) {
+        bool ok = true;
+        if (!hasColumn("selected_items")) {
+            ok = query.exec("ALTER TABLE downloads ADD COLUMN selected_items TEXT DEFAULT ''") && ok;
+        }
+        if (!hasColumn("track_numbers")) {
+            ok = query.exec("ALTER TABLE downloads ADD COLUMN track_numbers INTEGER DEFAULT 1") && ok;
+        }
+        if (!ok) {
+            Logger::instance().error("Migration to v3 failed: " + query.lastError().text());
+            return;
+        }
+        from = 3;
+    }
+
     if (from < targetVersion) {
         Logger::instance().info("Database schema migrating from " + QString::number(from) + " to " + QString::number(targetVersion));
         from = targetVersion;
@@ -135,10 +156,29 @@ void DatabaseManager::migrate(int from) {
     query.exec("PRAGMA user_version = " + QString::number(from));
 }
 
+// The job's selection is stored as a comma-separated list of playlist positions.
+// Keeping it on the job (instead of deriving it from the rows on every start) is
+// what makes "download only what was picked" survive restarts and later edits.
+static QString encodeSelection(const QVector<int>& indices) {
+    QStringList parts;
+    for (int idx : indices) parts << QString::number(idx);
+    return parts.join(",");
+}
+
+static QVector<int> decodeSelection(const QString& text) {
+    QVector<int> out;
+    for (const QString& part : text.split(',', Qt::SkipEmptyParts)) {
+        bool ok = false;
+        const int value = part.trimmed().toInt(&ok);
+        if (ok && value > 0 && !out.contains(value)) out.append(value);
+    }
+    return out;
+}
+
 void DatabaseManager::addDownload(const DownloadItem& item) {
     QSqlQuery query(db);
-    query.prepare("INSERT INTO downloads (id, url, filePath, type, downloadedSize, totalSize, status, addedAt, completedAt, error, progress, isFolder, parent_id, audio_format, attempts, video_id, track_index) "
-                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    query.prepare("INSERT INTO downloads (id, url, filePath, type, downloadedSize, totalSize, status, addedAt, completedAt, error, progress, isFolder, parent_id, audio_format, attempts, video_id, track_index, selected_items, track_numbers) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     query.addBindValue(item.id);
     query.addBindValue(item.url);
     query.addBindValue(item.filePath);
@@ -156,6 +196,8 @@ void DatabaseManager::addDownload(const DownloadItem& item) {
     query.addBindValue(item.attempts);
     query.addBindValue(item.videoId);
     query.addBindValue(item.trackIndex);
+    query.addBindValue(encodeSelection(item.selectedIndices));
+    query.addBindValue(item.trackNumbers ? 1 : 0);
 
     if (!query.exec()) {
         Logger::instance().error("Add download failed: " + query.lastError().text());
@@ -166,7 +208,7 @@ void DatabaseManager::updateDownload(const DownloadItem& item) {
     QSqlQuery query(db);
     query.prepare("UPDATE downloads SET url=?, filePath=?, type=?, downloadedSize=?, totalSize=?, status=?, "
                   "addedAt=?, completedAt=?, error=?, progress=?, isFolder=?, parent_id=?, audio_format=?, "
-                  "attempts=?, video_id=?, track_index=? WHERE id=?");
+                  "attempts=?, video_id=?, track_index=?, selected_items=?, track_numbers=? WHERE id=?");
     query.addBindValue(item.url);
     query.addBindValue(item.filePath);
     query.addBindValue(item.type);
@@ -183,6 +225,8 @@ void DatabaseManager::updateDownload(const DownloadItem& item) {
     query.addBindValue(item.attempts);
     query.addBindValue(item.videoId);
     query.addBindValue(item.trackIndex);
+    query.addBindValue(encodeSelection(item.selectedIndices));
+    query.addBindValue(item.trackNumbers ? 1 : 0);
     query.addBindValue(item.id);
 
     if (!query.exec()) {
@@ -240,6 +284,8 @@ QVector<DownloadItem> DatabaseManager::getAllDownloads() {
         item.attempts = query.value("attempts").toInt();
         item.videoId = query.value("video_id").toString();
         item.trackIndex = query.value("track_index").toInt();
+        item.selectedIndices = decodeSelection(query.value("selected_items").toString());
+        item.trackNumbers = query.value("track_numbers").isValid() ? query.value("track_numbers").toBool() : true;
         items.append(item);
     }
 
@@ -273,6 +319,8 @@ QVector<DownloadItem> DatabaseManager::getDownloadsByStatus(const QString& statu
         item.attempts = query.value("attempts").toInt();
         item.videoId = query.value("video_id").toString();
         item.trackIndex = query.value("track_index").toInt();
+        item.selectedIndices = decodeSelection(query.value("selected_items").toString());
+        item.trackNumbers = query.value("track_numbers").isValid() ? query.value("track_numbers").toBool() : true;
         items.append(item);
     }
 
@@ -305,6 +353,8 @@ DownloadItem DatabaseManager::getDownload(int id) {
         item.attempts = query.value("attempts").toInt();
         item.videoId = query.value("video_id").toString();
         item.trackIndex = query.value("track_index").toInt();
+        item.selectedIndices = decodeSelection(query.value("selected_items").toString());
+        item.trackNumbers = query.value("track_numbers").isValid() ? query.value("track_numbers").toBool() : true;
         return item;
     }
 
@@ -351,7 +401,7 @@ QString DatabaseManager::getSetting(const QString& key, const QString& defaultVa
 QString DatabaseManager::getUserAgent() {
     QString ua = getSetting("userAgent", "");
     if (ua.trimmed().isEmpty()) {
-        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 CopperDownloadManager/" + QString::fromLatin1("0.2.0");
+        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 CopperDownloadManager/" + QString::fromLatin1("0.3.0");
     }
     return ua.trimmed();
 }

@@ -1,6 +1,7 @@
 #include "ui/DownloadManagerDialog.h"
 #include "utils/Aria2cManager.h"
 #include "utils/YtDlpManager.h"
+#include "utils/TrackNumber.h"
 #include "utils/Logger.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -86,9 +87,11 @@ DownloadManagerDialog::DownloadManagerDialog(SourceType sourceType, const QStrin
 
     trackNumberCheck = new QCheckBox("Add track numbers (001, 002...)");
     trackNumberCheck->setAccessibleName("Add track numbers");
-    trackNumberCheck->setToolTip("Prepend track numbers to filenames.\n"
-                                 "Format: 001.VideoTitle.mp4 (for <1000 files), 0001.VideoTitle.mp4 (for 1000+)");
+    trackNumberCheck->setToolTip("Number the files you tick, in the order they appear\n"
+                                 "here: 001.Title.mp4, 002.Title.mp4, ...\n"
+                                 "Unticked files are not downloaded at all.");
     trackNumberCheck->setChecked(true);
+    connect(trackNumberCheck, &QCheckBox::toggled, this, &DownloadManagerDialog::renumberRows);
     optionsLayout->addWidget(trackNumberCheck);
     optionsLayout->addStretch();
     mainLayout->addLayout(optionsLayout);
@@ -236,12 +239,10 @@ void DownloadManagerDialog::fetchTorrentFileListFrom(const QString& source) {
     });
 }
 
-void DownloadManagerDialog::showFileList(const QVector<PlaylistEntry>& entries) {
+void DownloadManagerDialog::showFileList(const QVector<PlaylistEntry>& list) {
     fileList->clear();
-    bool useTracks = trackNumberCheck->isChecked();
-    int total = entries.size();
-    bool allSelected = !entries.isEmpty();
-    for (const PlaylistEntry& entry : entries) {
+    bool allSelected = !list.isEmpty();
+    for (const PlaylistEntry& entry : list) {
         if (!entry.selected) {
             allSelected = false;
             break;
@@ -249,27 +250,57 @@ void DownloadManagerDialog::showFileList(const QVector<PlaylistEntry>& entries) 
     }
     selectAllCheck->setChecked(allSelected);
 
-    for (const PlaylistEntry& entry : entries) {
-        QString text;
-        if (useTracks) {
-            int width = (total < 1000) ? 3 : 4;
-            text = QString("%1.").arg(entry.index, width, 10, QChar('0'));
-        } else {
-            text = QString::number(entry.index) + ".";
-        }
-        text += " " + entry.title;
-        if (!entry.fileSize.isEmpty() && entry.fileSize != "Unknown") {
-            text += " (" + entry.fileSize + ")";
-        }
-        QListWidgetItem* item = new QListWidgetItem(text);
+    for (const PlaylistEntry& entry : list) {
+        QListWidgetItem* item = new QListWidgetItem(entry.title);
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(entry.selected ? Qt::Checked : Qt::Unchecked);
         fileList->addItem(item);
     }
+    renumberRows();
 }
 
 void DownloadManagerDialog::onFetchFiles() {
     fetchFiles();
+}
+
+void DownloadManagerDialog::renumberRows() {
+    if (renumbering) return;
+    renumbering = true;
+
+    // The prefix is a PREVIEW of the file name. With track numbers on it counts
+    // the ticked rows (001, 002, ... in this order), which is what the file will
+    // be renamed to once it lands; a row that is not ticked gets no number
+    // because it is not being downloaded.
+    const bool useTracks = trackNumberCheck->isChecked();
+    int track = 0;
+    for (int i = 0; i < fileList->count() && i < entries.size(); ++i) {
+        QListWidgetItem* item = fileList->item(i);
+        const PlaylistEntry& entry = entries[i];
+        const bool ticked = item->checkState() == Qt::Checked;
+
+        QString prefix;
+        if (useTracks) {
+            if (ticked) prefix = TrackNumber::formatTrack(++track, 0) + ".";
+        } else {
+            prefix = QString::number(entry.index) + ".";
+        }
+
+        QString text = prefix.isEmpty() ? entry.title : prefix + " " + entry.title;
+        if (!entry.fileSize.isEmpty() && entry.fileSize != "Unknown") {
+            text += " (" + entry.fileSize + ")";
+        }
+        item->setText(text);
+
+        QString tip = "Playlist position " + QString::number(entry.index);
+        if (useTracks && ticked) {
+            tip += "\nSaved as " + TrackNumber::formatTrack(track, 0) + "." + entry.title;
+        } else if (!ticked) {
+            tip += "\nNot selected - nothing will be downloaded for this row";
+        }
+        item->setToolTip(tip);
+    }
+
+    renumbering = false;
 }
 
 void DownloadManagerDialog::onBrowse() {
@@ -294,6 +325,7 @@ void DownloadManagerDialog::onSelectAll(bool checked) {
     for (int i = 0; i < fileList->count(); i++) {
         fileList->item(i)->setCheckState(checked ? Qt::Checked : Qt::Unchecked);
     }
+    renumberRows();
 }
 
 void DownloadManagerDialog::onItemChanged(QListWidgetItem* item) {
@@ -301,6 +333,7 @@ void DownloadManagerDialog::onItemChanged(QListWidgetItem* item) {
     if (idx >= 0 && idx < entries.size()) {
         entries[idx].selected = (item->checkState() == Qt::Checked);
     }
+    renumberRows();
 }
 
 QVector<PlaylistEntry> DownloadManagerDialog::getSelectedEntries() const {

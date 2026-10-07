@@ -108,6 +108,15 @@ private:
     // Renames a completed file that still carries a yt-dlp fragment suffix
     // ("title.f616.mp4") to its final name, and returns the resulting path.
     QString tidyJobFilePath(const QString& path);
+    // yt-dlp can only number by PLAYLIST position, so a partial selection is
+    // renamed to the number the row advertises: 001, 002, ... over what the user
+    // ticked. playlistPosition is what yt-dlp wrote, trackNumber is what the file
+    // must end up as. Returns the path to use and leaves the file untouched when
+    // it is not this row's file, when numbering is off, or when the target name is
+    // already taken (a rename must never clobber another download).
+    QString applyTrackNumber(const QString& path, int playlistPosition, int trackNumber) const;
+    // Position of a row inside its job's selection (1-based), 0 when unknown.
+    int sequentialTrackNumber(int jobId, int childId) const;
     // True for a row that only mirrors a yt-dlp playlist job. Such a row must never
     // start a transfer of its own - the job's single process is the transfer.
     bool isPlaylistJobItem(int id) const;

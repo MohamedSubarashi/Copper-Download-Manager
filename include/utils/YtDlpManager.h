@@ -57,14 +57,19 @@ public:
     // Single-video download. outputPath may be a literal file path or a template.
     void startDownload(const QString& url, const QString& outputPath, int downloadId, const QString& format = "mp4");
 
-    // Whole-playlist download driven by ONE yt-dlp process. Track files are named
-    // "<NNN>.<title>.<ext>" from the playlist position, and per-video progress is
+    // Whole-playlist download driven by ONE yt-dlp process. Per-video progress is
     // reported through videoProgress()/videoPath() so the table can still show one
     // row per item. selectedItems holds the 1-based playlist positions the user
-    // actually picked; pass an empty list to download the whole playlist.
+    // actually picked; pass an EMPTY list to download the whole playlist (callers
+    // must never do that as a fallback for a selection they could not read).
+    // trackNumbers selects the "<NNN>.<title>.<ext>" output template; without it
+    // yt-dlp writes "<title>.<ext>". Note that yt-dlp can only number by playlist
+    // position, so with trackNumbers on the app renames each file to its position
+    // in the selection once it lands.
     void startPlaylistJob(int jobId, const QString& playlistUrl, const QString& outputDir,
                           int trackNumberWidth, const QString& format, int fragments = 4,
-                          const QVector<int>& selectedItems = QVector<int>());
+                          const QVector<int>& selectedItems = QVector<int>(),
+                          bool trackNumbers = true);
 
     void pauseDownload(int id);
     void resumeDownload(int id);

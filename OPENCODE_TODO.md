@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.2.0
+Current version: 0.3.0
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 
@@ -99,11 +99,53 @@ The project is ready for the next milestone when the following are true:
 - [x] Browser extension to desktop integration is stable
 - [x] Torrent/media tools install and run without critical failures
 - [x] Settings and state recovery survive reopen/restart
-- [x] A basic automated regression suite exists for critical flows (55 integration cases + CI extension-lint, all green)
+- [x] A basic automated regression suite exists for critical flows (72 integration cases offline, 79 with the opt-in real-playlist case + CI extension-lint, all green)
 
 All Priority priorities (0-9) are complete as of this pass. Every remaining
-checkmark in this file has been verified by a build, the 55-case integration
-suite, or CI.
+checkmark in this file has been verified by a build, the integration suite, or
+CI.
+
+## Completed milestone: v0.3.0 (the picker's ticks are law, sequential track numbers, store links)
+
+- [x] **The selection is honored end to end.** The ticked rows are stored on the
+      job (`selected_items`, DB schema v3) and are the only thing
+      `startYtDlpPlaylistJob` asks yt-dlp for (`--playlist-items 11,18`).
+      Rows with no playlist position are failed with a reason instead of silently
+      widening the request to the whole playlist (the path that used to put
+      gigabytes nobody asked for on disk), cancelled rows are subtracted from the
+      request, and a job with nothing ticked refuses to start — "Nothing is
+      selected in this playlist. Tick at least one file and retry." — instead of
+      downloading everything.
+- [x] **Track numbers count over the selection.** The first ticked row is `001.`
+      even when it is item 9 or 11 of the playlist (`track_numbers`, schema v3).
+      The file yt-dlp writes — named by playlist position — is renamed to its
+      number in the selection once it lands, and the number is taken from the
+      stored selection rather than row order, so it stays correct after a restart.
+- [x] **Restart ordering fixed.** `restoreFromDatabase()` reads rows newest-first
+      (`ORDER BY id DESC`), so a job got its children back in reverse creation
+      order and the numbers came out swapped after a relaunch; child ids are now
+      sorted back into creation order on restore.
+- [x] **Playlist jobs no longer hang in "Downloading".** A job that cannot start
+      (yt-dlp or ffmpeg missing) reports through `playlistFinished()` —
+      `onYtDlpFailed` ignores folder rows — so it shows Failed with the reason
+      instead of sitting there forever. A Resume pressed while every yt-dlp slot
+      is busy now queues the job; it used to return without moving the row off
+      Paused, a state the queue pump never looks at, so the resume did nothing
+      until pressed again.
+- [x] **Browser store links in the toolbar**: one Extensions button opening a
+      dropdown to the official Chrome Web Store, Firefox Add-ons, Microsoft Edge
+      Add-ons and Opera listings (official logos in `Assets/Store*.png`, embedded
+      through `resources.qrc`). The in-app About dialog deliberately does not
+      carry them; the README does.
+- [x] **Panel seam gone**: `QFrame::NoFrame` on the sidebar and the table so the
+      left and right panes read as one surface.
+- [x] **Version 0.3.0** everywhere (CMake, `main.cpp`, `app.rc`, DB User-Agent,
+      THIRD-PARTY-NOTICES, Inno Setup, PKGBUILD), deployed to
+      `installer/release/0.3.0/`.
+- [x] Integration suite: **72 cases offline, 79 with
+      `COPPER_IT_REAL_PLAYLIST=1`** — the opt-in case downloads a real 19-item
+      playlist subset and asserts that exactly two files land, named `001.` and
+      `002.` in tick order, with the rows pointing at them. All green.
 
 ## Completed milestone: v0.5.3 (full playlist downloads + vivid multi-type intake)
 

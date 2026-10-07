@@ -44,17 +44,39 @@ Run the full integration suite against the deployed exe:
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `N passed, 0 failed` (55 cases as of v0.2.0). The suite covers
+Expected result: `72 passed, 0 failed` (as of v0.3.0). The suite covers
 launch/intake, single-instance, protocol forwarding, chunked/truncated/
 unknown-length downloads, the copper:// flow, .torrent injection, the
 native-messaging host -> named-pipe injection (ping + byte-exact download),
 auto-resume of an interrupted HTTP download after an app restart, and the
 playlist job model (one folder job per playlist, one row per item carrying its
-playlist position and video id, pause/resume/retry of the job).
+playlist position and video id, pause/resume/retry of the job) together with the
+selection contract: the ticked positions are stored on the job, nothing outside
+the selection is requested, an empty selection refuses to start, and files are
+numbered over the selection.
+
+One case is opt-in, because the rest of the suite is offline and this one
+downloads real videos from YouTube (about 140 MB):
+
+```powershell
+$env:COPPER_IT_REAL_PLAYLIST = "1"
+python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
+```
+
+Expected result: `79 passed, 0 failed`. It needs yt-dlp and ffmpeg in the app's
+tools folder (`%APPDATA%\Copper\Copper Download Manager\tools\`) and network
+access. It fetches a fixed playlist, ticks two of its items (positions 11 and
+18), and asserts that exactly two files land on disk, named `001.` and `002.` in
+tick order, with the rows pointing at them. Earlier runs leave their own job for
+that playlist behind - the app resumes interrupted jobs at startup - so the case
+parks those jobs first; two jobs writing one folder would make the result
+unreadable.
 
 Note: the suite leaves rows in the app database between runs. Tests that look a
 job up by URL use a unique playlist id per run, so a leftover row from an
-earlier run cannot be mistaken for a new one.
+earlier run cannot be mistaken for a new one. The real-playlist cases look their
+job up by id recorded before the request, plus the selection it carries, for the
+same reason.
 
 Extension manifest validation (offline, run in CI and locally):
 
@@ -99,7 +121,11 @@ Run through these before publishing.
 - [ ] mp3/mp4 (merge) formats: confirm ffmpeg pre-flight check runs before the
       merge/extract step.
 - [ ] Playlist: select a *subset* of items in the picker and confirm only those
-      files appear, numbered by their real playlist position (001, 002, ...).
+      files appear, numbered over the selection (001 = the first item you
+      ticked, 002 = the second, ...), then check the files on disk carry the
+      same numbers as their rows.
+- [ ] Playlist: tick nothing and hit download; the job refuses with "Nothing is
+      selected in this playlist" instead of fetching the whole playlist.
 - [ ] Playlist: one folder row per item, each row advancing on its own while a
       single yt-dlp process runs (check Task Manager: exactly one yt-dlp).
 - [ ] Playlist: pause mid-item, resume, and confirm the finished items stay
