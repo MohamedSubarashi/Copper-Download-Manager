@@ -22,12 +22,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Versions here must (a) be fetchable by aqtinstall from the official
-        # open-source Qt mirror, and (b) link against the MinGW that windows-latest
-        # ships out of the box (GCC 15.2 in C:\mingw64). Qt 6.8.x mingw_64 binaries
-        # are built with GCC 13 and fail to link there (libQt6EntryPoint.a:
-        # "undefined reference to __imp___argc"); Qt 6.6.3 is ABI-compatible and
-        # green. Qt 6.11.2 (used on the local dev machine) is not published on the
+        # Versions here must be fetchable by aqtinstall from the official
+        # open-source Qt mirror. The compiler is no longer the runner's stock
+        # GCC (C:\mingw64, UCRT) — the Install Qt step pins Qt's own MinGW
+        # 13.1 via `tools:` so exe and deployed Qt DLLs share one C runtime.
+        # Qt 6.11.2 (used on the local dev machine) is not published on the
         # mirror, so it is covered only locally.
         qt: ["6.6.3"]
         config: [Release, Debug]
@@ -40,6 +39,15 @@ jobs:
           version: ${{ matrix.qt }}
           host: windows
           arch: win64_mingw
+          # Install and PATH-prepend the exact MinGW Qt 6.6.3 was built with
+          # (GCC 13.1). Building with the runner's stock GCC in C:\mingw64
+          # produced an exe on the UCRT (api-ms-win-crt-*) while the Qt DLLs
+          # we deploy use the MSVCRT: allocations made in Qt6Core land on one
+          # heap and get freed by ucrtfree on another, which corrupts the heap
+          # (0xC0000374) the first time Logger::writeLog runs — i.e. the app
+          # crashed on startup in every released Windows build (v0.2.0-v0.3.0).
+          tools: 'tools_mingw1310,qt.tools.win64_mingw1310'
+          add-tools-to-path: true
           cache: true
 
       - name: Configure
@@ -52,6 +60,27 @@ jobs:
       - name: Build
         shell: bash
         run: cmake --build build
+
+      - name: Verify CRT linkage (Release only)
+        if: matrix.config == 'Release'
+        shell: bash
+        run: |
+          # Regression guard for the startup heap-corruption crash: the exe
+          # must be built against the same C runtime as the Qt DLLs it ships
+          # with. Qt 6.6 mingw DLLs use msvcrt.dll; an exe linking the UCRT
+          # (api-ms-win-crt-*) frees Qt-allocated memory on a different heap
+          # and dies with 0xC0000374 on the first log line.
+          DLLS="$(objdump -p build/CopperDownloadManager.exe | grep -i 'DLL Name' || true)"
+          echo "$DLLS"
+          if echo "$DLLS" | grep -qi 'api-ms-win-crt'; then
+            echo "::error::exe imports api-ms-win-crt-* (UCRT) while deployed Qt DLLs use msvcrt.dll"
+            exit 1
+          fi
+          if ! echo "$DLLS" | grep -qi 'msvcrt\.dll'; then
+            echo "::error::exe does not import msvcrt.dll"
+            exit 1
+          fi
+          echo "CRT linkage OK (msvcrt only)"
 
       - name: Packaging smoke check (Release only)
         if: matrix.config == 'Release'
@@ -86,6 +115,46 @@ jobs:
             throw "Windows cannot read the version resource (expected ${ver}, got '$($v.FileVersion)')"
           }
           Write-Host "Version resource OK (${ver})"
+
+      - name: Startup smoke test (Release only)
+        if: matrix.config == 'Release'
+        shell: pwsh
+        run: |
+          # Launch the *deployed* package (the exact tree we ship) and require
+          # the startup banner in copper.log. This is the end-to-end guard for
+          # the 0xC0000374 startup crash: the banner is the first thing
+          # Logger::writeLog writes after QApplication comes up.
+          $ver = [regex]::Match((Get-Content CMakeLists.txt -Raw), 'project\([^ ]+ VERSION ([0-9.]+)').Groups[1].Value
+          $exe = Resolve-Path "installer/release/$ver/CopperDownloadManager.exe"
+          $log = Join-Path $env:APPDATA "Copper\Copper Download Manager\copper.log"
+          if (Test-Path $log) { Remove-Item $log -Force }
+          Write-Host "Launching $exe"
+          $p = Start-Process -FilePath $exe -PassThru
+          $banner = $false
+          $crashed = $false
+          $deadline = (Get-Date).AddSeconds(45)
+          while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 2
+            $content = ''
+            if (Test-Path $log) { $content = Get-Content $log -Raw -ErrorAction SilentlyContinue }
+            if ($content -match 'Application started successfully') { $banner = $true; break }
+            if ($content -match '\[CRASH\]') { $crashed = $true; break }
+            if ($p.HasExited) { break }
+          }
+          $code = $null
+          if ($p.HasExited) {
+            try { $p.WaitForExit(5000) | Out-Null; $code = $p.ExitCode } catch { $code = "unknown" }
+          } else {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+          }
+          Write-Host "--- copper.log ---"
+          if (Test-Path $log) { Get-Content $log | ForEach-Object { Write-Host $_ } } else { Write-Host "(no log written)" }
+          Write-Host "------------------"
+          if ($crashed) { throw "app wrote a [CRASH] report on startup" }
+          if ($null -ne $code -and -not $banner) { throw "app exited (code $code) before writing the startup banner" }
+          if (-not $banner) { throw "startup smoke test timed out: no 'Application started successfully' banner in copper.log" }
+          Write-Host "Startup smoke test OK"
 
       - name: Package portable zip (Release only)
         if: matrix.config == 'Release'

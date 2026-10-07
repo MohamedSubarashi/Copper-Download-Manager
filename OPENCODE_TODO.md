@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.3.0
+Current version: 0.3.1
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 
@@ -146,6 +146,24 @@ CI.
       `COPPER_IT_REAL_PLAYLIST=1`** — the opt-in case downloads a real 19-item
       playlist subset and asserts that exactly two files land, named `001.` and
       `002.` in tick order, with the rows pointing at them. All green.
+
+## Completed milestone: v0.3.1 (Windows startup crash fix)
+
+- [x] **CI-built Windows exe no longer crashes on startup.** Every released
+      Windows build (v0.2.0-v0.3.0) died with `0xC0000374`
+      (STATUS_HEAP_CORRUPTION) before the first log line: the runner's stock
+      GCC in `C:\mingw64` links the UCRT (`api-ms-win-crt-*`) while the
+      deployed Qt 6.6.3 mingw DLLs allocate on the `msvcrt.dll` heap, so the
+      exe freed Qt-owned memory on the wrong heap inside
+      `Logger::writeLog`. CI now installs Qt's own MinGW 13.1
+      (`tools_mingw1310`) via `jurplel/install-qt-action` `tools:` and builds
+      with it.
+- [x] **Two CI regression guards**: a `Verify CRT linkage` step
+      (`objdump -p` must show `msvcrt.dll` and no `api-ms-win-crt-*`) and a
+      **Startup smoke test** that launches the deployed portable exe and
+      requires the `Application started successfully` banner in `copper.log`.
+- [x] **Version 0.3.1** everywhere, deployed to
+      `installer/release/0.3.1/`.
 
 ## Completed milestone: v0.5.3 (full playlist downloads + vivid multi-type intake)
 
