@@ -1,5 +1,6 @@
 #include "db/DatabaseManager.h"
 #include "utils/Logger.h"
+#include "utils/UserAgent.h"
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QStandardPaths>
@@ -401,8 +402,19 @@ QString DatabaseManager::getSetting(const QString& key, const QString& defaultVa
 QString DatabaseManager::getUserAgent() {
     QString ua = getSetting("userAgent", "");
     if (ua.trimmed().isEmpty()) {
-        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 CopperDownloadManager/" + QString::fromLatin1("0.3.1");
+        // Default browser-like UA; the version part derives from the
+        // single-source application version (see utils/UserAgent.h).
+        return Copper::copperUserAgent();
     }
-    return ua.trimmed();
+    ua = ua.trimmed();
+    // A stored value that carries one of our own tokens with a stale version
+    // (e.g. the old "... CopperDownloadManager/0.3.1" default or the bare
+    // "CopperDownloadManager/1.0") is refreshed to the current single-source
+    // UA; anything else is a deliberate custom UA and is kept.
+    if (ua.contains(QLatin1String("CopperDownloadManager/"), Qt::CaseInsensitive)
+        && !ua.endsWith(QCoreApplication::applicationVersion())) {
+        return Copper::copperUserAgent();
+    }
+    return ua;
 }
 

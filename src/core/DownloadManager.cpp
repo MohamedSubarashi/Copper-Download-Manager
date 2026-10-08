@@ -277,6 +277,23 @@ int DownloadManager::addDownload(const QString& url, const QString& path, const 
 
 void DownloadManager::createChunkedDownloaderFor(int id, bool resumeFromSaved) {
     if (!downloads.contains(id)) return;
+
+    // A second live downloader for the same id writes the same {id}_*.chunk
+    // files through its own handles: when one instance merges, its cleanup
+    // deletes the chunks the other instance is still using (or the resume
+    // state both rely on), and the survivor then merges missing/corrupt data
+    // and fails a download that had already completed. Restore is re-entrant:
+    // a playlist job failing inside restore pumps startNextQueued(), which
+    // can start a Queued row before restore's own startOrder loop reaches it
+    // - so the first creator wins and any later call for an active id is a
+    // no-op. Every call site either passes a fresh id or (resumeDownload)
+    // already checks activeChunkedDownloaders itself.
+    if (activeChunkedDownloaders.contains(id)) {
+        Logger::instance().warning("Download " + QString::number(id) +
+                                   " already has an active transfer; not starting a second one");
+        return;
+    }
+
     DownloadItem& item = downloads[id];
 
     ChunkedDownloader* downloader = new ChunkedDownloader(this);
@@ -402,6 +419,16 @@ void DownloadManager::restoreFromDatabase() {
     int startedJobs = 0;
     for (int id : startOrder) {
         if (!downloads.contains(id)) continue;
+        // Restore is re-entrant: a playlist job failing inside this loop pumps
+        // startNextQueued(), which finds these rows already Queued and starts
+        // them (or schedules their retry) before the loop reaches them. Starting
+        // such a row again here would create a second ChunkedDownloader over the
+        // same .chunk files, so count what is already running and move on.
+        if (activeChunkedDownloaders.contains(id)) {
+            activeCount++;
+            continue;
+        }
+        if (retryTimers.contains(id)) continue;
         DownloadItem& item = downloads[id];
         // Folder jobs (a playlist is one yt-dlp process) are governed by the yt-dlp
         // job limit, not by maxConcurrent, so they must not consume a transfer slot.

@@ -13,6 +13,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QJsonArray>
+#include <QSaveFile>
 #include <algorithm>
 
 ChunkedDownloader::ChunkedDownloader(QObject* parent)
@@ -132,7 +134,7 @@ bool ChunkedDownloader::isHtmlResponse(QNetworkReply* reply) {
 void ChunkedDownloader::startDownload(const QString& url, const QString& filePath, int chunks, int id) {
     downloadUrl = url;
     saveFilePath = filePath;
-    totalChunks = chunks;
+    totalChunks = qBound(1, chunks, 128);
     downloadId = id;
     downloading = true;
     paused = false;
@@ -140,6 +142,14 @@ void ChunkedDownloader::startDownload(const QString& url, const QString& filePat
     downloadedBytes = 0;
     totalBytes = 0;
     lastActivityMs = QDateTime::currentMSecsSinceEpoch();
+    // Fresh attempt: validators and any in-flight violation state are re-learned
+    // from the new HEAD response. rangeViolationRestarted/forceNoRange are kept
+    // on purpose - they record what we already learned about this server so a
+    // range-ignoring endpoint cannot put us into a restart loop.
+    respEtag.clear();
+    respLastModified.clear();
+    attachingIfRange = false;
+    pendingRangeViolation = false;
 
     resetThrottleState();
 
@@ -198,6 +208,8 @@ void ChunkedDownloader::onHeadFinished() {
     }
 
     totalBytes = headReply->header(QNetworkRequest::ContentLengthHeader).toLongLong();
+    respEtag = QString::fromLatin1(headReply->rawHeader("ETag")).trimmed();
+    respLastModified = QString::fromLatin1(headReply->rawHeader("Last-Modified")).trimmed();
 
     QString realName = extractFilenameFromContentDisposition(headReply->rawHeader("Content-Disposition"));
     if (!realName.isEmpty()) {
@@ -209,13 +221,18 @@ void ChunkedDownloader::onHeadFinished() {
 
     int statusCode = headReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     supportsRange = (statusCode == 206) || headReply->rawHeader("Accept-Ranges").contains("bytes");
+    if (forceNoRange) {
+        // A previous attempt proved this server answers ranged requests with
+        // 200 OK; never trust Accept-Ranges from it again.
+        supportsRange = false;
+    }
 
     headReply->deleteLater();
     headReply = nullptr;
 
     if (totalBytes <= 0 && supportsRange) {
         QNetworkRequest fullRequest{QUrl{downloadUrl}};
-        fullRequest.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CopperDownloadManager/1.0");
+        fullRequest.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
         fullRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
 
         QNetworkReply* reply = nam->get(fullRequest);
@@ -272,6 +289,8 @@ void ChunkedDownloader::checkFallbackReply(QNetworkReply* reply) {
     }
 
     totalBytes = reply->header(QNetworkRequest::ContentLengthHeader).toLongLong();
+    respEtag = QString::fromLatin1(reply->rawHeader("ETag")).trimmed();
+    respLastModified = QString::fromLatin1(reply->rawHeader("Last-Modified")).trimmed();
 
     QString realName = extractFilenameFromContentDisposition(reply->rawHeader("Content-Disposition"));
     if (!realName.isEmpty()) {
@@ -284,7 +303,7 @@ void ChunkedDownloader::checkFallbackReply(QNetworkReply* reply) {
     int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     supportsRange = false;
 
-    if (statusCode == 206 || reply->rawHeader("Accept-Ranges").contains("bytes")) {
+    if (!forceNoRange && (statusCode == 206 || reply->rawHeader("Accept-Ranges").contains("bytes"))) {
         qint64 contentLength = totalBytes;
         reply->deleteLater();
 
@@ -298,17 +317,39 @@ void ChunkedDownloader::checkFallbackReply(QNetworkReply* reply) {
     }
 
     QByteArray data = reply->readAll();
+    QVariant contentLengthHeader = reply->header(QNetworkRequest::ContentLengthHeader);
     reply->deleteLater();
 
-    QFile* file = new QFile(saveFilePath);
-    if (!file->open(QIODevice::WriteOnly)) {
+    // The server promised a length: refuse to commit a body that does not match
+    // it exactly (identity transfer, so no chunked-decoding ambiguity).
+    if (contentLengthHeader.isValid()) {
+        qint64 promised = contentLengthHeader.toLongLong();
+        if (promised >= 0 && promised != data.size()) {
+            emit downloadFailed(downloadId, QString("Incomplete response: received %1 of %2 bytes.")
+                                                 .arg(data.size()).arg(promised));
+            downloading = false;
+            return;
+        }
+    }
+
+    // Stage through QSaveFile so the destination only ever appears complete:
+    // a failure/crash mid-write leaves the previous file (if any) untouched.
+    QSaveFile outFile(saveFilePath);
+    if (!outFile.open(QIODevice::WriteOnly)) {
         emit downloadFailed(downloadId, "Cannot open file for writing: " + saveFilePath);
         downloading = false;
         return;
     }
-    file->write(data);
-    file->close();
-    file->deleteLater();
+    if (outFile.write(data) != data.size()) {
+        emit downloadFailed(downloadId, "Cannot write file: " + saveFilePath);
+        downloading = false;
+        return;   // QSaveFile discards the staged temp file on destruction
+    }
+    if (!outFile.commit()) {
+        emit downloadFailed(downloadId, "Cannot finalize file: " + saveFilePath);
+        downloading = false;
+        return;
+    }
 
     downloadedBytes = data.size();
     totalBytes = data.size();
@@ -327,27 +368,13 @@ void ChunkedDownloader::setupChunks(qint64 totalSize) {
         chunk.startByte = 0;
         chunk.endByte = -1;
         chunk.downloaded = 0;
+        chunks.append(chunk);
 
-        QFile* file = new QFile(chunkFilePath(0));
-        if (!file->open(QIODevice::WriteOnly)) {
-            emit downloadFailed(downloadId, "Cannot open file for writing: " + chunkFilePath(0));
+        if (!startChunkRequest(chunks.last())) {
             downloading = false;
+            cleanupChunks();
             return;
         }
-        chunk.file = file;
-
-        QNetworkRequest request{QUrl{downloadUrl}};
-        request.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
-        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-
-        QNetworkReply* reply = nam->get(request);
-        chunk.reply = reply;
-
-        connect(reply, &QNetworkReply::readyRead, this, &ChunkedDownloader::onChunkReadyRead);
-        connect(reply, &QNetworkReply::finished, this, &ChunkedDownloader::onChunkFinished);
-        connect(reply, &QNetworkReply::errorOccurred, this, &ChunkedDownloader::onChunkError);
-
-        chunks.append(chunk);
         hangTimer->start();
         return;
     }
@@ -364,33 +391,143 @@ void ChunkedDownloader::setupChunks(qint64 totalSize) {
         chunk.startByte = i * chunkSize;
         chunk.endByte = (i == totalChunks - 1) ? (totalSize - 1) : ((i + 1) * chunkSize - 1);
         chunk.downloaded = 0;
+        chunks.append(chunk);
 
-        QFile* file = new QFile(chunkFilePath(i));
-        if (!file->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            emit downloadFailed(downloadId, "Cannot open chunk file: " + chunkFilePath(i));
-            cleanupChunks();
+        if (!startChunkRequest(chunks.last())) {
             downloading = false;
+            cleanupChunks();
             return;
         }
-        chunk.file = file;
-
-        QNetworkRequest request{QUrl{downloadUrl}};
-        request.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
-        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-        QString rangeHeader = "bytes=" + QByteArray::number(chunk.startByte) + "-" + QByteArray::number(chunk.endByte);
-        request.setRawHeader("Range", rangeHeader.toUtf8());
-
-        QNetworkReply* reply = nam->get(request);
-        chunk.reply = reply;
-
-        connect(reply, &QNetworkReply::readyRead, this, &ChunkedDownloader::onChunkReadyRead);
-        connect(reply, &QNetworkReply::finished, this, &ChunkedDownloader::onChunkFinished);
-        connect(reply, &QNetworkReply::errorOccurred, this, &ChunkedDownloader::onChunkError);
-
-        chunks.append(chunk);
     }
 
     hangTimer->start();
+}
+
+QNetworkRequest ChunkedDownloader::buildChunkRequest(qint64 fromByte, qint64 toByte) const {
+    QNetworkRequest request{QUrl{downloadUrl}};
+    request.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    if (toByte >= 0) {
+        request.setRawHeader("Range", "bytes=" + QByteArray::number(fromByte) + "-" + QByteArray::number(toByte));
+        // On resume, If-Range makes the server answer 200 OK (full body) when
+        // the remote file changed since the partial data was written; the
+        // response validation then restarts the download instead of appending
+        // bytes of a different file to the stale chunks.
+        if (attachingIfRange) {
+            if (!respEtag.isEmpty()) {
+                request.setRawHeader("If-Range", respEtag.toUtf8());
+            } else if (!respLastModified.isEmpty()) {
+                request.setRawHeader("If-Range", respLastModified.toUtf8());
+            }
+        }
+    }
+    return request;
+}
+
+bool ChunkedDownloader::startChunkRequest(ChunkState& chunk) {
+    // Already fully on disk: nothing to request (the file handle stays closed,
+    // so the all-done check counts it as finished).
+    qint64 expected = (chunk.endByte >= 0) ? (chunk.endByte - chunk.startByte + 1) : -1;
+    if (expected >= 0 && chunk.downloaded >= expected) return true;
+
+    bool append = chunk.downloaded > 0;
+    QFile* file = new QFile(chunkFilePath(chunk.index));
+    QIODevice::OpenMode mode = QIODevice::WriteOnly | (append ? QIODevice::Append : QIODevice::Truncate);
+    if (!file->open(mode)) {
+        Logger::instance().error("Cannot open chunk file: " + chunkFilePath(chunk.index));
+        emit downloadFailed(downloadId, "Cannot open chunk file: " + chunkFilePath(chunk.index));
+        delete file;
+        downloading = false;
+        return false;
+    }
+    chunk.file = file;
+
+    chunk.requestedRange = (chunk.endByte >= 0);
+    chunk.requestStart = chunk.requestedRange ? (chunk.startByte + chunk.downloaded) : -1;
+    // Unranged requests have no response contract to verify.
+    chunk.responseValidated = !chunk.requestedRange;
+
+    QNetworkRequest request = chunk.requestedRange
+        ? buildChunkRequest(chunk.requestStart, chunk.endByte)
+        : buildChunkRequest(0, -1);
+
+    QNetworkReply* reply = nam->get(request);
+    chunk.reply = reply;
+
+    connect(reply, &QNetworkReply::readyRead, this, &ChunkedDownloader::onChunkReadyRead);
+    connect(reply, &QNetworkReply::finished, this, &ChunkedDownloader::onChunkFinished);
+    connect(reply, &QNetworkReply::errorOccurred, this, &ChunkedDownloader::onChunkError);
+    return true;
+}
+
+bool ChunkedDownloader::validateChunkResponse(ChunkState& chunk) {
+    QNetworkReply* reply = chunk.reply;
+    if (!reply) return true;
+    if (chunk.requestStart < 0) return true;   // unranged request: nothing to check
+
+    int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (status == 200) {
+        // The server either ignores Range headers entirely or, on an If-Range
+        // resume, reports that the remote file changed. Appending this full-body
+        // response to ranged chunks would silently corrupt the file, so flag it:
+        // onChunkFinished restarts the download once and fails if it recurs.
+        pendingRangeViolation = true;
+        chunk.error = true;
+        chunk.errorMessage = "Server answered 200 OK to a ranged request (Range ignored or remote file changed)";
+        Logger::instance().warning("Chunk " + QString::number(chunk.index) + ": " + chunk.errorMessage);
+        return false;
+    }
+    if (status != 206) {
+        chunk.error = true;
+        chunk.errorMessage = "Unexpected HTTP status " + QString::number(status) + " for a ranged request (expected 206)";
+        Logger::instance().error("Chunk " + QString::number(chunk.index) + ": " + chunk.errorMessage);
+        return false;
+    }
+
+    QByteArray contentRange = reply->rawHeader("Content-Range");   // bytes s-e/total|*
+    static const QRegularExpression contentRangeRe(
+        QStringLiteral("^bytes (\\d+)-(\\d+)/(\\d+|\\*)$"), QRegularExpression::CaseInsensitiveOption);
+    QRegularExpressionMatch m = contentRangeRe.match(QString::fromLatin1(contentRange.trimmed()));
+    if (!m.hasMatch()) {
+        chunk.error = true;
+        chunk.errorMessage = "Missing or malformed Content-Range header: " + QString::fromLatin1(contentRange);
+        Logger::instance().error("Chunk " + QString::number(chunk.index) + ": " + chunk.errorMessage);
+        return false;
+    }
+
+    qint64 start = m.captured(1).toLongLong();
+    qint64 end = m.captured(2).toLongLong();
+    qint64 total = (m.captured(3) == QLatin1String("*")) ? -1 : m.captured(3).toLongLong();
+
+    if (start != chunk.requestStart || end != chunk.endByte) {
+        chunk.error = true;
+        chunk.errorMessage = QString("Content-Range mismatch: got bytes %1-%2, requested bytes %3-%4")
+                                 .arg(start).arg(end).arg(chunk.requestStart).arg(chunk.endByte);
+        Logger::instance().error("Chunk " + QString::number(chunk.index) + ": " + chunk.errorMessage);
+        return false;
+    }
+    if (total >= 0 && totalBytes > 0 && total != totalBytes) {
+        chunk.error = true;
+        chunk.errorMessage = QString("Remote file size changed: Content-Range total %1 != expected %2")
+                                 .arg(total).arg(totalBytes);
+        Logger::instance().error("Chunk " + QString::number(chunk.index) + ": " + chunk.errorMessage);
+        return false;
+    }
+
+    QVariant cl = reply->header(QNetworkRequest::ContentLengthHeader);
+    if (cl.isValid()) {
+        qint64 len = cl.toLongLong();
+        qint64 promised = end - start + 1;
+        if (len >= 0 && len != promised) {
+            chunk.error = true;
+            chunk.errorMessage = QString("Content-Length %1 does not match the promised range size %2")
+                                     .arg(len).arg(promised);
+            Logger::instance().error("Chunk " + QString::number(chunk.index) + ": " + chunk.errorMessage);
+            return false;
+        }
+    }
+
+    return true;
 }
 
 void ChunkedDownloader::onChunkReadyRead() {
@@ -398,6 +535,34 @@ void ChunkedDownloader::onChunkReadyRead() {
 
     QNetworkReply* reply = qobject_cast<QNetworkReply*>(sender());
     if (!reply) return;
+
+    // Verify the response contract (206 + exact Content-Range) BEFORE a single
+    // body byte is written: a violated contract must never touch the file.
+    ChunkState* target = nullptr;
+    for (ChunkState& chunk : chunks) {
+        if (chunk.reply == reply) {
+            target = &chunk;
+            break;
+        }
+    }
+    if (!target) return;
+
+    if (!target->responseValidated) {
+        if (!validateChunkResponse(*target)) {
+            // This chunk cannot complete; abort every transfer first into a
+            // local list so the all-done handling (which may restart the whole
+            // download and clear `chunks`) runs outside this loop.
+            QList<QNetworkReply*> pending;
+            for (ChunkState& chunk : chunks) {
+                if (chunk.reply) pending.append(chunk.reply);
+            }
+            for (QNetworkReply* pendingReply : pending) {
+                pendingReply->abort();
+            }
+            return;
+        }
+        target->responseValidated = true;
+    }
 
     lastActivityMs = QDateTime::currentMSecsSinceEpoch();
 
@@ -439,17 +604,42 @@ void ChunkedDownloader::onChunkFinished() {
     QNetworkReply* reply = qobject_cast<QNetworkReply*>(sender());
     if (!reply) return;
 
+    bool matched = false;
     for (ChunkState& chunk : chunks) {
         if (chunk.reply == reply) {
-            if (reply->error() != QNetworkReply::NoError && reply->error() != QNetworkReply::OperationCanceledError) {
+            matched = true;
+            // Validate here as well: a reply can finish without ever emitting
+            // readyRead (e.g. an immediate 200/4xx with an empty body).
+            if (!chunk.responseValidated && reply->error() == QNetworkReply::NoError) {
+                if (validateChunkResponse(chunk)) {
+                    chunk.responseValidated = true;
+                } else {
+                    // This chunk cannot complete; abort the siblings (collected
+                    // into a local list first: the all-done handling below may
+                    // restart the download and clear `chunks`).
+                    QList<QNetworkReply*> pending;
+                    for (ChunkState& sibling : chunks) {
+                        if (sibling.reply && sibling.reply != reply) pending.append(sibling.reply);
+                    }
+                    for (QNetworkReply* pendingReply : pending) {
+                        pendingReply->abort();
+                    }
+                }
+                // On failure chunk.error is already set by the validator and the
+                // tail drain below is skipped (it only runs when validated).
+            }
+
+            if (reply->error() != QNetworkReply::NoError && reply->error() != QNetworkReply::OperationCanceledError && !chunk.error) {
                 Logger::instance().error("Chunk " + QString::number(chunk.index) + " error: " + reply->errorString());
                 chunk.error = true;
                 chunk.errorMessage = reply->errorString();
             }
 
             // A clean finish can leave trailing bytes buffered that never arrived
-            // via readyRead; drain them into the file or they are lost.
-            if (!paused && !cancelled && reply->error() == QNetworkReply::NoError) {
+            // via readyRead; drain them into the file or they are lost. Never
+            // drain an unvalidated response: it may be a full-body 200 reply to a
+            // ranged request, and writing it would corrupt the chunk file.
+            if (!paused && !cancelled && reply->error() == QNetworkReply::NoError && chunk.responseValidated) {
                 QByteArray tail = reply->readAll();
                 if (!tail.isEmpty() && chunk.file) {
                     chunk.file->write(tail);
@@ -471,6 +661,10 @@ void ChunkedDownloader::onChunkFinished() {
         }
     }
 
+    // A reply that was already detached (aborted during cleanup or a restart)
+    // must not drive the all-done logic: the state it describes is no longer ours.
+    if (!matched) return;
+
     bool allDone = true;
     for (const ChunkState& chunk : chunks) {
         if (chunk.reply != nullptr || chunk.file != nullptr) {
@@ -480,12 +674,41 @@ void ChunkedDownloader::onChunkFinished() {
     }
 
     if (allDone) {
+        // A failure/cancel path that already gave up on this attempt may have
+        // arrived here through a re-entrant abort chain; never merge in that case.
+        if (!downloading) return;
+
         speedTimer->stop();
         hangTimer->stop();
         speed = 0;
 
         if (paused || cancelled) {
             downloading = false;
+            return;
+        }
+
+        // Range-contract violation: restart the whole attempt ONCE instead of
+        // failing outright - the first time it is almost always a server that
+        // advertises Accept-Ranges but ignores Range, or an If-Range resume
+        // whose validator reported the remote file changed.
+        if (pendingRangeViolation && !rangeViolationRestarted) {
+            rangeViolationRestarted = true;
+            bool remoteChanged = attachingIfRange;
+            if (!remoteChanged) {
+                // Remember that this server ignores Range headers: the restart
+                // must go out as a single stream (startDownload re-reads the
+                // HEAD response, and forceNoRange keeps supportsRange false).
+                forceNoRange = true;
+            }
+            Logger::instance().warning(
+                "Ranged request was answered with 200 OK; restarting download as "
+                + QString(remoteChanged ? "a fresh transfer (remote file changed)"
+                                        : "a single-stream transfer"));
+            pendingRangeViolation = false;
+            cleanupChunks();          // replies/files are already null here
+            cleanupTempFiles();       // drop stale partial data - never reuse it
+            downloadedBytes = 0;
+            startDownload(downloadUrl, saveFilePath, totalChunks, downloadId);
             return;
         }
 
@@ -504,13 +727,18 @@ void ChunkedDownloader::onChunkFinished() {
             return;
         }
 
-        mergeChunks();
+        if (!mergeChunks()) {
+            emit downloadFailed(downloadId,
+                "Failed to assemble the final file: on-disk size verification failed (see log for details).");
+            downloading = false;
+            return;
+        }
 
         qint64 finalSize = QFileInfo(saveFilePath).size();
-        if (totalBytes > 0 && finalSize < totalBytes) {
-            Logger::instance().error("Download incomplete: " + QString::number(finalSize) + " of " + QString::number(totalBytes) + " bytes");
+        if (totalBytes > 0 && finalSize != totalBytes) {
+            Logger::instance().error("Download size mismatch: " + QString::number(finalSize) + " vs expected " + QString::number(totalBytes) + " bytes");
             emit downloadFailed(downloadId,
-                QString("Download incomplete: received %1 of %2 bytes. The connection dropped before all data arrived.")
+                QString("Download size mismatch: the final file is %1 bytes, expected %2 bytes.")
                     .arg(finalSize)
                     .arg(totalBytes));
             downloading = false;
@@ -540,7 +768,7 @@ void ChunkedDownloader::onSpeedTimer() {
     emit speedUpdated(speed);
 }
 
-void ChunkedDownloader::mergeChunks() {
+bool ChunkedDownloader::mergeChunks() {
     // Close any open chunk handles first (resume path can merge while files are open).
     for (ChunkState& chunk : chunks) {
         if (chunk.file) {
@@ -550,44 +778,94 @@ void ChunkedDownloader::mergeChunks() {
         }
     }
 
+    // Verify every chunk file BEFORE touching the destination: each ranged
+    // chunk must hold exactly its requested byte range, and the sizes must sum
+    // to the expected total. Nothing is written unless the input is complete.
+    qint64 actualTotal = 0;
+    for (const ChunkState& chunk : chunks) {
+        qint64 size = QFileInfo(chunkFilePath(chunk.index)).size();
+        if (chunk.endByte >= 0) {
+            qint64 expected = chunk.endByte - chunk.startByte + 1;
+            if (size != expected) {
+                Logger::instance().error(QString("Chunk %1 size mismatch: %2 bytes on disk, expected %3 bytes")
+                                              .arg(chunk.index).arg(size).arg(expected));
+                return false;
+            }
+        } else if (totalBytes > 0 && size != totalBytes) {
+            Logger::instance().error(QString("Download size mismatch: %1 bytes on disk, expected %2 bytes")
+                                         .arg(size).arg(totalBytes));
+            return false;
+        }
+        actualTotal += size;
+    }
+    if (totalBytes > 0 && actualTotal != totalBytes) {
+        Logger::instance().error(QString("Chunk sizes sum to %1 bytes, expected %2 bytes")
+                                     .arg(actualTotal).arg(totalBytes));
+        return false;
+    }
+
     if (chunks.size() == 1) {
-        QFile::remove(saveFilePath);
-        if (!QFile::rename(chunkFilePath(0), saveFilePath)) {
-            if (!QFile::copy(chunkFilePath(0), saveFilePath)) {
-                Logger::instance().error("Cannot finalize download file: " + saveFilePath);
-            }
-            QFile::remove(chunkFilePath(0));
+        // Fast path: the single chunk is the whole file. Rename it into place
+        // when the destination does not exist (atomic); otherwise stage through
+        // QSaveFile below so an existing file is only ever replaced by a
+        // verified one - never removed up front.
+        QString chunkPath = chunkFilePath(0);
+        if (!QFile::exists(saveFilePath) && QFile::rename(chunkPath, saveFilePath)) {
+            cleanupTempFiles();
+            return true;
         }
-        cleanupTempFiles();
-        return;
     }
 
-    QFile outputFile(saveFilePath);
-    if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    // Assemble through QSaveFile: data goes to a temporary file that is
+    // atomically swapped in on commit, so a failure or crash mid-merge leaves
+    // any previous file intact and never exposes a partial result.
+    QSaveFile out(saveFilePath);
+    if (!out.open(QIODevice::WriteOnly)) {
         Logger::instance().error("Cannot create output file: " + saveFilePath);
-        return;
+        return false;
     }
 
-    for (int i = 0; i < chunks.size(); i++) {
-        QFile chunkFile(chunkFilePath(i));
-        if (chunkFile.open(QIODevice::ReadOnly)) {
-            while (!chunkFile.atEnd()) {
-                outputFile.write(chunkFile.read(1024 * 1024));
-            }
-            chunkFile.close();
+    for (const ChunkState& chunk : chunks) {
+        QFile chunkFile(chunkFilePath(chunk.index));
+        if (!chunkFile.open(QIODevice::ReadOnly)) {
+            Logger::instance().error("Cannot read chunk file: " + chunkFilePath(chunk.index));
+            return false;   // QSaveFile destructor discards the staged temp file
         }
+        while (!chunkFile.atEnd()) {
+            QByteArray block = chunkFile.read(1024 * 1024);
+            if (block.isEmpty()) break;
+            if (out.write(block) != block.size()) {
+                Logger::instance().error("Write failed while assembling: " + saveFilePath);
+                return false;
+            }
+        }
+        chunkFile.close();
     }
 
-    outputFile.close();
+    if (!out.commit()) {
+        Logger::instance().error("Cannot finalize download file: " + saveFilePath);
+        return false;
+    }
+
+    if (QFileInfo(saveFilePath).size() != actualTotal) {
+        Logger::instance().error("Assembled file size differs from the sum of chunk sizes");
+        return false;
+    }
+
     cleanupTempFiles();
+    return true;
 }
 
 void ChunkedDownloader::cleanupChunks() {
     for (ChunkState& chunk : chunks) {
         if (chunk.reply) {
-            chunk.reply->abort();
-            chunk.reply->deleteLater();
+            QNetworkReply* reply = chunk.reply;
+            // Detach first: abort() may emit finished synchronously, and the
+            // handler must not see a half-torn-down chunk (or null this pointer
+            // out from under us).
             chunk.reply = nullptr;
+            reply->abort();
+            reply->deleteLater();
         }
         if (chunk.file) {
             chunk.file->close();
@@ -599,13 +877,17 @@ void ChunkedDownloader::cleanupChunks() {
 }
 
 void ChunkedDownloader::cleanupTempFiles() {
-    for (int i = 0; i < totalChunks; i++) {
-        QFile::remove(chunkFilePath(i));
+    // Pattern-based so stray chunk files beyond the current chunk count (a
+    // previous session with a different layout) cannot be left behind.
+    QString tempDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/temp";
+    QDirIterator it(tempDir, QStringList() << QString::number(downloadId) + "_*.chunk", QDir::Files);
+    while (it.hasNext()) {
+        QFile::remove(it.next());
     }
     QFile::remove(resumeStatePath());
 }
 
-QString ChunkedDownloader::chunkFilePath(int index) {
+QString ChunkedDownloader::chunkFilePath(int index) const {
     QString tempDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/temp";
     QDir().mkpath(tempDir);
     QString safeName = QString::number(downloadId) + "_" + QString::number(index);
@@ -642,27 +924,17 @@ void ChunkedDownloader::resume() {
         return;
     }
 
+    // Stale partial data exists: attach If-Range validators so a server-side
+    // change since the pause answers 200 OK instead of mixing file versions.
+    attachingIfRange = true;
+
     for (ChunkState& chunk : chunks) {
         if (chunk.reply == nullptr && chunk.downloaded < (chunk.endByte - chunk.startByte + 1)) {
-            QNetworkRequest request{QUrl{downloadUrl}};
-            request.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
-            request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-
-            qint64 resumeFrom = chunk.startByte + chunk.downloaded;
-            QString rangeHeader = "bytes=" + QByteArray::number(resumeFrom) + "-" + QByteArray::number(chunk.endByte);
-            request.setRawHeader("Range", rangeHeader.toUtf8());
-
-            QFile* file = new QFile(chunkFilePath(chunk.index));
-            if (file->open(QIODevice::WriteOnly | QIODevice::Append)) {
-                chunk.file = file;
+            if (!startChunkRequest(chunk)) {
+                downloading = false;
+                cleanupChunks();
+                return;
             }
-
-            QNetworkReply* reply = nam->get(request);
-            chunk.reply = reply;
-
-            connect(reply, &QNetworkReply::readyRead, this, &ChunkedDownloader::onChunkReadyRead);
-            connect(reply, &QNetworkReply::finished, this, &ChunkedDownloader::onChunkFinished);
-            connect(reply, &QNetworkReply::errorOccurred, this, &ChunkedDownloader::onChunkError);
         }
     }
 
@@ -676,7 +948,7 @@ void ChunkedDownloader::resumeFromState(const QString& url, const QString& fileP
 
     downloadUrl = url;
     saveFilePath = filePath;
-    totalChunks = numChunks;
+    totalChunks = qBound(1, numChunks, 128);
     downloadId = id;
     totalBytes = totalSize;
     supportsRange = range;
@@ -687,11 +959,22 @@ void ChunkedDownloader::resumeFromState(const QString& url, const QString& fileP
 
     resetThrottleState();
 
-    // If the target already exists and is complete, this download finished
-    // before the app stopped; just report it done and drop the stale state.
-    if (QFile::exists(saveFilePath) && totalBytes > 0 && QFileInfo(saveFilePath).size() >= totalBytes) {
+    // Validators recorded when the download first ran: If-Range on the resumed
+    // requests makes the server refuse (200 OK) if the remote file changed, so
+    // stale chunks can never be extended with bytes from a different file.
+    QJsonObject state = readPersistedState(downloadId);
+    respEtag = state.value("etag").toString();
+    respLastModified = state.value("lastModified").toString();
+    attachingIfRange = true;
+    pendingRangeViolation = false;
+    rangeViolationRestarted = false;
+    forceNoRange = false;
+
+    // If the target already exists and is EXACTLY complete, this download
+    // finished before the app stopped. Anything else (short OR oversized) is
+    // not a verified result and must not be reported as done.
+    if (QFile::exists(saveFilePath) && totalBytes > 0 && QFileInfo(saveFilePath).size() == totalBytes) {
         cleanupTempFiles();
-        QFile::remove(resumeStatePath());
         emit downloadProgress(id, totalBytes, totalBytes);
         emit downloadFinished(id);
         downloading = false;
@@ -719,47 +1002,42 @@ void ChunkedDownloader::resumeFromState(const QString& url, const QString& fileP
         chunk.startByte = i * chunkSize;
         chunk.endByte = (i == totalChunks - 1) ? (totalBytes - 1) : ((i + 1) * chunkSize - 1);
 
-        // Recover how much of this chunk was written before the app stopped and
-        // reopen the file in append so new data continues where it left off.
-        chunk.downloaded = 0;
+        // Recover how much of this chunk was written before the app stopped.
+        // A file LARGER than its range means the on-disk data is not what the
+        // range promised (interrupted write under a different layout, or a
+        // corrupted/trimmed file): restart that chunk from scratch instead of
+        // appending to bytes that cannot be part of a valid result.
+        qint64 expected = chunk.endByte - chunk.startByte + 1;
+        qint64 onDisk = 0;
         QFileInfo fi(chunkFilePath(i));
-        if (fi.exists()) {
-            chunk.downloaded = qBound<qint64>(0, fi.size(), chunk.endByte - chunk.startByte + 1);
+        if (fi.exists()) onDisk = fi.size();
+        if (onDisk > expected) {
+            Logger::instance().warning(QString("Chunk %1 on disk (%2 bytes) exceeds its range (%3 bytes); restarting that chunk")
+                                           .arg(i).arg(onDisk).arg(expected));
+            onDisk = 0;
         }
+        chunk.downloaded = onDisk;
         downloadedBytes += chunk.downloaded;
+        chunks.append(chunk);
 
-        QFile* file = new QFile(chunkFilePath(i));
-        if (!file->open(QIODevice::WriteOnly | QIODevice::Append)) {
-            emit downloadFailed(downloadId, "Cannot open chunk file for resume: " + chunkFilePath(i));
-            cleanupChunks();
+        // startChunkRequest opens the file (append when partially written,
+        // truncate for a restarted chunk) and issues the exact remaining range;
+        // complete chunks are left untouched with no reply.
+        if (!startChunkRequest(chunks.last())) {
             downloading = false;
+            cleanupChunks();
             return;
         }
-        chunk.file = file;
-
-        if (chunk.downloaded < (chunk.endByte - chunk.startByte + 1)) {
-            QNetworkRequest request{QUrl{downloadUrl}};
-            request.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
-            request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-
-            qint64 resumeFrom = chunk.startByte + chunk.downloaded;
-            QString rangeHeader = "bytes=" + QByteArray::number(resumeFrom) + "-" + QByteArray::number(chunk.endByte);
-            request.setRawHeader("Range", rangeHeader.toUtf8());
-
-            QNetworkReply* reply = nam->get(request);
-            chunk.reply = reply;
-
-            connect(reply, &QNetworkReply::readyRead, this, &ChunkedDownloader::onChunkReadyRead);
-            connect(reply, &QNetworkReply::finished, this, &ChunkedDownloader::onChunkFinished);
-            connect(reply, &QNetworkReply::errorOccurred, this, &ChunkedDownloader::onChunkError);
-        }
-
-        chunks.append(chunk);
     }
 
     if (downloadedBytes >= totalBytes) {
-        // All chunks were already fully written; just merge and finish.
-        mergeChunks();
+        // All chunks were already fully written; verify and merge them.
+        if (!mergeChunks()) {
+            emit downloadFailed(downloadId,
+                "Failed to assemble the final file: on-disk size verification failed (see log for details).");
+            downloading = false;
+            return;
+        }
         emit downloadProgress(downloadId, totalBytes, totalBytes);
         emit downloadFinished(downloadId);
         downloading = false;
@@ -799,17 +1077,35 @@ void ChunkedDownloader::persistResumeState() const {
     if (totalBytes > 0 && QFile::exists(saveFilePath) && QFileInfo(saveFilePath).size() >= totalBytes) return;
 
     QJsonObject state;
+    state["version"] = 2;
     state["url"] = downloadUrl;
     state["filePath"] = saveFilePath;
     state["chunks"] = totalChunks;
     state["totalBytes"] = QString::number(totalBytes);
     state["supportsRange"] = supportsRange;
     state["downloaded"] = QString::number(downloadedBytes);
+    // Integrity metadata for the resume: the validators let the next session
+    // send If-Range, and the per-chunk sizes record exactly what was on disk so
+    // a resume can detect a chunk that was corrupted or written past its range.
+    state["etag"] = respEtag;
+    state["lastModified"] = respLastModified;
+    {
+        QJsonArray sizes;
+        for (int i = 0; i < totalChunks; i++) {
+            QFileInfo fi(chunkFilePath(i));
+            sizes.append(QString::number(fi.exists() ? fi.size() : 0));
+        }
+        state["chunkSizes"] = sizes;
+    }
 
-    QFile f(resumeStatePath());
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
-    f.write(QJsonDocument(state).toJson(QJsonDocument::Compact));
-    f.close();
+    // QSaveFile writes a temporary and atomically renames it into place, so a
+    // crash mid-write can never leave a truncated/corrupt state file behind.
+    QSaveFile f(resumeStatePath());
+    if (!f.open(QIODevice::WriteOnly)) return;
+    if (f.write(QJsonDocument(state).toJson(QJsonDocument::Compact)) < 0) return;
+    if (!f.commit()) {
+        Logger::instance().warning("Could not write resume state atomically: " + resumeStatePath());
+    }
 }
 
 bool ChunkedDownloader::hasPersistedData(int downloadId) {

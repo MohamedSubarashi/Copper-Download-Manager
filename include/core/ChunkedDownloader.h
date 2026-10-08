@@ -14,11 +14,20 @@
 struct ChunkState {
     int index = 0;
     qint64 startByte = 0;
-    qint64 endByte = 0;
+    qint64 endByte = -1;
     qint64 downloaded = 0;
+    // Byte offset the in-flight request actually asked for (startByte +
+    // downloaded on resume); the response's Content-Range must match it.
+    qint64 requestStart = -1;
+    // Whether the in-flight request carried a Range header; only then does a
+    // 206 + exact Content-Range contract exist to validate.
+    bool requestedRange = false;
     QNetworkReply* reply = nullptr;
     QFile* file = nullptr;
     bool error = false;
+    // Set once the response headers of the in-flight request have been checked
+    // (206 + exact Content-Range); no body byte is consumed before that.
+    bool responseValidated = false;
     QString errorMessage;
 };
 
@@ -67,12 +76,14 @@ private slots:
 
 private:
     void setupChunks(qint64 totalSize);
-    void startChunkRequests(const QString& url, const QString& filePath, int id);
-    void mergeChunks();
+    bool startChunkRequest(ChunkState& chunk);
+    bool validateChunkResponse(ChunkState& chunk);
+    bool mergeChunks();
     void cleanupChunks();
     void cleanupTempFiles();
-    QString chunkFilePath(int index);
+    QString chunkFilePath(int index) const;
     QString resumeStatePath() const;
+    QNetworkRequest buildChunkRequest(qint64 fromByte, qint64 toByte) const;
     void checkFallbackReply(QNetworkReply* reply);
     QString extractFilenameFromContentDisposition(const QByteArray& header);
     QString extractUrlFromHtml(const QByteArray& html);
@@ -89,6 +100,18 @@ private:
     bool paused;
     bool cancelled;
     bool supportsRange;
+    // Validators from the HEAD/fallback response, sent as If-Range on resumed
+    // requests so a remote file that changed between sessions cannot be
+    // silently appended to stale partial chunks (the server answers 200 OK,
+    // which the response validation treats as a range violation).
+    QString respEtag;
+    QString respLastModified;
+    bool pendingRangeViolation = false;   // a 200-for-ranged response arrived
+    bool rangeViolationRestarted = false; // the one clean restart was consumed
+    bool forceNoRange = false;            // learned: server ignores Range headers
+    // Attach If-Range validators to chunk requests (resume paths only, where
+    // stale partial data exists); fresh downloads must not send it.
+    bool attachingIfRange = false;
     qint64 totalBytes;
     qint64 downloadedBytes;
     qint64 lastSpeedBytes;

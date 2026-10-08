@@ -18,6 +18,7 @@
 #include <QFont>
 #include <QGroupBox>
 #include <QTextBrowser>
+#include <QPointer>
 
 DownloadManagerDialog::DownloadManagerDialog(SourceType sourceType, const QString& url, const QString& path, QWidget* parent)
     : QDialog(parent), sourceType(sourceType), url(url), defaultPath(path) {
@@ -182,8 +183,14 @@ void DownloadManagerDialog::fetchFiles() {
             && su.path().endsWith(".torrent", Qt::CaseInsensitive);
         if (isRemote) {
             statusLabel->setText("Downloading torrent metadata...");
+            // QPointer guard: the dialog is often stack-allocated inside
+            // exec(); if it is destroyed while this fetch is in flight the
+            // manager singleton still invokes the callback (it outlives the
+            // dialog), so touching members would be a use-after-free.
+            QPointer<DownloadManagerDialog> self(this);
             Aria2cManager::instance().resolveTorrentSource(url,
-                [this, isRemote](const QString& localPath, const QString& err) {
+                [this, isRemote, self](const QString& localPath, const QString& err) {
+                if (!self) return;
                 if (localPath.isEmpty()) {
                     statusLabel->setText(err.isEmpty() ? "Failed to load torrent." : err);
                     downloadBtn->setEnabled(false);
@@ -204,7 +211,9 @@ void DownloadManagerDialog::fetchFiles() {
                 "yt-dlp is not installed. It will be downloaded automatically when you fetch — "
                 "this can take a moment the first time.");
         }
-        YtDlpManager::instance().fetchPlaylistInfo(url, [this](const QVector<PlaylistEntry>& fetchedEntries) {
+        QPointer<DownloadManagerDialog> self(this);
+        YtDlpManager::instance().fetchPlaylistInfo(url, [this, self](const QVector<PlaylistEntry>& fetchedEntries) {
+            if (!self) return;
             entries = fetchedEntries;
             if (entries.isEmpty()) {
                 statusLabel->setText(
@@ -222,8 +231,10 @@ void DownloadManagerDialog::fetchFiles() {
 }
 
 void DownloadManagerDialog::fetchTorrentFileListFrom(const QString& source) {
+    QPointer<DownloadManagerDialog> self(this);
     Aria2cManager::instance().fetchTorrentFiles(source,
-        [this](const QVector<PlaylistEntry>& fetchedEntries, const TorrentInfo& info) {
+        [this, self](const QVector<PlaylistEntry>& fetchedEntries, const TorrentInfo& info) {
+        if (!self) return;
         entries = fetchedEntries;
         torrentInfo = info;
         showFileList(entries);
