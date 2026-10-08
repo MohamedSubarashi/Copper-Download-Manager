@@ -13,6 +13,8 @@
 #include "core/PipeServer.h"
 #include "core/DownloadManager.h"
 #include "utils/NativeMessaging.h"
+#include "utils/ApiToken.h"
+#include "copper_version.h"
 #include <QApplication>
 #include <QDir>
 #include <QDesktopServices>
@@ -39,11 +41,45 @@ extern "C" typedef USHORT (WINAPI *RtlCaptureStackBackTraceFn)(ULONG, ULONG, PVO
 
 namespace {
 
+// Log path captured at startup from Logger (test profiles and redirected log
+// dirs move it away from the hardcoded APPDATA fallback below).
+static char g_crashLogPath[1024] = {0};
+
+void crashLogSetPath(const char* path) {
+    if (path && path[0]) {
+        std::snprintf(g_crashLogPath, sizeof(g_crashLogPath), "%s", path);
+    }
+}
+
+// Create every parent directory of filePath using kernel32 only. This runs
+// inside an exception filter, where Qt (and any lock it might be holding on
+// the crashing thread) must be avoided. Without this, fopen() silently fails
+// whenever the log directory does not exist yet - which is exactly what
+// happened on a redirected test profile: the whole crash report was lost.
+void crashLogEnsureDir(const char* filePath) {
+    char dir[1024];
+    std::snprintf(dir, sizeof(dir), "%s", filePath);
+    size_t len = std::strlen(dir);
+    for (size_t i = 3; i < len; ++i) {  // keep the "C:\" drive prefix intact
+        if (dir[i] == '\\' || dir[i] == '/') {
+            char save = dir[i];
+            dir[i] = '\0';
+            CreateDirectoryA(dir, nullptr);
+            dir[i] = save;
+        }
+    }
+}
+
 void crashLog(const char* msg) {
-    const char* path = getenv("APPDATA");
-    if (!path) return;
     char full[1024];
-    std::snprintf(full, sizeof(full), "%s\\Copper\\Copper Download Manager\\copper.log", path);
+    if (g_crashLogPath[0]) {
+        std::snprintf(full, sizeof(full), "%s", g_crashLogPath);
+    } else {
+        const char* path = getenv("APPDATA");
+        if (!path) return;
+        std::snprintf(full, sizeof(full), "%s\\Copper\\Copper Download Manager\\copper.log", path);
+    }
+    crashLogEnsureDir(full);
     FILE* f = fopen(full, "a");
     if (!f) return;
     fprintf(f, "[CRASH] %s\n", msg);
@@ -114,7 +150,11 @@ static bool isRunningInstance() {
     socket.connectToHost("127.0.0.1", port);
     if (!socket.waitForConnected(2000)) return false;
     QString host = "127.0.0.1:" + QString::number(port);
-    socket.write("GET /api/ping HTTP/1.1\r\nHost: " + host.toUtf8() + "\r\nConnection: close\r\n\r\n");
+    // The running instance requires the install-scoped API token (0.4.0): an
+    // unauthenticated probe would get 401 and be misread as "not running".
+    socket.write("GET /api/ping HTTP/1.1\r\nHost: " + host.toUtf8() +
+                 "\r\nX-Copper-Token: " + ApiToken::token().toLatin1() +
+                 "\r\nConnection: close\r\n\r\n");
     socket.waitForBytesWritten(2000);
     socket.waitForReadyRead(2000);
     QByteArray response = socket.readAll();
@@ -133,11 +173,13 @@ static bool sendToRunningInstance(const QString& arg) {
     obj["argument"] = arg;
     QByteArray body = QJsonDocument(obj).toJson(QJsonDocument::Compact);
     QString host = "127.0.0.1:" + QString::number(port);
+    QByteArray tokenHeader = "X-Copper-Token: " + ApiToken::token().toLatin1() + "\r\n";
 
     QByteArray request = "POST /api/forward HTTP/1.1\r\n"
                          "Host: " + host.toUtf8() + "\r\n"
                          "Content-Type: application/json\r\n"
                          "Content-Length: " + QByteArray::number(body.size()) + "\r\n"
+                         + tokenHeader +
                          "Connection: close\r\n"
                          "\r\n" + body;
 
@@ -158,11 +200,13 @@ static bool sendShowToRunningInstance() {
     obj["argument"] = "show";
     QByteArray body = QJsonDocument(obj).toJson(QJsonDocument::Compact);
     QString host = "127.0.0.1:" + QString::number(port);
+    QByteArray tokenHeader = "X-Copper-Token: " + ApiToken::token().toLatin1() + "\r\n";
 
     QByteArray request = "POST /api/forward HTTP/1.1\r\n"
                          "Host: " + host.toUtf8() + "\r\n"
                          "Content-Type: application/json\r\n"
                          "Content-Length: " + QByteArray::number(body.size()) + "\r\n"
+                         + tokenHeader +
                          "Connection: close\r\n"
                          "\r\n" + body;
 
@@ -180,12 +224,31 @@ int main(int argc, char* argv[]) {
 
     QApplication app(argc, argv);
     app.setApplicationName("Copper Download Manager");
-    app.setApplicationVersion("0.3.1");
+    app.setApplicationVersion(QStringLiteral(COPPER_VERSION_STRING));
     app.setOrganizationName("Copper");
+
+    // Test isolation: --test-profile redirects every QStandardPaths location
+    // (database, logs, tools, settings) to Qt's test-mode directories BEFORE
+    // Logger/DatabaseManager first touch them. The integration suite passes
+    // this flag so each run starts from a clean profile instead of mutating the
+    // developer's real download history and inheriting its settings (persisted
+    // User-Agent, yt-dlp tool cache, leftover rows). Must stay first: the
+    // Logger singleton captures the log path at first use below.
+    for (int i = 1; i < argc; ++i) {
+        if (qstrcmp(argv[i], "--test-profile") == 0) {
+            QStandardPaths::setTestModeEnabled(true);
+            break;
+        }
+    }
 
     Logger::instance().info("========================================");
     Logger::instance().info("Copper Download Manager v" + app.applicationVersion());
     Logger::instance().info("========================================");
+#ifdef _WIN32
+    // The crash handler writes through raw FILE*, not the Logger, so it needs
+    // the resolved path (test mode redirects it) captured once, up front.
+    crashLogSetPath(Logger::instance().getLogFilePath().toLocal8Bit().constData());
+#endif
 
     DatabaseManager::instance().init();
 
@@ -218,6 +281,11 @@ int main(int argc, char* argv[]) {
         QString arg = QString::fromLocal8Bit(argv[i]);
         if (arg == "--minimized") {
             startMinimized = true;
+            continue;
+        }
+        if (arg == "--test-profile") {
+            // Consumed before the Logger started (see above). It must never be
+            // treated as a URL or forwarded to an already-running instance.
             continue;
         }
         if (arg == "--register-native-extension" && (i + 2) < argc) {

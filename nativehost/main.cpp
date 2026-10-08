@@ -127,7 +127,15 @@ QJsonObject exchangeWithApp(const QJsonObject& request) {
     // nobody is listening, to avoid racing/duplicate-launching the GUI app.
     auto socket = tryConnect(400);
     if (!socket) {
-        QProcess::startDetached(app, QStringList());
+        // Test-mode propagation: when the harness runs with
+        // COPPER_TEST_PROFILE=1, any instance we launch must also use
+        // --test-profile, otherwise it starts against the developer's real
+        // profile (real DB/settings) and contaminates the test run.
+        QStringList launchArgs;
+        if (qEnvironmentVariableIsSet("COPPER_TEST_PROFILE")) {
+            launchArgs << QStringLiteral("--test-profile");
+        }
+        QProcess::startDetached(app, launchArgs);
         // Give the freshly launched app time to bring up its pipe server.
         for (int i = 0; i < 60 && !socket; ++i) {
             QThread::msleep(250);
@@ -233,6 +241,24 @@ int main(int argc, char* argv[]) {
         req["browser"] = msg["browser"].toString();
         req["extensionId"] = msg["extensionId"].toString();
         writeMessage(exchangeWithApp(req));
+        return 0;
+    }
+
+    if (action == "getToken") {
+        // Hand the extension the local API token (0.4.0) so its localhost
+        // calls can authenticate. Read straight from the shared host config -
+        // the same file ApiToken persists to - so no app round-trip is needed
+        // and the token never crosses the network.
+        QFile cfg(NativeMessaging::hostConfigPath());
+        if (cfg.open(QIODevice::ReadOnly)) {
+            const QJsonObject obj = QJsonDocument::fromJson(cfg.readAll()).object();
+            const QString token = obj.value("apiToken").toString();
+            if (!token.isEmpty()) {
+                writeMessage({{"ok", true}, {"token", token}});
+                return 0;
+            }
+        }
+        writeMessage({{"ok", false}, {"error", "no API token yet - start Copper once"}});
         return 0;
     }
 

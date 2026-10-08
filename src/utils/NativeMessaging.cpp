@@ -1,4 +1,5 @@
 ﻿#include "utils/NativeMessaging.h"
+#include "utils/ApiToken.h"
 #include "utils/Logger.h"
 #include <QCoreApplication>
 #include <QDir>
@@ -8,6 +9,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSaveFile>
 #include <QSettings>
 
 #ifdef PLATFORM_WINDOWS
@@ -158,8 +160,23 @@ bool NativeMessaging::writeHostConfig() {
     const QString host = hostExePath();
     QFileInfo fi(host);
 
+    const QString configPath = hostConfigPath();
+
+    // Merge into whatever is already there: ApiToken may have written the
+    // apiToken key first, and a full rewrite must not drop keys written by
+    // another code path (or vice versa).
     QJsonObject cfg;
+    {
+        QFile in(configPath);
+        if (in.open(QIODevice::ReadOnly)) {
+            const QJsonObject existing = QJsonDocument::fromJson(in.readAll()).object();
+            if (!existing.isEmpty()) cfg = existing;
+        }
+    }
     cfg["copperExecutable"] = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
+    // Hand the local API token to the native host: the extension asks the host
+    // for it (action "getToken") and attaches it to its localhost API calls.
+    cfg["apiToken"] = ApiToken::token();
 
     QVariantMap out;
 
@@ -170,16 +187,20 @@ bool NativeMessaging::writeHostConfig() {
     reg.setValue("HostPath", fi.absolutePath());
 #endif
 
-    const QString configPath = hostConfigPath();
     QFileInfo cf(configPath);
     QDir().mkpath(cf.absolutePath());
-    QFile f(configPath);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+    // Atomic replace: the native host reads this file at browser startup, so
+    // it must never observe a half-written document.
+    QSaveFile f(configPath);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         Logger::instance().error("NativeMessaging: cannot write host config to " + configPath);
         return false;
     }
     f.write(QJsonDocument(cfg).toJson(QJsonDocument::Indented));
-    f.close();
+    if (!f.commit()) {
+        Logger::instance().error("NativeMessaging: cannot commit host config to " + configPath);
+        return false;
+    }
     Logger::instance().info("NativeMessaging: wrote host config to " + configPath);
     return true;
 }

@@ -1,5 +1,6 @@
 #include "core/LocalServer.h"
 #include "core/DownloadManager.h"
+#include "utils/ApiToken.h"
 #include "utils/Logger.h"
 #include "utils/FileNameSanitizer.h"
 #include "utils/UrlDetector.h"
@@ -7,7 +8,31 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QCoreApplication>
+#include <QRegularExpression>
 #include <QStandardPaths>
+#include <QPointer>
+
+namespace {
+// Local API request caps. A misbehaving or hostile local client must not be
+// able to make the server buffer unbounded data before it gets a refusal:
+// the request head is bounded (headers), JSON bodies are bounded (413).
+constexpr int kMaxHeaderBytes = 64 * 1024;
+constexpr qint64 kMaxBodyBytes = 1024 * 1024;  // real bodies are a few KB
+
+QByteArray reasonPhrase(int statusCode) {
+    switch (statusCode) {
+        case 200: return "OK";
+        case 204: return "No Content";
+        case 400: return "Bad Request";
+        case 401: return "Unauthorized";
+        case 403: return "Forbidden";
+        case 404: return "Not Found";
+        case 413: return "Payload Too Large";
+        case 431: return "Request Header Fields Too Large";
+        default: return "Error";
+    }
+}
+}  // namespace
 
 LocalServer::LocalServer() : server(new QTcpServer(this)), serverPort(24680) {}
 
@@ -22,6 +47,11 @@ bool LocalServer::start(int port) {
     if (server->isListening()) {
         server->close();
     }
+
+    // Mint/persist the local API token BEFORE the port opens: a second app
+    // instance (or the native host) authenticates by reading the token from
+    // the shared config, and it must exist by the time anyone can connect.
+    ApiToken::token();
 
     if (!server->listen(QHostAddress::LocalHost, port)) {
         Logger::instance().error("LocalServer: Failed to start on port " + QString::number(port) + ": " + server->errorString());
@@ -63,63 +93,98 @@ void LocalServer::handleConnection(QTcpSocket* socket) {
     // "Invalid JSON".
     connect(socket, &QTcpSocket::readyRead, this, [this, socket]() {
         ConnState& state = m_conns[socket];
+
+        if (state.processed) {
+            // After an early 413, keep draining the refused body instead of
+            // stopping the read: closing while the client is still sending
+            // makes Windows reset the connection and the client would never
+            // see the status line it is waiting for.
+            if (state.discardRemaining > 0) {
+                state.discardRemaining -= socket->readAll().size();
+                if (state.discardRemaining <= 0 && socket->state() == QAbstractSocket::ConnectedState) {
+                    socket->disconnectFromHost();
+                }
+            }
+            return;
+        }
+
         state.buffer += socket->readAll();
 
-        if (state.processed) return;
-        if (!state.buffer.contains("\r\n\r\n")) return;
+        if (!state.buffer.contains("\r\n\r\n")) {
+            // Header-accumulation cap: a client that never terminates its
+            // headers must not be able to grow this buffer without bound.
+            if (state.buffer.size() > kMaxHeaderBytes) {
+                state.processed = true;
+                sendJsonResponse(QPointer<QTcpSocket>(socket), 431,
+                                 {{"error", "Request header fields too large"}});
+            }
+            return;
+        }
 
         int headerEnd = state.buffer.indexOf("\r\n\r\n");
+        if (headerEnd > kMaxHeaderBytes) {
+            // Same cap on the completed head: a valid-but-huge header block is
+            // refused before any of it is parsed.
+            state.processed = true;
+            sendJsonResponse(QPointer<QTcpSocket>(socket), 431,
+                             {{"error", "Request header fields too large"}});
+            return;
+        }
         QByteArray header = state.buffer.left(headerEnd);
 
         qint64 contentLength = -1;
-        QString headerText = QString::fromLatin1(header);
-        for (const QString& line : headerText.split("\r\n")) {
+        QString origin;
+        QString apiToken;
+        const QStringList lines = QString::fromLatin1(header).split("\r\n");
+        for (const QString& line : lines) {
             if (line.startsWith("Content-Length:", Qt::CaseInsensitive)) {
                 bool ok = false;
                 contentLength = line.mid(15).trimmed().toLongLong(&ok);
                 if (!ok) contentLength = -1;
-                break;
+            } else if (line.startsWith("Origin:", Qt::CaseInsensitive)) {
+                origin = line.mid(7).trimmed();
+            } else if (line.startsWith("X-Copper-Token:", Qt::CaseInsensitive)) {
+                apiToken = line.mid(16).trimmed();
             }
         }
 
-        qint64 bodyAvailable = state.buffer.size() - headerEnd - 4;
-        if (bodyAvailable < contentLength) return;
+        const qint64 bodyAvailable = state.buffer.size() - headerEnd - 4;
+
+        // Body cap: refuse BEFORE buffering an oversized payload, then keep
+        // reading and dropping what the client already committed to sending so
+        // the 413 is actually delivered instead of a connection reset.
+        if (contentLength > kMaxBodyBytes) {
+            state.processed = true;
+            state.discardRemaining = contentLength - bodyAvailable;
+            if (state.discardRemaining < 0) state.discardRemaining = 0;
+            sendJsonResponse(QPointer<QTcpSocket>(socket), 413,
+                             {{"error", "Request body too large"}},
+                             QString(), state.discardRemaining == 0);
+            return;
+        }
+
+        if (bodyAvailable < contentLength) return;  // wait for the rest
 
         state.processed = true;
 
-        QString request = headerText;
-        QStringList lines = headerText.split("\r\n");
         if (lines.isEmpty()) {
             socket->disconnectFromHost();
             return;
         }
 
-        QStringList requestLine = lines[0].split(" ");
+        const QStringList requestLine = lines[0].split(" ");
         if (requestLine.size() < 2) {
             socket->disconnectFromHost();
             return;
         }
 
-        QString method = requestLine[0];
-        QString path = requestLine[1];
+        const QString method = requestLine[0];
+        const QString path = requestLine[1];
 
-        QString origin;
-        for (int i = 1; i < lines.size(); i++) {
-            if (lines[i].startsWith("Origin:", Qt::CaseInsensitive)) {
-                origin = lines[i].mid(7).trimmed();
-                break;
-            }
-        }
+        QByteArray body = state.buffer.mid(headerEnd + 4);
+        if (contentLength >= 0) body = body.left(contentLength);
 
-        QByteArray body;
-        if (headerEnd >= 0) {
-            body = state.buffer.mid(headerEnd + 4);
-            if (contentLength >= 0) {
-                body = body.left(contentLength);
-            }
-        }
-
-        handleRequest(socket, method, path, body, origin);
+        handleRequest(socket, method, path, body, origin, apiToken);
     });
 
     connect(socket, &QTcpSocket::disconnected, this, [this, socket]() {
@@ -130,15 +195,34 @@ void LocalServer::handleConnection(QTcpSocket* socket) {
 
 bool LocalServer::isAllowedOrigin(const QString& origin) const {
     if (origin.isEmpty()) return true;  // non-browser local client (curl, native tests)
-    return origin.startsWith("chrome-extension://") || origin.startsWith("moz-extension://");
+    // Exact allowlist, not a prefix match: the Origin must be a syntactically
+    // valid browser-extension origin. startsWith() accepted any string that
+    // merely began with the scheme ("chrome-extension://anything"), which is
+    // exactly the kind of loose check that later gets relied on for more than
+    // it can deliver. Chromium/Edge extension IDs are 32 characters in a-p
+    // (hex letters mapped from the key hash); Firefox's are UUIDs.
+    static const QRegularExpression chromeExtensionRe(
+        QStringLiteral("^chrome-extension://[a-p]{32}$"));
+    static const QRegularExpression mozExtensionRe(QStringLiteral(
+        "^moz-extension://[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+        "-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"));
+    return chromeExtensionRe.match(origin).hasMatch() ||
+           mozExtensionRe.match(origin).hasMatch();
 }
 
-void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const QString& path, const QByteArray& body, const QString& origin) {
+void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const QString& path, const QByteArray& body,
+                                const QString& origin, const QString& apiToken) {
     Logger::instance().info("LocalServer: " + method + " " + path);
+
+    // Take the guard while the socket is known alive (this handler only runs
+    // from the socket's own readyRead). Emitted signals below can open modal UI
+    // whose nested event loop lets this client disconnect and its socket be
+    // deleted; sendJsonResponse then checks the guard instead of crashing.
+    const QPointer<QTcpSocket> guard(socket);
 
     if (!isAllowedOrigin(origin)) {
         Logger::instance().warning("LocalServer: rejected request from disallowed origin: " + origin);
-        sendJsonResponse(socket, 403, {{"error", "Forbidden"}});
+        sendJsonResponse(guard, 403, {{"error", "Forbidden"}});
         return;
     }
 
@@ -151,7 +235,7 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
             response += "Access-Control-Allow-Origin: " + allowedOrigin.toUtf8() + "\r\n";
         }
         response += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
-        response += "Access-Control-Allow-Headers: Content-Type\r\n";
+        response += "Access-Control-Allow-Headers: Content-Type, X-Copper-Token\r\n";
         response += "Access-Control-Max-Age: 3600\r\n";
         response += "Connection: close\r\n";
         response += "\r\n";
@@ -161,11 +245,25 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         return;
     }
 
+    // Local API token (0.4.0): every non-OPTIONS request must prove it was
+    // made by a Copper component that could read the shared config file. A web
+    // page cannot read it (same-origin policy), and a preflighted cross-origin
+    // request cannot smuggle this header without the Allow-Headers above - so
+    // this, together with the exact Origin allowlist, is what turns the local
+    // API from "anything on the machine" into "only Copper itself".
+    if (!ApiToken::matches(apiToken)) {
+        Logger::instance().warning("LocalServer: rejected request without a valid API token (" +
+                                   method + " " + path + ", origin: " +
+                                   (origin.isEmpty() ? QStringLiteral("<none>") : origin) + ")");
+        sendJsonResponse(guard, 401, {{"error", "Unauthorized"}}, allowedOrigin);
+        return;
+    }
+
     if (path == "/api/ping" && method == "GET") {
         QJsonObject json;
         json["status"] = "ok";
         json["version"] = QCoreApplication::applicationVersion();
-        sendJsonResponse(socket, 200, json, allowedOrigin);
+        sendJsonResponse(guard, 200, json, allowedOrigin);
         return;
     }
 
@@ -174,7 +272,7 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         json["name"] = "Copper Download Manager";
         json["version"] = QCoreApplication::applicationVersion();
         json["status"] = "running";
-        sendJsonResponse(socket, 200, json, allowedOrigin);
+        sendJsonResponse(guard, 200, json, allowedOrigin);
         return;
     }
 
@@ -186,14 +284,14 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         for (const QString& s : DownloadManager::instance().excludeFileFormats()) exc.append(s);
         json["include"] = inc;
         json["exclude"] = exc;
-        sendJsonResponse(socket, 200, json, allowedOrigin);
+        sendJsonResponse(guard, 200, json, allowedOrigin);
         return;
     }
 
     if (path == "/api/download" && method == "POST") {
         QJsonDocument doc = QJsonDocument::fromJson(body);
         if (!doc.isObject()) {
-            sendJsonResponse(socket, 400, {{"error", "Invalid JSON"}}, allowedOrigin);
+            sendJsonResponse(guard, 400, {{"error", "Invalid JSON"}}, allowedOrigin);
             return;
         }
 
@@ -204,11 +302,11 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         QString format = obj["format"].toString();
 
         if (url.isEmpty()) {
-            sendJsonResponse(socket, 400, {{"error", "URL is required"}}, allowedOrigin);
+            sendJsonResponse(guard, 400, {{"error", "URL is required"}}, allowedOrigin);
             return;
         }
         if (!url.startsWith("http") && !url.startsWith("ftp") && !url.startsWith("magnet:?")) {
-            sendJsonResponse(socket, 400, {{"error", "Unsupported URL scheme"}}, allowedOrigin);
+            sendJsonResponse(guard, 400, {{"error", "Unsupported URL scheme"}}, allowedOrigin);
             return;
         }
 
@@ -238,19 +336,20 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         }
 
         if (id < 0) {
-            sendJsonResponse(socket, 400, {{"error", "Blocked by download file-format filter"}}, allowedOrigin);
+            sendJsonResponse(guard, 400, {{"error", "Blocked by download file-format filter"}}, allowedOrigin);
             return;
         }
-
-        // Raise the main window so the new download is immediately visible.
-        emit argumentForwarded("show");
 
         QJsonObject response;
         response["success"] = true;
         response["id"] = id;
         response["message"] = "Download added successfully";
-        sendJsonResponse(socket, 200, response, allowedOrigin);
+        // Respond BEFORE emitting: argumentForwarded can open modal UI (a
+        // nested event loop) during which this client may disconnect and its
+        // socket be destroyed - the reply must be written while it is alive.
+        sendJsonResponse(guard, 200, response, allowedOrigin);
 
+        emit argumentForwarded("show");
         emit downloadRequested(url, filename, savePath);
         return;
     }
@@ -258,7 +357,7 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
     if (path == "/api/torrent" && method == "POST") {
         QJsonDocument doc = QJsonDocument::fromJson(body);
         if (!doc.isObject()) {
-            sendJsonResponse(socket, 400, {{"error", "Invalid JSON"}}, allowedOrigin);
+            sendJsonResponse(guard, 400, {{"error", "Invalid JSON"}}, allowedOrigin);
             return;
         }
 
@@ -267,11 +366,11 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         QString savePath = obj["path"].toString();
 
         if (url.isEmpty()) {
-            sendJsonResponse(socket, 400, {{"error", "URL is required"}}, allowedOrigin);
+            sendJsonResponse(guard, 400, {{"error", "URL is required"}}, allowedOrigin);
             return;
         }
         if (!url.startsWith("http") && !url.startsWith("magnet:?")) {
-            sendJsonResponse(socket, 400, {{"error", "Unsupported URL scheme"}}, allowedOrigin);
+            sendJsonResponse(guard, 400, {{"error", "Unsupported URL scheme"}}, allowedOrigin);
             return;
         }
 
@@ -285,14 +384,14 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         response["success"] = true;
         response["id"] = id;
         response["message"] = "Torrent download added";
-        sendJsonResponse(socket, 200, response, allowedOrigin);
+        sendJsonResponse(guard, 200, response, allowedOrigin);
         return;
     }
 
     if (path == "/api/forward" && method == "POST") {
         QJsonDocument doc = QJsonDocument::fromJson(body);
         if (!doc.isObject()) {
-            sendJsonResponse(socket, 400, {{"error", "Invalid JSON"}}, allowedOrigin);
+            sendJsonResponse(guard, 400, {{"error", "Invalid JSON"}}, allowedOrigin);
             return;
         }
 
@@ -300,17 +399,23 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         QString argument = obj["argument"].toString();
 
         if (argument.isEmpty()) {
-            sendJsonResponse(socket, 400, {{"error", "Argument is required"}}, allowedOrigin);
+            sendJsonResponse(guard, 400, {{"error", "Argument is required"}}, allowedOrigin);
             return;
         }
 
         Logger::instance().info("Forward received: " + argument.left(100));
-        emit argumentForwarded(argument);
 
+        // Respond BEFORE emitting argumentForwarded: its slot (e.g. the torrent
+        // file picker) runs a modal nested event loop for as long as it takes,
+        // during which this client may disconnect and its socket be destroyed.
+        // Sending first guarantees the reply is written while the socket is
+        // still alive - replying afterwards was a use-after-free crash.
         QJsonObject response;
         response["success"] = true;
         response["message"] = "Argument forwarded";
-        sendJsonResponse(socket, 200, response, allowedOrigin);
+        sendJsonResponse(guard, 200, response, allowedOrigin);
+
+        emit argumentForwarded(argument);
         return;
     }
 
@@ -364,25 +469,31 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         QJsonObject response;
         response["downloads"] = downloadsArray;
         response["count"] = downloads.size();
-        sendJsonResponse(socket, 200, response, allowedOrigin);
+        sendJsonResponse(guard, 200, response, allowedOrigin);
         return;
     }
 
-    sendJsonResponse(socket, 404, {{"error", "Not found"}}, allowedOrigin);
+    sendJsonResponse(guard, 404, {{"error", "Not found"}}, allowedOrigin);
 }
 
-void LocalServer::sendJsonResponse(QTcpSocket* socket, int statusCode, const QJsonObject& json, const QString& origin) {
-    if (!socket) return;
+void LocalServer::sendJsonResponse(QPointer<QTcpSocket> socket, int statusCode, const QJsonObject& json,
+                                   const QString& origin, bool closeAfter) {
+    if (!socket) {
+        // The client went away while the handler was suspended (modal event
+        // loop inside an emitted signal); dropping the reply is the safe path.
+        Logger::instance().info("Response dropped: client closed the connection before the reply was sent");
+        return;
+    }
     if (socket->state() != QAbstractSocket::ConnectedState) return;
     QByteArray body = QJsonDocument(json).toJson(QJsonDocument::Compact);
     QByteArray response;
-    response += "HTTP/1.1 " + QByteArray::number(statusCode) + " OK\r\n";
+    response += "HTTP/1.1 " + QByteArray::number(statusCode) + " " + reasonPhrase(statusCode) + "\r\n";
     response += "Content-Type: application/json\r\n";
     if (!origin.isEmpty()) {
         response += "Access-Control-Allow-Origin: " + origin.toUtf8() + "\r\n";
     }
     response += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
-    response += "Access-Control-Allow-Headers: Content-Type\r\n";
+    response += "Access-Control-Allow-Headers: Content-Type, X-Copper-Token\r\n";
     response += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";
     response += "Connection: close\r\n";
     response += "\r\n";
@@ -390,10 +501,10 @@ void LocalServer::sendJsonResponse(QTcpSocket* socket, int statusCode, const QJs
 
     socket->write(response);
     socket->flush();
-    socket->disconnectFromHost();
+    if (closeAfter) socket->disconnectFromHost();
 }
 
-void LocalServer::sendHtmlResponse(QTcpSocket* socket, int statusCode, const QString& html) {
+void LocalServer::sendHtmlResponse(QPointer<QTcpSocket> socket, int statusCode, const QString& html) {
     if (!socket) return;
     if (socket->state() != QAbstractSocket::ConnectedState) return;
     QByteArray body = html.toUtf8();
