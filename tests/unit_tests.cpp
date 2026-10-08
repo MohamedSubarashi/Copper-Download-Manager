@@ -75,7 +75,13 @@ void CopperUnitTests::sha256Hex_knownVector() {
 
 void CopperUnitTests::manifest_hasPins() {
     QVERIFY2(DependencyVerifier::hasPin("aria2"), "aria2 pin missing from :/dependencies.json");
+    // ffmpeg's entry is keyed per platform and dependencies.json ships a
+    // windows pin only, so the assertion follows the platform.
+#ifdef Q_OS_WIN
     QVERIFY2(DependencyVerifier::hasPin("ffmpeg"), "ffmpeg pin missing from :/dependencies.json");
+#else
+    QVERIFY(!DependencyVerifier::hasPin("ffmpeg"));
+#endif
     QVERIFY(!DependencyVerifier::hasPin("no-such-tool"));
 }
 

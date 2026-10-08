@@ -66,11 +66,14 @@ jobs:
         shell: bash
         run: |
           # QTest's console output does not reach Actions' captured pipes on
-          # Windows Qt builds, so write the report to a file and cat it; the
-          # exit status (failure count) still gates the step.
+          # Windows Qt builds, so write the report to a file and cat it.
+          # set +e keeps a failing binary from aborting the script before the
+          # report is printed; the failure count still gates the step.
+          set +e
           ./build/copper_tests.exe -o unit_tests.log,txt
           status=$?
-          cat unit_tests.log
+          set -e
+          if [ -f unit_tests.log ]; then cat unit_tests.log; else echo "unit_tests.log not produced"; fi
           exit $status
 
       - name: Verify CRT linkage (Release only)
@@ -244,9 +247,11 @@ jobs:
 
       - name: Run unit tests
         run: |
+          set +e
           ./build/copper_tests -o unit_tests.log,txt
           status=$?
-          cat unit_tests.log
+          set -e
+          if [ -f unit_tests.log ]; then cat unit_tests.log; else echo "unit_tests.log not produced"; fi
           exit $status
 
       - name: Package .deb

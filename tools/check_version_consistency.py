@@ -131,8 +131,11 @@ def main():
     forbidden += [(v, re.escape(v)) for v in PREVIOUS_RELEASES]
     scanned = 0
     for rel in tracked_files():
-        if not re.search(r"\.(cpp|h|hpp|c|cc|rc|txt|md|iss|in|py|yml|yaml|json|"
-                         r"cmake|qrc|sh|ps1|desktop|plist|in)$", rel):
+        # Extensionless files can mirror the version too (e.g. PKGBUILD's
+        # pkgver) - match them by name, since they have no suffix to key on.
+        if os.path.basename(rel) not in ("PKGBUILD",) and not re.search(
+                r"\.(cpp|h|hpp|c|cc|rc|txt|md|iss|in|py|yml|yaml|json|"
+                r"cmake|qrc|sh|ps1|desktop|plist|in)$", rel):
             continue
         if rel == "tools/check_version_consistency.py":
             continue  # this script legitimately names the forbidden literals
