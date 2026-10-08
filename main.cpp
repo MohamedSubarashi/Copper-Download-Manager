@@ -16,6 +16,7 @@
 #include "utils/ApiToken.h"
 #include "copper_version.h"
 #include <QApplication>
+#include <QNetworkProxyFactory>
 #include <QDir>
 #include <QDesktopServices>
 #include <QUrl>
@@ -223,6 +224,11 @@ int main(int argc, char* argv[]) {
 #endif
 
     QApplication app(argc, argv);
+
+    // Honor the system proxy (WinINET/PAC) for all QNetworkAccessManager
+    // traffic; behind a corporate proxy the app previously failed every
+    // download with an opaque connection error.
+    QNetworkProxyFactory::setUseSystemConfiguration(true);
     app.setApplicationName("Copper Download Manager");
     app.setApplicationVersion(QStringLiteral(COPPER_VERSION_STRING));
     app.setOrganizationName("Copper");

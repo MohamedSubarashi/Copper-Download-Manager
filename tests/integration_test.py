@@ -481,6 +481,16 @@ def main():
         st, j = http_request(port, "GET", "/api/ping")
         check("GET /api/ping -> 200", st == 200, f"status={st}")
 
+        # --- /api/diagnostics (0.4.0 support endpoint) ---
+        st, j = http_request(port, "GET", "/api/diagnostics")
+        check("GET /api/diagnostics -> 200", st == 200, f"status={st}")
+        check("diagnostics reports app name",
+              isinstance(j, dict) and j.get("app") == "Copper Download Manager", str(j))
+        check("diagnostics reports version + schema + tool state",
+              isinstance(j, dict) and j.get("version") not in (None, "")
+              and isinstance(j.get("schemaVersion"), int)
+              and "aria2Installed" in j and "ytDlpInstalled" in j, str(j))
+
         # --- /api/downloads ---
         st, j = http_request(port, "GET", "/api/downloads")
         check("GET /api/downloads -> 200", st == 200, f"status={st}")

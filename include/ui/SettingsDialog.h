@@ -52,6 +52,7 @@ private:
     QCheckBox* autoOpenInfoCheck;
     QComboBox* seedTimeCombo;
     QLineEdit* userAgentEdit;
+    QPlainTextEdit* headersEdit;
 };
 
 #endif

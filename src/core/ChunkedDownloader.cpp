@@ -15,6 +15,7 @@
 #include <QJsonValue>
 #include <QJsonArray>
 #include <QSaveFile>
+#include <QStorageInfo>
 #include <algorithm>
 
 ChunkedDownloader::ChunkedDownloader(QObject* parent)
@@ -53,6 +54,58 @@ ChunkedDownloader::ChunkedDownloader(QObject* parent)
 ChunkedDownloader::~ChunkedDownloader() {
     cancel();
 }
+
+namespace {
+
+// Map common HTTP failures to actionable messages. Raw network strings like
+// "HostNotFoundError" or "server replied: Not Found" are opaque; a user needs
+// to know whether the link is dead, the server is broken, or they are being
+// rate-limited.
+QString classifyHttpFailure(QNetworkReply* reply) {
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    switch (status) {
+        case 401: return "The server requires authentication (401 Unauthorized).";
+        case 403: return "Access denied by the server (403 Forbidden); the link may be expired, region-blocked, or need a login.";
+        case 404: return "File not found on the server (404); the link may have expired.";
+        case 410: return "The file is no longer available (410 Gone).";
+        case 416: return "The server rejected the byte range (416); this link cannot be resumed.";
+        case 429: return "Too many requests (429); the server is rate-limiting. Retry later.";
+        case 500:
+        case 502:
+        case 503:
+        case 504:
+            return QString("Server error (%1); the remote server is having trouble. Retry later.").arg(status);
+        default: break;
+    }
+    switch (reply->error()) {
+        case QNetworkReply::TimeoutError: return "The server timed out.";
+        case QNetworkReply::ConnectionRefusedError: return "The server refused the connection.";
+        case QNetworkReply::HostNotFoundError: return "The server could not be found (DNS lookup failed).";
+        case QNetworkReply::SslHandshakeFailedError: return "The secure connection (TLS) could not be established.";
+        case QNetworkReply::ContentNotFoundError: return "File not found on the server (404).";
+        default: break;
+    }
+    return reply->errorString();
+}
+
+// User-configured extra request headers (Settings: one "Name: Value" per
+// line), applied to every request this downloader makes - e.g. a Referer or
+// an Authorization header for servers that require them. Read fresh on each
+// request so a settings change applies to the next download without a
+// restart.
+void applyCustomHeaders(QNetworkRequest& request) {
+    const QString raw = DatabaseManager::instance().getSetting("customHeaders", "");
+    if (raw.trimmed().isEmpty()) return;
+    for (const QString& line : raw.split('\n', Qt::SkipEmptyParts)) {
+        const int sep = line.indexOf(QLatin1Char(':'));
+        if (sep <= 0) continue;
+        const QString name = line.left(sep).trimmed();
+        const QString value = line.mid(sep + 1).trimmed();
+        if (!name.isEmpty()) request.setRawHeader(name.toUtf8(), value.toUtf8());
+    }
+}
+
+} // namespace
 
 QString ChunkedDownloader::extractFilenameFromContentDisposition(const QByteArray& cdHeader) {
     if (cdHeader.isEmpty()) return {};
@@ -160,6 +213,7 @@ void ChunkedDownloader::startDownload(const QString& url, const QString& filePat
     QNetworkRequest request{QUrl{url}};
     request.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    applyCustomHeaders(request);
 
     headReply = nam->head(request);
     connect(headReply, &QNetworkReply::finished, this, &ChunkedDownloader::onHeadFinished);
@@ -176,6 +230,7 @@ void ChunkedDownloader::onHeadFinished() {
         QNetworkRequest request{QUrl{downloadUrl}};
         request.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+        applyCustomHeaders(request);
 
         QNetworkReply* fallbackReply = nam->get(request);
         connect(fallbackReply, &QNetworkReply::finished, this, [this, fallbackReply]() {
@@ -234,6 +289,7 @@ void ChunkedDownloader::onHeadFinished() {
         QNetworkRequest fullRequest{QUrl{downloadUrl}};
         fullRequest.setRawHeader("User-Agent", DatabaseManager::instance().getUserAgent().toUtf8());
         fullRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+        applyCustomHeaders(fullRequest);
 
         QNetworkReply* reply = nam->get(fullRequest);
         connect(reply, &QNetworkReply::finished, this, [this, reply]() {
@@ -259,8 +315,9 @@ void ChunkedDownloader::checkFallbackReply(QNetworkReply* reply) {
     if (!reply) return;
 
     if (reply->error() != QNetworkReply::NoError) {
-        Logger::instance().error("Fallback GET failed: " + reply->errorString());
-        emit downloadFailed(downloadId, reply->errorString());
+        const QString failure = classifyHttpFailure(reply);
+        Logger::instance().error("Fallback GET failed: " + failure);
+        emit downloadFailed(downloadId, failure);
         reply->deleteLater();
         downloading = false;
         return;
@@ -360,6 +417,22 @@ void ChunkedDownloader::checkFallbackReply(QNetworkReply* reply) {
 }
 
 void ChunkedDownloader::setupChunks(qint64 totalSize) {
+    // Refuse to start a download the disk cannot hold (with a small margin):
+    // the alternative is an out-of-space failure mid-transfer after all the
+    // bandwidth was already spent.
+    if (totalSize > 0) {
+        QStorageInfo storage(saveFilePath);
+        if (storage.isValid() && storage.isReady() &&
+            storage.bytesAvailable() < totalSize + 16LL * 1024 * 1024) {
+            Logger::instance().error("Insufficient disk space for " + saveFilePath);
+            emit downloadFailed(downloadId, QString("Not enough free disk space: the file needs %1 MB but only %2 MB are available on %3.")
+                .arg((totalSize / (1024 * 1024)) + 1)
+                .arg(storage.bytesAvailable() / (1024 * 1024))
+                .arg(QFileInfo(saveFilePath).absolutePath()));
+            downloading = false;
+            return;
+        }
+    }
     chunks.clear();
 
     if (totalSize <= 0 || !supportsRange) {
@@ -421,6 +494,7 @@ QNetworkRequest ChunkedDownloader::buildChunkRequest(qint64 fromByte, qint64 toB
             }
         }
     }
+    applyCustomHeaders(request);
     return request;
 }
 
@@ -630,9 +704,10 @@ void ChunkedDownloader::onChunkFinished() {
             }
 
             if (reply->error() != QNetworkReply::NoError && reply->error() != QNetworkReply::OperationCanceledError && !chunk.error) {
-                Logger::instance().error("Chunk " + QString::number(chunk.index) + " error: " + reply->errorString());
+                const QString failure = classifyHttpFailure(reply);
+                Logger::instance().error("Chunk " + QString::number(chunk.index) + " error: " + failure);
                 chunk.error = true;
-                chunk.errorMessage = reply->errorString();
+                chunk.errorMessage = failure;
             }
 
             // A clean finish can leave trailing bytes buffered that never arrived

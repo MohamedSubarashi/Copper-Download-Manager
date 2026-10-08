@@ -6,6 +6,7 @@
 #include <QStandardPaths>
 #include <QDir>
 #include <QFileInfo>
+#include <QFile>
 
 DatabaseManager::DatabaseManager() {}
 
@@ -61,7 +62,19 @@ bool DatabaseManager::init() {
                "value TEXT"
                ")");
 
-    migrate(getSchemaVersion());
+    const int schemaVersion = getSchemaVersion();
+    if (schemaVersion > 0 && schemaVersion < 3) {
+        // Keep a pre-migration snapshot: if a migration is botched or the new
+        // schema turns out to be wrong, the old database is one copy away
+        // instead of gone. VACUUM INTO works on the open database.
+        QSqlQuery backup(db);
+        const QString backupPath = dbPath + ".pre-migration-v" + QString::number(schemaVersion);
+        QFile::remove(backupPath);
+        if (!backup.exec("VACUUM INTO '" + backupPath + "'")) {
+            Logger::instance().warning("Pre-migration backup failed: " + backup.lastError().text());
+        }
+    }
+    migrate(schemaVersion);
 
     Logger::instance().info("Database initialized at " + dbPath);
     return true;
@@ -77,6 +90,18 @@ int DatabaseManager::getSchemaVersion() {
 
 void DatabaseManager::migrate(int from) {
     const int targetVersion = 3;
+    if (from >= targetVersion) return;
+
+    // Every migration step runs in one transaction: a crash or a failed
+    // statement halfway through must leave the old schema fully intact
+    // instead of a half-migrated database.
+    const bool inTransaction = db.transaction();
+    auto finishMigration = [this, inTransaction](bool ok) {
+        if (!inTransaction) return;
+        if (ok) db.commit();
+        else db.rollback();
+    };
+
     QSqlQuery query(db);
 
     // Column presence check shared by the migrations below: a database created by
@@ -97,6 +122,7 @@ void DatabaseManager::migrate(int from) {
         if (!hasColumn("parent_id")) {
             if (!query.exec("ALTER TABLE downloads ADD COLUMN parent_id INTEGER DEFAULT -1")) {
                 Logger::instance().error("Migration to v1 failed: " + query.lastError().text());
+                finishMigration(false);
                 return;
             }
         }
@@ -125,6 +151,7 @@ void DatabaseManager::migrate(int from) {
         }
         if (!ok) {
             Logger::instance().error("Migration to v2 failed: " + query.lastError().text());
+            finishMigration(false);
             return;
         }
         from = 2;
@@ -144,6 +171,7 @@ void DatabaseManager::migrate(int from) {
         }
         if (!ok) {
             Logger::instance().error("Migration to v3 failed: " + query.lastError().text());
+            finishMigration(false);
             return;
         }
         from = 3;
@@ -155,6 +183,7 @@ void DatabaseManager::migrate(int from) {
     }
 
     query.exec("PRAGMA user_version = " + QString::number(from));
+    finishMigration(true);
 }
 
 // The job's selection is stored as a comma-separated list of playlist positions.

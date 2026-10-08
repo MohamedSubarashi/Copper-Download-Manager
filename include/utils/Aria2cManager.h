@@ -170,6 +170,9 @@ private:
     void pickLatestAria2Asset(const QJsonObject& release, QString& url, QString& fileName, QString& version);
 
 public:
+    // Tools directory this build installs aria2c/ffmpeg/yt-dlp into
+    // (exposed for /api/diagnostics reports).
+    QString toolsDir() { return getToolsDir(); }
     // Resolve/download a torrent source (local path, magnet, or remote .torrent URL)
     // to the local path that aria2 should seed from. For magnets, localPath is empty
     // because aria2 handles magnet links natively.

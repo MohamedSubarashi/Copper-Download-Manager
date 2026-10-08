@@ -137,6 +137,23 @@ bool DownloadManager::isFileFormatAllowed(const QString& url) {
     return true;
 }
 
+// Return path untouched when nothing lives there, otherwise the first free
+// "name (n).ext" variant. Adding a download must never overwrite a file the
+// user already has (0.4.0 file-conflict policy).
+static QString resolveConflictPath(const QString& path) {
+    if (!QFile::exists(path)) return path;
+    const QFileInfo info(path);
+    const QString dir = info.absolutePath();
+    const QString base = info.completeBaseName();
+    const QString suffix = info.suffix();
+    for (int n = 1; n < 100000; n++) {
+        const QString candidate = dir + "/" + base + " (" + QString::number(n) + ")"
+            + (suffix.isEmpty() ? QString() : "." + suffix);
+        if (!QFile::exists(candidate)) return candidate;
+    }
+    return path;
+}
+
 int DownloadManager::addDownload(const QString& url, const QString& path, const QString& type, int chunks, const QString& audioFormat) {
     if (!isFileFormatAllowed(url)) {
         Logger::instance().info("Download blocked by file-format filter: " + url);
@@ -197,6 +214,15 @@ int DownloadManager::addDownload(const QString& url, const QString& path, const 
     // is already sanitized and mp3-suffixed, so rejoin it with the directory.
     if (type == "YtDlp" && item.audioFormat == "mp3" && !QFileInfo(item.filePath).suffix().isEmpty()) {
         item.filePath = QFileInfo(item.filePath).path() + "/" + item.fileName;
+    }
+
+    // Never clobber an existing file: a fresh add whose target already exists
+    // gets "name (n).ext" instead of silently overwriting it. Torrent
+    // targets are directories and are exempt.
+    if (type != "Torrent" && !QDir(item.filePath).exists() && QFile::exists(item.filePath)) {
+        item.filePath = resolveConflictPath(item.filePath);
+        item.fileName = QFileInfo(item.filePath).fileName();
+        Logger::instance().info("Target file exists; using conflict-free path: " + item.filePath);
     }
 
     QDir().mkpath(QFileInfo(item.filePath).absolutePath());

@@ -4,6 +4,11 @@
 #include "utils/Logger.h"
 #include "utils/FileNameSanitizer.h"
 #include "utils/UrlDetector.h"
+#include "utils/Aria2cManager.h"
+#include "utils/FfmpegManager.h"
+#include "utils/YtDlpManager.h"
+#include "utils/UpdateManager.h"
+#include "db/DatabaseManager.h"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -470,6 +475,28 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         response["downloads"] = downloadsArray;
         response["count"] = downloads.size();
         sendJsonResponse(guard, 200, response, allowedOrigin);
+        return;
+    }
+
+    // One-shot environment report for support/diagnostics: versions, tool
+    // state, daemon state and paths - enough to triage a bug report without
+    // asking the user to reproduce anything first.
+    if (path == "/api/diagnostics" && method == "GET") {
+        QJsonObject json;
+        json["app"] = "Copper Download Manager";
+        json["version"] = QCoreApplication::applicationVersion();
+        json["schemaVersion"] = DatabaseManager::instance().getSchemaVersion();
+        json["profile"] = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        json["toolsDir"] = Aria2cManager::instance().toolsDir();
+        json["aria2Installed"] = Aria2cManager::instance().isInstalled();
+        json["aria2DaemonRunning"] = Aria2cManager::instance().daemonRunning();
+        json["ffmpegInstalled"] = FfmpegManager::instance().isInstalled();
+        json["ffmpegVersion"] = FfmpegManager::instance().getVersion();
+        json["ytDlpInstalled"] = YtDlpManager::instance().isInstalled();
+        json["ytDlpVersion"] = YtDlpManager::instance().getVersion();
+        json["updateAvailable"] = UpdateManager::instance().isUpdateAvailable();
+        json["updateLatestVersion"] = UpdateManager::instance().getLatestVersion();
+        sendJsonResponse(guard, 200, json, allowedOrigin);
         return;
     }
 

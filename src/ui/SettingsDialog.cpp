@@ -207,6 +207,20 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     uaLayout->addWidget(uaHint);
     downloadsLayout->addWidget(uaGroup);
 
+    QGroupBox* headersGroup = new QGroupBox("Custom Headers");
+    QVBoxLayout* headersLayout = new QVBoxLayout(headersGroup);
+    headersEdit = new QPlainTextEdit();
+    headersEdit->setAccessibleName("Custom download headers");
+    headersEdit->setPlaceholderText("One header per line, for example:\nReferer: https://example.com/\nAuthorization: Bearer token");
+    headersEdit->setMaximumHeight(72);
+    headersEdit->setPlainText(DatabaseManager::instance().getSetting("customHeaders", ""));
+    headersLayout->addWidget(headersEdit);
+    QLabel* headersHint = new QLabel("Sent with every HTTP(S) download request. Some servers require a specific Referer or Authorization header; invalid headers can make servers reject requests.");
+    headersHint->setWordWrap(true);
+    headersHint->setStyleSheet("color: gray; font-size: 11px;");
+    headersLayout->addWidget(headersHint);
+    downloadsLayout->addWidget(headersGroup);
+
     downloadsLayout->addStretch();
     tabWidget->addTab(downloadsTab, "Downloads");
 
@@ -590,6 +604,7 @@ void SettingsDialog::onSave() {
     DownloadManager::instance().updateMaxConcurrent(maxConcurrentSpin->value());
     DatabaseManager::instance().saveSetting("seedTime", QString::number(seedTimeCombo->currentData().toInt()));
     DatabaseManager::instance().saveSetting("userAgent", userAgentEdit->text().trimmed());
+    DatabaseManager::instance().saveSetting("customHeaders", headersEdit->toPlainText());
 
     DatabaseManager::instance().saveSetting("formatFilterEnabled", formatFilterEnabledCheck->isChecked() ? "true" : "false");
     DatabaseManager::instance().saveSetting("formatIncludeExtensions", includeExtensionsEdit->toPlainText());

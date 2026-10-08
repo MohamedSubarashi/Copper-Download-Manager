@@ -24,10 +24,11 @@ public:
     void saveSetting(const QString& key, const QString& value);
     QString getSetting(const QString& key, const QString& defaultValue = "");
     QString getUserAgent();
+    // Current PRAGMA user_version - exposed for /api/diagnostics reports.
+    int getSchemaVersion();
 
 private:
     DatabaseManager();
-    int getSchemaVersion();
     void migrate(int from);
     QSqlDatabase db;
 };
