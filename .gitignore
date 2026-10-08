@@ -33,6 +33,9 @@ Release/
 # (Old versions kept out)
 releases/0.1.0/
 releases/0.1.5/
+# releases/0.4.0/ is intentionally tracked (portable zip + installer +
+# SHA256SUMS + release notes); use `git add -f` for its *.zip/*.exe since
+# the blanket patterns below would otherwise skip them.
 
 # Installer intermediate / logs
 *.log
