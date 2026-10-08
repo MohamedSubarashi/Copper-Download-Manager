@@ -1,5 +1,14 @@
 cmake_minimum_required(VERSION 3.16)
-project(CopperDownloadManager VERSION 0.3.1 LANGUAGES CXX)
+project(CopperDownloadManager VERSION 0.4.0 LANGUAGES CXX)
+
+# ---------------------------------------------------------------------------
+# Single-source version. tools/check_version_consistency.py verifies that
+# app.rc, the Inno Setup script and the THIRD-PARTY notices all agree with
+# this PROJECT_VERSION, so bumping the release version is a one-line change
+# here plus those (tool-checked) mirror updates.
+# ---------------------------------------------------------------------------
+configure_file("${CMAKE_SOURCE_DIR}/cmake/copper_version.h.in"
+               "${CMAKE_CURRENT_BINARY_DIR}/include/copper_version.h" @ONLY)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -159,6 +168,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "$<$<NOT:$<COMPILE_LANGUAGE:RC>>:${CMAKE_SOURCE_DIR}/include/utils>"
     "$<$<NOT:$<COMPILE_LANGUAGE:RC>>:${CMAKE_SOURCE_DIR}/include/torrent>"
     "$<$<NOT:$<COMPILE_LANGUAGE:RC>>:${CMAKE_SOURCE_DIR}/include/db>"
+    "$<$<NOT:$<COMPILE_LANGUAGE:RC>>:${CMAKE_CURRENT_BINARY_DIR}/include>"
 )
 target_link_libraries(${PROJECT_NAME} Qt6::Core Qt6::Widgets Qt6::Network Qt6::Sql Qt6::Gui)
 

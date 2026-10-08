@@ -2,7 +2,7 @@
 
 Project: Copper Download Manager
 Type: Qt 6 desktop app + browser extension (Chrome/Firefox)
-Current version: 0.3.1
+Current version: 0.4.0
 
 This list is ordered by impact and should be tackled in sequence for the next development pass.
 

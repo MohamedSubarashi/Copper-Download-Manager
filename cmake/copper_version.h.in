@@ -1,0 +1,17 @@
+#ifndef COPPER_VERSION_H
+#define COPPER_VERSION_H
+
+// Generated from cmake/copper_version.h.in by CMake configure_file().
+//
+// The AUTHORITATIVE version is the `project(... VERSION ...)` value in
+// CMakeLists.txt; this header is regenerated from it on every configure.
+// Runtime consumers (main.cpp -> QCoreApplication::applicationVersion(),
+// the default User-Agent, the update checker) read COPPER_VERSION_STRING,
+// so there is exactly one place to bump the version for a release.
+
+#define COPPER_VERSION_STRING "@PROJECT_VERSION@"
+#define COPPER_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define COPPER_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define COPPER_VERSION_PATCH @PROJECT_VERSION_PATCH@
+
+#endif // COPPER_VERSION_H
