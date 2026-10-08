@@ -1,0 +1,16 @@
+{
+    "schema": 1,
+    "aria2": {
+        "url": "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip",
+        "sha256": "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288"
+    },
+    "ffmpeg": {
+        "platforms": {
+            "windows": {
+                "url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-essentials_build.zip",
+                "sha256": "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba"
+            }
+        }
+    },
+    "_comment": "SHA-256 pins for the third-party binaries Copper downloads at runtime. The manifest is compiled into the exe (resources.qrc), so a tampered install directory cannot swap the pins together with the binaries. Each entry's url must equal the URL the code downloads from: changing a download URL without updating this file fails the install (fail closed). yt-dlp releases too frequently to pin here; it is verified against the SHA2-256SUMS asset published with each release instead (see DependencyVerifier::verifyAgainstSumsText)."
+}

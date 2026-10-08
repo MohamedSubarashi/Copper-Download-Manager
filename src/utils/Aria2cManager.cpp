@@ -26,6 +26,12 @@
 #include <QCoreApplication>
 #include <QSet>
 #include <QVersionNumber>
+#include <QTcpServer>
+#include <QHostAddress>
+#include "utils/DependencyVerifier.h"
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 Aria2cManager::Aria2cManager() : nextId(1), maxConcurrent(3), isDownloading(false), nam(new QNetworkAccessManager(this)), activeReply(nullptr) {
     // Use a persistent RPC secret persisted across sessions. A per-process random
@@ -346,6 +352,16 @@ bool Aria2cManager::downloadAndExtractAria2c(const QString& url, const QString& 
         QByteArray data = reply->readAll();
         reply->deleteLater();
 
+        // The binary is executed; a corrupted or tampered download must never
+        // reach the tools dir. The pin is URL-tied, so changing the download
+        // URL without updating resources/dependencies.json also fails here.
+        QString verifyError;
+        if (!DependencyVerifier::verifyPinned(QStringLiteral("aria2"), url, data, &verifyError)) {
+            Logger::instance().error("aria2c install blocked: " + verifyError);
+            loop.quit();
+            return;
+        }
+
         QFile zipFile(zipPath);
         if (!zipFile.open(QIODevice::WriteOnly)) {
             Logger::instance().error("Failed to write aria2c zip");
@@ -391,7 +407,7 @@ void Aria2cManager::startDownload(const QString& url, const QString& fileName) {
         }
     });
 
-    connect(activeReply, &QNetworkReply::finished, [this, fileName]() {
+    connect(activeReply, &QNetworkReply::finished, [this, url, fileName]() {
         QNetworkReply* reply = activeReply;
         activeReply = nullptr;
 
@@ -416,6 +432,16 @@ void Aria2cManager::startDownload(const QString& url, const QString& fileName) {
 
         QByteArray data = reply->readAll();
         reply->deleteLater();
+
+        // Never install a binary that does not match the pinned checksum.
+        QString verifyError;
+        if (!DependencyVerifier::verifyPinned(QStringLiteral("aria2"), url, data, &verifyError)) {
+            Logger::instance().error("aria2c install blocked: " + verifyError);
+            emit installationProgress("Verification failed - install blocked");
+            emit errorOccurred(verifyError);
+            isDownloading = false;
+            return;
+        }
 
         QString toolsDir = getToolsDir();
         QDir().mkpath(toolsDir);
@@ -537,45 +563,57 @@ bool Aria2cManager::extractZipToTools(const QString& zipPath) {
 // RPC daemon lifecycle
 // ---------------------------------------------------------------------------
 
-// Kill whatever process is currently bound to the given TCP port. This clears
-// stale/orphaned daemons (left running by a crashed or previous session) that
-// would otherwise keep port 6800 occupied and cause the new daemon to fail,
-// surfacing as "aria2.addTorrent failed: rpc error" on subsequent launches.
-// Returns true if at least one foreign process was killed.
-bool Aria2cManager::killProcessOnTcpPort(int port) {
-    bool killedAny = false;
+// Path of the state file that records the PID of the daemon Copper started.
+QString Aria2cManager::daemonPidFilePath() {
+    return getToolsDir() + "/aria2_daemon.pid";
+}
+
 #ifdef Q_OS_WIN
-    QProcess netstat;
-    netstat.start("netstat", QStringList() << "-ano");
-    if (!netstat.waitForFinished(3000)) return false;
-    const QList<QByteArray> lines = netstat.readAllStandardOutput().split('\n');
-    QSet<QString> pids;
-    const QString portStr = ":" + QString::number(port);
-    for (const QByteArray& line : lines) {
-        QString l = QString::fromLocal8Bit(line).trimmed();
-        if (!l.contains(portStr)) continue;
-        QStringList parts = l.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-        if (parts.size() >= 5 && parts[parts.size() - 1].toInt() > 0) {
-            pids.insert(parts[parts.size() - 1]);
-        }
-    }
-    for (const QString& pid : pids) {
-        int pidNo = pid.toInt();
-        // Never kill our own app process or the daemon we currently manage (a
-        // concurrent startDaemonProcess call could otherwise kill the daemon we
-        // just launched while it is still binding, producing an endless
-        // "daemon exited ... restarting" loop and "aria2.addTorrent failed".
-        if (pidNo == QCoreApplication::applicationPid()) continue;
-        if (m_daemonProcess && m_daemonProcess->state() != QProcess::NotRunning &&
-            m_daemonProcess->processId() == pidNo) continue;
-        Logger::instance().warning("Killing stale process on port " + QString::number(port) + " (PID " + pid + ")");
-        QProcess taskkill;
-        taskkill.start("taskkill", QStringList() << "/F" << "/T" << "/PID" << pid);
-        taskkill.waitForFinished(3000);
-        killedAny = true;
-    }
+// True if pid is alive AND its image is exactly our aria2c.exe. Windows
+// recycles PID numbers, so a bare "kill this PID" would eventually kill an
+// innocent process: only a positive image match earns a kill.
+static bool pidIsOurAria2c(int pid, const QString& aria2cPath) {
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(pid));
+    if (!h) return false;
+    wchar_t buf[MAX_PATH];
+    DWORD size = MAX_PATH;
+    const BOOL ok = QueryFullProcessImageNameW(h, 0, buf, &size);
+    CloseHandle(h);
+    if (!ok) return false;
+    return QString::fromWCharArray(buf, int(size)).compare(aria2cPath, Qt::CaseInsensitive) == 0;
+}
 #endif
-    return killedAny;
+
+// Stop a daemon left behind by a previous session that crashed or was killed.
+// This replaces the old killProcessOnTcpPort(), which force-killed ANY
+// process that happened to listen on the RPC port - unrelated applications
+// included. Here we only ever touch the exact PID recorded when Copper
+// itself started a daemon, and only after its image proves the process is
+// still our aria2c.exe.
+void Aria2cManager::cleanupStaleDaemon() {
+    QFile pidFile(daemonPidFilePath());
+    if (!pidFile.exists()) return;
+    if (!pidFile.open(QIODevice::ReadOnly)) {
+        pidFile.remove();
+        return;
+    }
+    const int pid = QString::fromUtf8(pidFile.readAll()).trimmed().toInt();
+    pidFile.close();
+    if (pid > 0) {
+#ifdef Q_OS_WIN
+        if (pidIsOurAria2c(pid, getAria2cPath())) {
+            Logger::instance().info("Stopping stale aria2c daemon (PID " + QString::number(pid) +
+                                    ") from a previous session");
+            QProcess::execute("taskkill", QStringList() << "/F" << "/PID" << QString::number(pid));
+        } else {
+            Logger::instance().info("Stale aria2c daemon PID " + QString::number(pid) +
+                                    " is gone or was reused; not touching it");
+        }
+#else
+        Q_UNUSED(pid);
+#endif
+    }
+    pidFile.remove();
 }
 
 bool Aria2cManager::startDaemonProcess() {
@@ -586,14 +624,24 @@ bool Aria2cManager::startDaemonProcess() {
         }
     }
 
-    // Clear any orphaned daemon still holding the RPC port from a previous
-    // session so that the freshly launched daemon can bind successfully.
-    // After killing a listener the OS socket often lingers in TIME_WAIT, which
-    // briefly blocks rebinding port 6800 and makes the new daemon exit right
-    // away (an endless "daemon exited ... restarting" loop). If we had to kill
-    // a stale listener, wait briefly so the port is actually free to rebind.
-    bool killedStale = killProcessOnTcpPort(6800);
-    QThread::msleep(killedStale ? 1200 : 50);
+    // Stop a daemon left behind by a previous session - only the exact
+    // process recorded in our PID file, and only after its image proves it
+    // is still our aria2c.exe (never "kill whatever holds the port": that
+    // could take down an unrelated application).
+    cleanupStaleDaemon();
+
+    // Pick a fresh local port for this daemon. The historical fixed port
+    // 6800 let any stale or foreign process squat on it and block startup;
+    // a per-start port removes that entire conflict class.
+    QTcpServer portProbe;
+    quint16 port = 0;
+    if (portProbe.listen(QHostAddress::LocalHost, 0)) {
+        port = portProbe.serverPort();
+        portProbe.close();
+    }
+    if (port == 0) port = 6800;   // unusable network stack: keep the old default
+    m_rpcPort = int(port);
+    QThread::msleep(50);
 
     int seedTime = DatabaseManager::instance().getSetting("seedTime", "30").toInt();
     QString seedStr = QString::number(qMax(0, seedTime));
@@ -602,7 +650,7 @@ bool Aria2cManager::startDaemonProcess() {
     QStringList args;
     args << "--enable-rpc"
          << "--rpc-listen-all=false"
-         << "--rpc-listen-port=6800"
+         << "--rpc-listen-port=" + QString::number(m_rpcPort)
          << "--rpc-secret=" + m_token
          << "--rpc-max-request-size=20M"
          << "--seed-time=" + seedStr
@@ -620,7 +668,7 @@ bool Aria2cManager::startDaemonProcess() {
     QDir().mkpath(defaultDir);
     args << "--dir=" + defaultDir;
 
-    Logger::instance().info("Starting aria2c RPC daemon on port 6800");
+    Logger::instance().info("Starting aria2c RPC daemon on port " + QString::number(m_rpcPort));
     m_daemonProcess = new QProcess(this);
     connect(m_daemonProcess, &QProcess::finished, this, [this](int exitCode, QProcess::ExitStatus) {
         Logger::instance().warning("aria2c daemon exited (code " + QString::number(exitCode) + ") stderr: " +
@@ -634,7 +682,15 @@ bool Aria2cManager::startDaemonProcess() {
         emit daemonStateChanged(false);
     });
     m_daemonProcess->start(getAria2cPath(), args);
-    return m_daemonProcess->waitForStarted(5000) || m_daemonProcess->state() == QProcess::Running;
+    const bool started = m_daemonProcess->waitForStarted(5000) || m_daemonProcess->state() == QProcess::Running;
+    if (started) {
+        // Record the PID so a later session can stop exactly this process if
+        // it outlives Copper (crash, forced logout) - see cleanupStaleDaemon().
+        QFile pidFile(daemonPidFilePath());
+        if (pidFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            pidFile.write(QByteArray::number(m_daemonProcess->processId()));
+    }
+    return started;
 }
 
 bool Aria2cManager::ensureDaemon() {
@@ -678,21 +734,21 @@ bool Aria2cManager::ensureDaemon() {
             emit daemonStateChanged(true);
             return true;
         }
-        // If the responder on port 6800 is a stale daemon holding a different
-        // secret (reported as "Unauthorized"), kill everything on the port and
-        // relaunch once. The loop would otherwise spin for the remaining
-        // iterations against the wrong daemon and never recover, leaving every
-        // torrent stuck at 0% ("Unauthorized" added to Downloads).
+        // A responder holding a different secret (reported as "Unauthorized")
+        // used to be cleared by killing everything on the RPC port - which
+        // could kill an unrelated application. Now our own daemon is stopped
+        // by handle and relaunched once on a freshly picked port; without the
+        // restart the loop would spin against the wrong responder forever,
+        // leaving every torrent stuck at 0% ("Unauthorized" in Downloads).
         if (m_rpcUnauthorized && unauthorizedRestarts < 2) {
             unauthorizedRestarts++;
-            Logger::instance().warning("aria2c RPC Unauthorized; forcing daemon restart to clear stale secret holder");
+            Logger::instance().warning("aria2c RPC Unauthorized; restarting our daemon on a fresh port");
             if (m_daemonProcess) {
                 m_daemonProcess->kill();
                 m_daemonProcess->waitForFinished(1000);
                 m_daemonProcess->deleteLater();
                 m_daemonProcess = nullptr;
             }
-            killProcessOnTcpPort(6800);
             m_daemonRunning = false;
             if (!startDaemonProcess()) {
                 m_daemonStarting = false;
@@ -737,6 +793,7 @@ void Aria2cManager::shutdownDaemon() {
         m_daemonProcess->deleteLater();
         m_daemonProcess = nullptr;
     }
+    QFile::remove(daemonPidFilePath());
     m_daemonRunning = false;
     m_daemonStarting = false;
     pollTimer->stop();
@@ -757,10 +814,11 @@ public:
     QNetworkAccessManager* nam = nullptr;
 
 public slots:
-    void doRequest(const QJsonObject& req, int timeoutMs) {
+    void doRequest(const QJsonObject& req, int timeoutMs, const QString& rpcUrl) {
         if (!nam) nam = new QNetworkAccessManager(this);
 
-        QNetworkRequest request(QUrl("http://127.0.0.1:6800/jsonrpc"));
+        const QUrl rpcEndpoint(rpcUrl);
+        QNetworkRequest request(rpcEndpoint);
         request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
 
         QNetworkReply* reply = nam->post(request, QJsonDocument(req).toJson(QJsonDocument::Compact));
@@ -817,11 +875,13 @@ QJsonValue Aria2cManager::rpcResult(const QString& method, const QJsonArray& par
     // GUI-thread event (LocalServer socket readyRead/disconnected, timers,
     // deleteLater) can fire mid-RPC, eliminating the use-after-free crashes that
     // the previous nested QEventLoop::exec() allowed.
+    const QString rpcUrl = QStringLiteral("http://127.0.0.1:%1/jsonrpc").arg(m_rpcPort);
     QMutexLocker locker(&m_rpcMutex);
     m_rpcReplyReady = false;
     m_rpcReply = QJsonValue(QJsonValue::Undefined);
     QMetaObject::invokeMethod(m_rpcWorker, "doRequest", Qt::QueuedConnection,
-                              Q_ARG(QJsonObject, req), Q_ARG(int, timeoutMs));
+                              Q_ARG(QJsonObject, req), Q_ARG(int, timeoutMs),
+                              Q_ARG(QString, rpcUrl));
     while (!m_rpcReplyReady) {
         m_rpcCond.wait(&m_rpcMutex);
     }

@@ -2,6 +2,7 @@
 #include "utils/Logger.h"
 #include "utils/FfmpegManager.h"
 #include "utils/UserAgent.h"
+#include "utils/DependencyVerifier.h"
 #include "db/DatabaseManager.h"
 #include <QStandardPaths>
 #include <QDir>
@@ -151,12 +152,16 @@ void YtDlpManager::installOrUpdate() {
         QString assetName = "yt-dlp";
 #endif
 
+        QString sumsUrl;
         for (const QJsonValue& asset : assets) {
             QJsonObject a = asset.toObject();
             if (a["name"].toString() == assetName) {
                 assetUrl = a["browser_download_url"].toString();
                 fileName = a["name"].toString();
-                break;
+            } else if (a["name"].toString() == "SHA2-256SUMS") {
+                // Checksums published with this exact release; the binary is
+                // verified against them before it touches disk.
+                sumsUrl = a["browser_download_url"].toString();
             }
         }
 
@@ -169,11 +174,11 @@ void YtDlpManager::installOrUpdate() {
 
         Logger::instance().info("yt-dlp latest version: " + tagName + ", downloading from: " + assetUrl);
         emit installationProgress("Downloading yt-dlp " + tagName + "...");
-        startBinaryDownload(assetUrl, fileName);
+        startBinaryDownload(assetUrl, fileName, sumsUrl);
     });
 }
 
-void YtDlpManager::startBinaryDownload(const QString& url, const QString& fileName) {
+void YtDlpManager::startBinaryDownload(const QString& url, const QString& fileName, const QString& sumsUrl) {
     QNetworkRequest request(url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setRawHeader("User-Agent", Copper::copperUserAgent().toUtf8());
@@ -188,7 +193,7 @@ void YtDlpManager::startBinaryDownload(const QString& url, const QString& fileNa
         }
     });
 
-    connect(activeReply, &QNetworkReply::finished, this, [this, fileName]() {
+    connect(activeReply, &QNetworkReply::finished, this, [this, fileName, sumsUrl]() {
         QNetworkReply* reply = activeReply;
         activeReply = nullptr;
 
@@ -203,34 +208,68 @@ void YtDlpManager::startBinaryDownload(const QString& url, const QString& fileNa
             return;
         }
 
-        QByteArray data = reply->readAll();
+        const QByteArray data = reply->readAll();
         reply->deleteLater();
 
-        QString toolsDir = getToolsDir();
-        QDir().mkpath(toolsDir);
-        QString filePath = toolsDir + "/" + fileName;
-
-        QFile file(filePath);
-        if (!file.open(QIODevice::WriteOnly)) {
-            emit installationProgress("Write error");
+        // yt-dlp is executed, so the download must be verified against the
+        // checksums published with the same release before it touches disk.
+        // Fail closed: no published checksums, no install.
+        if (sumsUrl.isEmpty()) {
+            Logger::instance().error("yt-dlp release ships no SHA2-256SUMS; refusing to install an unverified binary");
+            emit installationProgress("Verification unavailable - install blocked");
+            emit errorOccurred("The yt-dlp release has no published checksums; install blocked.");
             isDownloading = false;
             return;
         }
-        file.write(data);
-        file.close();
+        QNetworkRequest sumsRequest(sumsUrl);
+        sumsRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+        sumsRequest.setRawHeader("User-Agent", Copper::copperUserAgent().toUtf8());
+        sumsRequest.setTransferTimeout(60000);
+        QNetworkReply* sumsReply = nam->get(sumsRequest);
+        connect(sumsReply, &QNetworkReply::finished, this, [this, fileName, data, sumsReply]() {
+            sumsReply->deleteLater();
+            if (sumsReply->error() != QNetworkReply::NoError) {
+                Logger::instance().error("yt-dlp checksum download failed: " + sumsReply->errorString());
+                emit installationProgress("Checksum download failed - install blocked");
+                emit errorOccurred("Could not download yt-dlp checksums; install blocked.");
+                isDownloading = false;
+                return;
+            }
+            QString verifyError;
+            if (!DependencyVerifier::verifyAgainstSumsText(sumsReply->readAll(), fileName, data, &verifyError)) {
+                Logger::instance().error("yt-dlp install blocked: " + verifyError);
+                emit installationProgress("Verification failed - install blocked");
+                emit errorOccurred(verifyError);
+                isDownloading = false;
+                return;
+            }
+
+            QString toolsDir = getToolsDir();
+            QDir().mkpath(toolsDir);
+            QString filePath = toolsDir + "/" + fileName;
+
+            QFile file(filePath);
+            if (!file.open(QIODevice::WriteOnly)) {
+                emit installationProgress("Write error");
+                isDownloading = false;
+                return;
+            }
+            file.write(data);
+            file.close();
 
 #ifdef PLATFORM_UNIX
-        QFile::setPermissions(filePath, QFileDevice::ExeUser | QFileDevice::ExeOwner | QFileDevice::ExeOther | QFileDevice::ReadUser | QFileDevice::ReadOwner);
+            QFile::setPermissions(filePath, QFileDevice::ExeUser | QFileDevice::ExeOwner | QFileDevice::ExeOther | QFileDevice::ReadUser | QFileDevice::ReadOwner);
 #endif
 
-        if (isInstalled()) {
-            emit installationProgress("Installed: " + getVersion());
-            Logger::instance().info("yt-dlp installed successfully");
-        } else {
-            emit installationProgress("Installation failed");
-        }
+            if (isInstalled()) {
+                emit installationProgress("Installed: " + getVersion());
+                Logger::instance().info("yt-dlp installed successfully");
+            } else {
+                emit installationProgress("Installation failed");
+            }
 
-        isDownloading = false;
+            isDownloading = false;
+        });
     });
 }
 

@@ -10,6 +10,8 @@
 #include <QNetworkReply>
 #include <QRegularExpression>
 #include <QDirIterator>
+#include <QFileInfo>
+#include "utils/DependencyVerifier.h"
 
 FfmpegManager::FfmpegManager() : isDownloading(false), converting(false), nam(new QNetworkAccessManager(this)), activeReply(nullptr), convertProcess(nullptr) {}
 
@@ -72,7 +74,9 @@ void FfmpegManager::installOrUpdate() {
     emit installationProgress("Starting download...");
 
 #ifdef PLATFORM_WINDOWS
-    QString url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip";
+    // Versioned release package (not a rolling "latest" build) so the SHA-256
+    // pin in resources/dependencies.json stays valid between releases.
+    QString url = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-essentials_build.zip";
     QString fileName = "ffmpeg-master-latest-win64-gpl.zip";
 #elif defined(PLATFORM_LINUX)
     QString url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz";
@@ -100,7 +104,7 @@ void FfmpegManager::startBinaryDownload(const QString& url, const QString& fileN
         }
     });
 
-    connect(activeReply, &QNetworkReply::finished, [this, fileName]() {
+    connect(activeReply, &QNetworkReply::finished, [this, url, fileName]() {
         QNetworkReply* reply = activeReply;
         activeReply = nullptr;
 
@@ -125,6 +129,17 @@ void FfmpegManager::startBinaryDownload(const QString& url, const QString& fileN
 
         QByteArray data = reply->readAll();
         reply->deleteLater();
+
+        // Abort before extraction if the archive does not match the pinned
+        // checksum (the pin is tied to the exact download URL).
+        QString verifyError;
+        if (!DependencyVerifier::verifyPinned(QStringLiteral("ffmpeg"), url, data, &verifyError)) {
+            Logger::instance().error("ffmpeg install blocked: " + verifyError);
+            emit installationProgress("Verification failed - install blocked");
+            emit errorOccurred(verifyError);
+            isDownloading = false;
+            return;
+        }
 
         emit installationProgress("Extracting...");
 
@@ -155,7 +170,9 @@ void FfmpegManager::startBinaryDownload(const QString& url, const QString& fileN
             QFile::copy(src, dest);
         }
         QFile::remove(zipPath);
-        QDir(toolsDir + "/ffmpeg-master-latest-win64-gpl").removeRecursively();
+        // The archive extracts into a directory named after the zip; remove it
+        // once ffmpeg.exe has been copied out.
+        QDir(toolsDir + "/" + QFileInfo(fileName).baseName()).removeRecursively();
 #else
         QFile::remove(zipPath);
 #endif

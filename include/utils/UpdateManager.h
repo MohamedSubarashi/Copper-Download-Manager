@@ -43,6 +43,7 @@ private:
     bool silentCheck;
     QString latestVersion;
     QString downloadUrl;
+    QString downloadDigest;   // "sha256:<hex>" from the release asset metadata
     QString changelog;
     QString installerPath;
     bool downloading;

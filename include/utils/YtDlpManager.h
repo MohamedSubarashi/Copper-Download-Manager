@@ -103,7 +103,7 @@ signals:
 private:
     YtDlpManager();
     QString getToolsDir();
-    void startBinaryDownload(const QString& url, const QString& fileName);
+    void startBinaryDownload(const QString& url, const QString& fileName, const QString& sumsUrl);
 
     void launchJob(int id, const YtDlpJobSpec& spec);
     void drainOutput(int id, bool isStdErr);

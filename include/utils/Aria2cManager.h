@@ -129,7 +129,12 @@ private:
     QJsonObject rpcCall(const QString& method, const QJsonArray& params, int timeoutMs = 8000);
     QJsonValue rpcResult(const QString& method, const QJsonArray& params, int timeoutMs = 8000);
     bool startDaemonProcess();
-    bool killProcessOnTcpPort(int port);
+    // Stop a daemon left behind by a previous session. Only the exact PID
+    // recorded in daemonPidFilePath() is ever touched, and only after its
+    // image matches our aria2c.exe (Windows recycles PID numbers, so this
+    // never kills by port number).
+    void cleanupStaleDaemon();
+    QString daemonPidFilePath();
     void poll();
     int getNextId();
     QString seedTimeArg() const;
@@ -180,6 +185,10 @@ public:
     bool m_daemonStarting = false;
     bool m_rpcUnauthorized = false;
     QString m_token;
+    // RPC listen port for the daemon started by startDaemonProcess(). Picked
+    // fresh (a free ephemeral port) on every start so a stale or foreign
+    // process can never squat on a fixed port; 6800 only as last resort.
+    int m_rpcPort = 6800;
     QProcess* m_daemonProcess = nullptr;
     QNetworkAccessManager* nam;
     QNetworkReply* activeReply;

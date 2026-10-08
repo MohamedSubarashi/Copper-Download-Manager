@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/">
+        <file alias="dependencies.json">resources/dependencies.json</file>
         <file alias="icons/About.png">Assets/About.png</file>
         <file alias="icons/AddUrl.png">Assets/AddUrl.png</file>
         <file alias="icons/app.ico">Assets/app.ico</file>
