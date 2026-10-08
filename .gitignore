@@ -48,3 +48,9 @@ copperdm/
 
 # Scratch build transcript
 build-out.txt
+
+# Local user screenshots (kept untracked on disk)
+Image/
+
+# Extension store listing images (uploaded manually to store dashboards)
+extensions/*.png
