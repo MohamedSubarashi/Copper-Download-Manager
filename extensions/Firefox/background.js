@@ -71,7 +71,42 @@ function rememberResult(ok, detail) {
 // Transports
 // ---------------------------------------------------------------------------
 
-function httpApi(path, method, body) {
+// Local API auth (0.4.0): the app's localhost API requires an install-scoped
+// token on every non-OPTIONS request. The token is handed over by the native
+// messaging host (action "getToken"), which reads it from the app's shared
+// config - it never crosses the network, so no web page can ever learn it.
+const NATIVE_HOST = "com.copper.dm";
+let apiToken = "";
+let apiTokenLoaded = false;
+let tokenFetch = null;
+
+function fetchApiToken() {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendNativeMessage(NATIVE_HOST, { action: "getToken" }, (reply) => {
+        void chrome.runtime.lastError; // host not installed yet: treat as no token
+        resolve(reply && reply.ok && reply.token ? String(reply.token) : "");
+      });
+    } catch (e) {
+      resolve("");
+    }
+  });
+}
+
+function ensureApiToken() {
+  if (apiTokenLoaded) return Promise.resolve(apiToken);
+  if (!tokenFetch) {
+    tokenFetch = fetchApiToken().then((t) => {
+      tokenFetch = null;
+      apiToken = t;
+      apiTokenLoaded = true;
+      return t;
+    });
+  }
+  return tokenFetch;
+}
+
+function httpApiOnce(path, method, body, token) {
   return new Promise((resolve) => {
     let timer;
     const controller = new AbortController();
@@ -79,11 +114,13 @@ function httpApi(path, method, body) {
       method: method || "GET",
       cache: "no-store",
       signal: controller.signal,
+      headers: {},
     };
     if (body) {
-      opts.headers = { "Content-Type": "application/json" };
+      opts.headers["Content-Type"] = "application/json";
       opts.body = JSON.stringify(body);
     }
+    if (token) opts.headers["X-Copper-Token"] = token;
     fetch(`${HTTP_API}${path}`, opts)
       .then(async (res) => {
         let j = null;
@@ -98,6 +135,19 @@ function httpApi(path, method, body) {
       .finally(() => clearTimeout(timer));
     timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT);
   });
+}
+
+function httpApi(path, method, body) {
+  return ensureApiToken().then((token) =>
+    httpApiOnce(path, method, body, token).then((res) => {
+      if (res.status !== 401) return res;
+      // The token went stale (config rewritten by a newer app run): refresh it
+      // once and retry a single time, then surface whatever we get.
+      apiToken = "";
+      apiTokenLoaded = false;
+      return ensureApiToken().then((t) => httpApiOnce(path, method, body, t));
+    })
+  );
 }
 
 async function httpPing() {
