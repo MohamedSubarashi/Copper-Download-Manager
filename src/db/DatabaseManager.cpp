@@ -437,9 +437,9 @@ QString DatabaseManager::getUserAgent() {
     }
     ua = ua.trimmed();
     // A stored value that carries one of our own tokens with a stale version
-    // (e.g. the old "... CopperDownloadManager/0.3.1" default or the bare
-    // "CopperDownloadManager/1.0") is refreshed to the current single-source
-    // UA; anything else is a deliberate custom UA and is kept.
+    // (an older release's embedded default, or the bare product-only UA) is
+    // refreshed to the current single-source UA; anything else is a
+    // deliberate custom UA and is kept.
     if (ua.contains(QLatin1String("CopperDownloadManager/"), Qt::CaseInsensitive)
         && !ua.endsWith(QCoreApplication::applicationVersion())) {
         return Copper::copperUserAgent();

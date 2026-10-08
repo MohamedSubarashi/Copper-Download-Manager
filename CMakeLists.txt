@@ -248,6 +248,49 @@ if(WIN32)
 endif()
 
 # ---------------------------------------------------------------------------
+# Unit tests (QtTest): dependency-light utilities only, so the binary builds
+# without the GUI stack and runs headless (CI + local `ctest`). Kept optional
+# so a Qt without the Test module still builds the app.
+# ---------------------------------------------------------------------------
+option(COPPER_BUILD_TESTS "Build the copper_tests unit-test binary" ON)
+if(COPPER_BUILD_TESTS)
+    find_package(Qt6 COMPONENTS Test QUIET)
+    if(TARGET Qt6::Test)
+        add_executable(copper_tests
+            tests/unit_tests.cpp
+            src/utils/DependencyVerifier.cpp
+            src/utils/ApiToken.cpp
+            src/utils/NativeMessaging.cpp
+            src/utils/UrlDetector.cpp
+            src/utils/Logger.cpp
+            # Headers listed so AUTOMOC runs on Q_OBJECT classes (same rule
+            # the main target gets from the HEADERS glob).
+            include/utils/DependencyVerifier.h
+            include/utils/ApiToken.h
+            include/utils/NativeMessaging.h
+            include/utils/UrlDetector.h
+            include/utils/Logger.h
+            resources.qrc
+        )
+        target_include_directories(copper_tests PRIVATE
+            "${CMAKE_SOURCE_DIR}/include"
+            "${CMAKE_SOURCE_DIR}/include/utils"
+            "${CMAKE_SOURCE_DIR}/include/core"
+            "${CMAKE_CURRENT_BINARY_DIR}/include"
+        )
+        target_link_libraries(copper_tests Qt6::Core Qt6::Network Qt6::Test)
+        if(WIN32)
+            target_link_libraries(copper_tests ws2_32)
+        endif()
+        enable_testing()
+        add_test(NAME unit_tests COMMAND copper_tests)
+        message(STATUS "Unit tests enabled (copper_tests)")
+    else()
+        message(STATUS "Qt6 Test module not found - skipping copper_tests")
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Linux desktop integration (share/application .desktop + hi-res icon)
 # ---------------------------------------------------------------------------
 if(UNIX AND NOT APPLE)

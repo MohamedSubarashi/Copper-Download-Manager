@@ -25,10 +25,21 @@ A high-performance, cross-platform download manager written in C++17 with Qt6.
 ## Requirements
 
 - **Qt 6.5+** (validated on **Qt 6.11.2 MinGW 64-bit**) — LGPLv3
-- **CMake 3.16+** (validated on **3.30.5**)
+- **CMake 3.16+** (validated on **4.4.3**)
 - **Ninja** build system
 - **C++17 compiler** — MinGW/GCC (validated on **GCC 13.1.0**, `x86_64-posix-seh`); also MSVC 2019+ / Clang 10+
 - **Optional:** `libtorrent-rasterbar` (torrent support; otherwise aria2c is used)
+
+### Qt version matrix
+
+| Qt version | Platform / toolchain | Validation |
+|------------|----------------------|------------|
+| 6.11.2 | Windows, MinGW 13.1 (local dev) | Full local validation: Release build, unit tests, 88-case integration suite |
+| 6.6.3 | Windows MinGW 13.1, Ubuntu, macOS (CI) | CI: build (Debug + Release), unit tests, CRT/startup smoke checks, packaging |
+| 6.5 – 6.10 | any supported toolchain | Expected to build (only Qt 6.5-era APIs are used); not part of the automated matrix |
+
+Qt versions outside this table are untested; the code deliberately avoids APIs
+newer than 6.5 so the matrix can widen without source changes.
 
 > **Note:** Because the executable is linked as a GUI (Win32) application, it no longer opens a terminal/console log window on launch. Logs go only to `copper.log` in the app-data folder.
 
@@ -58,6 +69,33 @@ The release build is automatically deployed to `installer/release/<version>/` (w
 ## CI
 
 A GitHub Actions workflow (`.github/workflows/ci.yml`) builds the project in Debug and Release on Windows (Qt 6.6.3), smoke-checks that the produced executable is a GUI (non-console) application, and uploads a portable zip artifact. (CI uses the Qt version whose MinGW binaries link against the runner's preinstalled GCC; the local dev machine additionally uses Qt 6.11.2.)
+
+## Testing
+
+Three layers, all wired into CI where the runner supports them:
+
+1. **Unit tests** (`copper_tests`, QtTest) — the dependency-light utilities:
+   dependency-binary verification (fail-closed hash/URL contract), file-name
+   sanitization, URL intake classification, version/User-Agent single-source,
+   and the local API token. Build with the project (`COPPER_BUILD_TESTS=ON`,
+   default) and run `ctest --test-dir build` or `build/copper_tests` directly.
+   The binary never touches the real profile (QStandardPaths test mode +
+   `APPDATA`/`LOCALAPPDATA` overrides).
+
+2. **Integration suite** (`tests/integration_test.py`) — launches the deployed
+   exe on an isolated profile against local HTTP servers and asserts real
+   behavior end to end: add/pause/resume/cancel/retry/queue, byte-exact
+   resume, range validation, the token-gated local API and origin allowlist,
+   native-messaging pipe intake, torrent/aria2 flows, `/api/diagnostics`, and
+   crash-free relaunch. Run:
+
+   ```bash
+   $env:COPPER_EXE = (Resolve-Path "installer/release/<version>/CopperDownloadManager.exe").Path
+   python tests/integration_test.py
+   ```
+
+3. **Extension lint** (`tests/validate_extensions.py`) — Chrome/Firefox
+   manifest and background-script invariants.
 
 ## External Tools (Downloaded on Demand)
 

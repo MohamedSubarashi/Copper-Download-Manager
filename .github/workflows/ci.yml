@@ -61,6 +61,18 @@ jobs:
         shell: bash
         run: cmake --build build
 
+      - name: Run unit tests (Release only)
+        if: matrix.config == 'Release'
+        shell: bash
+        run: |
+          # QTest's console output does not reach Actions' captured pipes on
+          # Windows Qt builds, so write the report to a file and cat it; the
+          # exit status (failure count) still gates the step.
+          ./build/copper_tests.exe -o unit_tests.log,txt
+          status=$?
+          cat unit_tests.log
+          exit $status
+
       - name: Verify CRT linkage (Release only)
         if: matrix.config == 'Release'
         shell: bash
@@ -229,6 +241,13 @@ jobs:
 
       - name: Build
         run: cmake --build build
+
+      - name: Run unit tests
+        run: |
+          ./build/copper_tests -o unit_tests.log,txt
+          status=$?
+          cat unit_tests.log
+          exit $status
 
       - name: Package .deb
         run: |

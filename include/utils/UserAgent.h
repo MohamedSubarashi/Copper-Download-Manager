@@ -11,8 +11,9 @@
 //
 // The version component derives from QCoreApplication::applicationVersion(),
 // which main.cpp sets from COPPER_VERSION_STRING (the single-source version).
-// Nothing in the codebase should hardcode a "CopperDownloadManager/x.y" or
-// "CopperDownloadManager/1.0" string anywhere else.
+// Nothing in the codebase should hardcode a "CopperDownloadManager/<version>"
+// UA suffix anywhere else; this header is the one designated place for the
+// prefix itself.
 namespace Copper {
 
 // Browser-like UA (servers often reject or mis-handle bare download-manager

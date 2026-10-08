@@ -104,10 +104,12 @@ def validate_dir(label, path, is_firefox):
             ok &= check(os.path.isfile(os.path.join(path, ref)),
                         f"icon exists: {ref}")
 
-    # Reference checks for the HTTP-first design.
+    # Reference checks for the shipped design: HTTP transport with the API
+    # token, where the token (and install/status queries) come from the app
+    # via the native messaging host.
     perms = manifest.get("permissions") or []
-    ok &= check("nativeMessaging" not in perms,
-                "no nativeMessaging permission (extension talks to the app over HTTP)")
+    ok &= check("nativeMessaging" in perms,
+                "nativeMessaging permission declared (token/status via the host)")
     ok &= check("tabs" in perms, "tabs permission declared (popup 'send current page')")
     ok &= check("downloads" in perms,
                 "downloads permission declared (auto-capture normal browser downloads)")
@@ -128,10 +130,11 @@ def validate_dir(label, path, is_firefox):
             ok &= check(os.path.isfile(os.path.join(path, ref)),
                         f"referenced JS exists: {ref}")
 
-    # The background must route downloads through the app's local HTTP API
-    # (http://127.0.0.1:24680/api/download) - the normal integration path - and
-    # launch/raise the app via the registered copper:// protocol when it is not
-    # running. No native-messaging dependency.
+    # The background must fetch the API token from the app through the native
+    # messaging host (action "getToken"), then route downloads through the
+    # app's local HTTP API (http://127.0.0.1:24680/api/download) - the normal
+    # integration path - and launch/raise the app via the registered copper://
+    # protocol when it is not running.
     bg_path = js_refs[0] if js_refs else None
     if bg_path:
         with open(os.path.join(path, bg_path), encoding="utf-8") as f:
@@ -142,8 +145,8 @@ def validate_dir(label, path, is_firefox):
                     "background targets the app's local HTTP API")
         ok &= check("copper://open" in bg_src,
                     "background launches the app via the copper:// protocol")
-        ok &= check("sendNativeMessage" not in bg_src,
-                    "background no longer uses the native messaging host")
+        ok &= check("sendNativeMessage" in bg_src,
+                    "background fetches the API token via the native messaging host")
         ok &= check("action.onClicked" in bg_src,
                     "toolbar click opens status page (action.onClicked)")
         ok &= check("openStatusTab" in bg_src,
