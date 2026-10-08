@@ -28,9 +28,14 @@ from urllib.parse import quote
 DEFAULT_PORT = 24680
 
 
-def http_request(port, method, path, body=None, headers=None, timeout=3.0):
+# Install-scoped local API token (0.4.0). Read from the app's host config
+# once the API is up and attached to every request by default; tests that
+# probe the auth boundary pass with_token=False or a custom header instead.
+API_TOKEN = ""
+
+
+def http_request(port, method, path, body=None, headers=None, timeout=3.0, with_token=True):
     """Minimal raw-HTTP client (no external deps). Returns (status, parsed_json_or_text)."""
-    s = socket.create_connection(("127.0.0.1", port), timeout=timeout)
     payload = body if body is not None else b""
     if isinstance(body, dict):
         payload = json.dumps(body).encode("utf-8")
@@ -41,21 +46,33 @@ def http_request(port, method, path, body=None, headers=None, timeout=3.0):
     ]
     for k, v in (headers or {}).items():
         req_lines.append(f"{k}: {v}".encode())
+    if with_token and API_TOKEN and not any(
+            k.lower() == "x-copper-token" for k in (headers or {})):
+        req_lines.append(f"X-Copper-Token: {API_TOKEN}".encode())
     if payload:
         req_lines.append(f"Content-Type: application/json".encode())
         req_lines.append(f"Content-Length: {len(payload)}".encode())
     request = b"\r\n".join(req_lines) + b"\r\n\r\n" + payload
-    s.sendall(request)
     chunks = []
-    while True:
+    try:
+        s = socket.create_connection(("127.0.0.1", port), timeout=timeout)
         try:
-            data = s.recv(65536)
-            if not data:
-                break
-            chunks.append(data)
-        except socket.timeout:
-            break
-    s.close()
+            s.sendall(request)
+            while True:
+                try:
+                    data = s.recv(65536)
+                    if not data:
+                        break
+                    chunks.append(data)
+                except socket.timeout:
+                    break
+        finally:
+            s.close()
+    except OSError:
+        # Connection refused/reset: the app died mid-run (crash). Degrade to
+        # status 0 so assertions fail cleanly instead of raising a traceback;
+        # the suite's process exit-code check then reports the crash itself.
+        return 0, ""
     raw = b"".join(chunks)
     head, _, rest = raw.partition(b"\r\n\r\n")
     status_line = head.split(b"\r\n", 1)[0].decode("latin1", "replace")
@@ -75,12 +92,38 @@ def wait_for_ready(port, timeout=30.0):
     while time.time() < deadline:
         try:
             status, _ = http_request(port, "GET", "/api/version", timeout=1.0)
-            if status == 200:
+            # 401 counts as ready: before the token is loaded our probe is
+            # unauthenticated and the 0.4.0 API answers 401 - which still
+            # proves this suite's instance owns the port. The token itself is
+            # read from the host config right after readiness.
+            if status in (200, 401):
                 return True
         except (OSError, socket.timeout):
             pass
         time.sleep(0.5)
     return False
+
+
+def load_api_token(profile_root, timeout=10.0):
+    """Read the app's install-scoped API token from its host config.
+
+    The app mints the token (and atomically writes copper_host_config.json)
+    while bringing the API up, so poll briefly for it instead of failing on a
+    write that races our first request.
+    """
+    path = os.path.join(profile_root, "local", "Copper", "copper_host_config.json")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            token = cfg.get("apiToken") or ""
+            if token:
+                return token
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.3)
+    return ""
 
 
 def _pick_free_port():
@@ -206,8 +249,15 @@ def _make_file_server_from_path(path, content_type="application/octet-stream"):
     return server, port
 
 
+def dl_rows(js):
+    """The downloads array of an /api/downloads body. Tolerates a non-JSON
+    body (what the raw client returns when the connection is cut because the
+    app died mid-run) so one bad poll degrades to a timeout, not a traceback."""
+    return js.get("downloads", []) if isinstance(js, dict) else []
+
+
 def find_download(js, mid):
-    for d in js.get("downloads", []):
+    for d in dl_rows(js):
         if d.get("id") == mid:
             return d
     return None
@@ -244,12 +294,13 @@ def _nm_read(stream):
         return None
 
 
-def run_native_host(host_path, message, timeout=20.0):
+def run_native_host(host_path, message, timeout=20.0, env=None):
     """Run copper_native_host.exe with a native-messaging framed message on
     stdin and return its framed response (dict) or None on failure/timeout."""
     p = subprocess.Popen(
         [host_path],
         cwd=os.path.dirname(os.path.abspath(host_path)),
+        env=env,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -283,13 +334,104 @@ def main():
     # Launch from the exe's directory so the bundled Qt/runtime DLLs resolve.
     exe_dir = os.path.dirname(os.path.abspath(exe))
 
+    # Isolated profile: every run gets its own APPDATA/LOCALAPPDATA (inherited
+    # by every spawned process, including the native host) plus --test-profile,
+    # which redirects Qt's QStandardPaths to test-mode dirs before Logger/DB
+    # first touch them. Without this the suite runs against the developer's
+    # real profile: persisted settings from older releases (e.g. a baked-in
+    # User-Agent), a cached yt-dlp binary (turning "fails fast" assertions into
+    # real YouTube requests), and leftover rows from previous runs.
+    profile_root = tempfile.mkdtemp(prefix="copper_profile_")
+
+    def child_env():
+        env = os.environ.copy()
+        roaming = os.path.join(profile_root, "roaming")
+        local = os.path.join(profile_root, "local")
+        os.makedirs(roaming, exist_ok=True)
+        os.makedirs(local, exist_ok=True)
+        env["APPDATA"] = roaming
+        env["LOCALAPPDATA"] = local
+        # Instances spawned at runtime (e.g. by the native-messaging host,
+        # which starts the app with no args) pick this up and add
+        # --test-profile themselves, so they cannot fall back to the
+        # developer's real profile and contaminate the run.
+        env["COPPER_TEST_PROFILE"] = "1"
+        return env
+
+    def kill_stale_instances():
+        """Kill leftovers of the exe under test from a previous run.
+
+        A stale instance squatting on the API port makes every launch() exit
+        as a "second instance" while wait_for_ready() still succeeds against
+        the stale one - the suite would then silently test the wrong process
+        (and the wrong profile). Only processes running THIS exe are killed;
+        a separately installed Copper is left alone.
+        """
+        exe_abs = os.path.abspath(exe)
+        ps = (
+            "Get-CimInstance Win32_Process -Filter \"Name='"
+            + os.path.basename(exe_abs).replace("'", "''")
+            + "'\" | Where-Object { $_.ExecutablePath -eq '"
+            + exe_abs.replace("'", "''")
+            + "' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+        )
+        try:
+            subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+            )
+        except Exception:
+            pass  # best effort; the liveness check below catches survivors
+
+    def reset_shared_test_profile():
+        """Wipe Qt's SHARED test-mode data dir (except the log).
+
+        QStandardPaths ignores the APPDATA/LOCALAPPDATA overrides above
+        (Windows Known Folders API), so the test-mode DB, tools and temp all
+        live in one shared %APPDATA%\\qttest location for every run - and for
+        every manual --test-profile run of the developer. Leftovers leak
+        between runs: a cached yt-dlp.exe turns "fails fast" assertions into
+        real YouTube requests, a custom default save path redirects job
+        output, and playlist jobs left mid-retry auto-resume at startup and
+        starve the yt-dlp job slots, making timing assertions flaky. The log
+        is kept: the crash-hunt harness measures [CRASH] deltas against a
+        baseline captured in it.
+        """
+        roaming = os.path.join(
+            os.environ.get("APPDATA", ""), "qttest", "Copper",
+            "Copper Download Manager")
+        if os.path.isdir(roaming):
+            for entry in os.listdir(roaming):
+                if entry == "copper.log" or entry.startswith("copper.log."):
+                    continue
+                path = os.path.join(roaming, entry)
+                try:
+                    if os.path.isdir(path):
+                        shutil.rmtree(path, ignore_errors=True)
+                    else:
+                        os.remove(path)
+                except OSError:
+                    pass
+        local = os.path.join(
+            os.environ.get("LOCALAPPDATA", ""), "qttest", "Copper")
+        if os.path.isdir(local):
+            shutil.rmtree(local, ignore_errors=True)
+
     def launch():
-        return subprocess.Popen(
-            [exe],
+        p = subprocess.Popen(
+            [exe, "--test-profile"],
             cwd=exe_dir,
+            env=child_env(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        app_procs.append(p)
+        return p
+
+    app_procs = []      # every app instance started by this run
+    killed_procs = set()  # instances this run killed on purpose (not a crash)
 
     port = DEFAULT_PORT
     passed = 0
@@ -306,12 +448,29 @@ def main():
 
     # --- Launch the app ---
     print("Launching:", exe)
+    kill_stale_instances()
+    reset_shared_test_profile()
     proc = launch()
     try:
         if not wait_for_ready(port, timeout=40):
             print("FATAL: app API did not become ready", file=sys.stderr)
             return 1
         print("  app API is ready")
+        # If our own instance already exited, the API we just probed belongs
+        # to a foreign/stale instance - fail fast instead of testing the
+        # wrong process for the next 90 seconds.
+        rc = proc.poll()
+        if rc is not None:
+            print(f"FATAL: launched instance exited early (rc={rc}); "
+                  f"another instance owns port {port}", file=sys.stderr)
+            return 1
+
+        # --- Local API token (0.4.0): read what the app persisted so every
+        # --- later request authenticates the way real clients must.
+        global API_TOKEN
+        API_TOKEN = load_api_token(profile_root)
+        check("local API token persisted in host config", bool(API_TOKEN),
+              "copper_host_config.json missing/has no apiToken")
 
         # --- /api/version ---
         st, j = http_request(port, "GET", "/api/version")
@@ -325,7 +484,7 @@ def main():
         # --- /api/downloads ---
         st, j = http_request(port, "GET", "/api/downloads")
         check("GET /api/downloads -> 200", st == 200, f"status={st}")
-        check("downloads is a list", isinstance(j.get("downloads"), list), str(j))
+        check("downloads is a list", isinstance(j, dict) and isinstance(j.get("downloads"), list), str(j))
 
         # --- /api/download-filters (include/exclude file-format filter) ---
         st, j = http_request(port, "GET", "/api/download-filters")
@@ -333,9 +492,10 @@ def main():
         check("download-filters reports enabled flag",
               isinstance(j, dict) and j.get("enabled") is True, str(j))
         check("download-filters exposes exclude list (images blocked by default)",
-              isinstance(j.get("exclude"), list) and "jpg" in j.get("exclude", []), str(j))
+              isinstance(j, dict) and isinstance(j.get("exclude"), list)
+              and "jpg" in j.get("exclude", []), str(j))
         check("download-filters exposes include list (empty default = all formats allowed)",
-              isinstance(j.get("include"), list), str(j))
+              isinstance(j, dict) and isinstance(j.get("include"), list), str(j))
 
         # --- /api/download rejects an excluded image URL (file-format filter) ---
         st, j = http_request(port, "POST", "/api/download",
@@ -362,23 +522,56 @@ def main():
         st, j = http_request(port, "POST", "/api/download", {"url": ""})
         check("POST /api/download empty url -> 400", st == 400, f"status={st}")
 
-        # --- Origin/cors hardening ---
-        st, _ = http_request(port, "GET", "/api/version", headers={"Origin": "https://evil.example.com"})
+        # --- Local API token enforcement (0.4.0) ---
+        st, _ = http_request(port, "GET", "/api/version", with_token=False)
+        check("request without token -> 401", st == 401, f"status={st}")
+
+        st, _ = http_request(port, "GET", "/api/version",
+                             headers={"X-Copper-Token": "0" * 64})
+        check("request with wrong token -> 401", st == 401, f"status={st}")
+
+        st, _ = http_request(port, "GET", "/api/version")
+        check("request with valid token -> 200", st == 200, f"status={st}")
+
+        # --- Origin/cors hardening: exact allowlist, not a prefix match ---
+        well_chrome = "chrome-extension://" + ("a" * 32)  # 32 chars, all a-p
+        well_moz = "moz-extension://12345678-1234-1234-1234-123456789abc"
+
+        st, _ = http_request(port, "GET", "/api/version",
+                             headers={"Origin": "https://evil.example.com"})
         check("disallowed Origin (website) -> 403", st == 403, f"status={st}")
 
-        st, _ = http_request(port, "GET", "/api/version", headers={"Origin": "chrome-extension://abcdefghijklmnop"})
-        check("chrome-extension Origin -> 200", st == 200, f"status={st}")
+        st, _ = http_request(port, "GET", "/api/version", headers={"Origin": well_chrome})
+        check("well-formed chrome-extension Origin -> 200", st == 200, f"status={st}")
 
-        st, _ = http_request(port, "GET", "/api/version", headers={"Origin": "moz-extension://abcdefghijklmnop"})
-        check("moz-extension Origin -> 200", st == 200, f"status={st}")
+        st, _ = http_request(port, "GET", "/api/version", headers={"Origin": well_moz})
+        check("well-formed moz-extension Origin -> 200", st == 200, f"status={st}")
+
+        for bad_origin in (
+                "chrome-extension://abcdefghijklmnop",           # 16 chars, not 32
+                "chrome-extension://QRSTUVWXYZ23456789abcdef",   # chars outside a-p
+                "chrome-extension://evil.example.com",           # not an extension id
+                "moz-extension://not-a-uuid",
+                "moz-extension://12345678-1234-1234-1234-123456789abg"):  # non-hex
+            st, _ = http_request(port, "GET", "/api/version",
+                                 headers={"Origin": bad_origin})
+            check(f"malformed Origin {bad_origin} -> 403", st == 403, f"status={st}")
 
         # --- Unsupported URL scheme rejection ---
         st, j = http_request(port, "POST", "/api/download", {"url": "file:///C:/Windows/notepad.exe"})
         check("POST /api/download file:// scheme -> 400", st == 400, f"status={st}")
 
-        # --- OPTIONS preflight from allowed origin is answered with echoed origin ---
-        st, _ = http_request(port, "OPTIONS", "/api/download", headers={"Origin": "chrome-extension://abcdefghijklmnop"})
-        check("OPTIONS from allowed Origin -> 204", st == 204, f"status={st}")
+        # --- OPTIONS preflight: exempt from the token, advertises the header ---
+        st, _ = http_request(port, "OPTIONS", "/api/download", with_token=False,
+                             headers={"Origin": well_chrome})
+        check("OPTIONS without token from allowed Origin -> 204", st == 204, f"status={st}")
+
+        # --- Request caps: an oversized body is refused before it is read ---
+        st, _ = http_request(port, "POST", "/api/download",
+                             {"url": "http://127.0.0.1:1/x",
+                              "pad": "x" * (1024 * 1024)},
+                             timeout=15.0)
+        check("POST body over 1 MB -> 413", st == 413, f"status={st}")
 
         # --- Download-engine regression tests (chunked HTTP via a local server) ---
         chk = "DLCHUNK-REG" + ("x" * 262144)  # ~256KB, forces multi-chunk
@@ -387,7 +580,7 @@ def main():
             def add_download(url, name, path):
                 st, j = http_request(port, "POST", "/api/download",
                                      {"url": url, "filename": name, "path": path})
-                return st, j.get("id")
+                return st, j.get("id") if isinstance(j, dict) else None
 
             # 1) Complete chunked download reaches Completed and is byte-exact.
             srv, sp = _make_file_server(chk, mode="normal")
@@ -450,7 +643,7 @@ def main():
                     deadline = time.time() + timeout
                     while time.time() < deadline:
                         _, jl = http_request(port, "GET", "/api/downloads")
-                        matched = [x for x in jl.get("downloads", [])
+                        matched = [x for x in dl_rows(jl)
                                    if x.get("url") == inner_url]
                         if matched:
                             return matched[0]
@@ -498,7 +691,7 @@ def main():
                 time.sleep(4)
 
                 _, jl = http_request(port, "GET", "/api/downloads")
-                bug_http = [x for x in jl.get("downloads", [])
+                bug_http = [x for x in dl_rows(jl)
                             if x.get("type") == "HTTP" and "a.torrent" in x.get("url", "")]
                 check("copper// script .torrent URL is not downloaded as HTTP",
                       not bug_http, str(bug_http))
@@ -559,7 +752,7 @@ def main():
             deadline = time.time() + 15
             while time.time() < deadline:
                 _, jl = http_request(port, "GET", "/api/downloads")
-                all_dl = jl.get("downloads", [])
+                all_dl = dl_rows(jl)
                 job = next((x for x in all_dl
                             if x.get("url") == fake_playlist), None)
                 if job:
@@ -604,7 +797,7 @@ def main():
                       f"status={d.get('status') if d else None}")
 
                 _, jl = http_request(port, "GET", "/api/downloads")
-                paused_kids = [x for x in jl.get("downloads", [])
+                paused_kids = [x for x in dl_rows(jl)
                                if x.get("parentId") == mid]
                 check("pausing a job pauses its items too",
                       all(k.get("status") == "Paused" for k in paused_kids) and paused_kids,
@@ -637,7 +830,7 @@ def main():
 
                 def rows():
                     _, body = http_request(port, "GET", "/api/downloads")
-                    return {x.get("id"): x for x in body.get("downloads", [])}
+                    return {x.get("id"): x for x in dl_rows(body)}
 
                 before = rows()
                 # pauseDownload/cancelDownload only act on a Queued or Downloading
@@ -705,7 +898,7 @@ def main():
             #     on the contract the job carries, which needs no network.
             def jobs_for(url):
                 _, body = http_request(port, "GET", "/api/downloads")
-                return sorted([x for x in body.get("downloads", [])
+                return sorted([x for x in dl_rows(body)
                                if x.get("url") == url and (x.get("parentId") or -1) < 0],
                               key=lambda x: x.get("id") or 0)
 
@@ -735,7 +928,7 @@ def main():
                       str(subset_job.get("trackNumbers")))
 
                 _, body = http_request(port, "GET", "/api/downloads")
-                sub_kids = sorted([x for x in body.get("downloads", [])
+                sub_kids = sorted([x for x in dl_rows(body)
                                    if x.get("parentId") == subset_job.get("id")],
                                   key=lambda x: x.get("trackIndex") or 0)
                 check("only the ticked rows are created",
@@ -883,7 +1076,7 @@ def main():
                               str(on_disk))
 
                         _, body = http_request(port, "GET", "/api/downloads")
-                        rows = [x for x in body.get("downloads", [])
+                        rows = [x for x in dl_rows(body)
                                 if x.get("parentId") == real_job.get("id")]
                         check("rows follow the renamed files",
                               sorted((x.get("fileName") or "") for x in rows) == numbered,
@@ -901,13 +1094,22 @@ def main():
                 st, _ = http_request(port, "GET", "/api/ping")
                 check("app reachable for host ping", st == 200, f"status={st}")
 
-                # a) ping: host must reach the app over the pipe and report running.
-                rep = run_native_host(host_path, {"action": "ping"})
+                # a) token: the host must hand out the same install-scoped
+                #    token the API enforces, straight from the shared config.
+                rep = run_native_host(host_path, {"action": "getToken"}, env=child_env())
+                check("native host getToken -> ok",
+                      bool(rep and rep.get("ok") is True), str(rep))
+                check("native host token matches API token",
+                      bool(rep and rep.get("token") and rep.get("token") == API_TOKEN),
+                      f"host={str((rep or {}).get('token'))[:12]} api={API_TOKEN[:12]}")
+
+                # b) ping: host must reach the app over the pipe and report running.
+                rep = run_native_host(host_path, {"action": "ping"}, env=child_env())
                 check("native host ping -> ok", bool(rep and rep.get("ok") is True), str(rep))
                 check("native host reports app running",
                       bool(rep and rep.get("running") is True), str(rep))
 
-                # b) download: a small file injected through the host + pipe must
+                # c) download: a small file injected through the host + pipe must
                 #    be registered and complete byte-exact.
                 nm_payload = "NMPIPE-" + ("y" * 65536)
                 nm_srv, nm_sp = _make_file_server(nm_payload, mode="normal")
@@ -918,14 +1120,14 @@ def main():
                         "url": nm_url,
                         "filename": "nm.bin",
                         "path": workdir,
-                    })
+                    }, env=child_env())
                     check("native host download -> ok", bool(rep and rep.get("ok") is True), str(rep))
 
                     nm_mid = None
                     deadline = time.time() + 15
                     while time.time() < deadline:
                         _, jl = http_request(port, "GET", "/api/downloads")
-                        matched = [x for x in jl.get("downloads", [])
+                        matched = [x for x in dl_rows(jl)
                                    if x.get("url") == nm_url]
                         if matched:
                             nm_mid = matched[0]["id"]
@@ -977,6 +1179,7 @@ def main():
                 # Persist the DB/progress sidecar one more time so the resume
                 # state is fresh, then hard-kill the app (not a graceful shutdown).
                 time.sleep(1.5)
+                killed_procs.add(proc)
                 proc.kill()
                 try:
                     proc.wait(timeout=10)
@@ -996,8 +1199,23 @@ def main():
                     port = DEFAULT_PORT
                     proc = launch()
                     ok = wait_for_ready(port, timeout=40)
+                    # A relaunched instance that already exited means a
+                    # foreign instance owns the port - don't pretend the
+                    # relaunch succeeded.
+                    if ok and proc.poll() is not None:
+                        ok = False
                     check("app relaunches after interrupt", ok, f"port={port}")
                     if ok:
+                        # The token must be reused across restarts (loaded from
+                        # disk, never regenerated) or every stored client -
+                        # second instance, native host, extension - would break
+                        # on every app start. The API calls that then use
+                        # API_TOKEN against the new instance prove it accepted
+                        # the persisted token.
+                        new_token = load_api_token(profile_root, timeout=10)
+                        check("API token stable across restart",
+                              bool(new_token) and new_token == API_TOKEN,
+                              f"before={API_TOKEN[:12]} after={new_token[:12]}")
                         d = wait_download_status(port, res_mid, {"Completed", "Failed"}, timeout=120)
                         final_ok = d is not None and d.get("status") == "Completed"
                         if final_ok and os.path.isfile(res_bin):
@@ -1011,12 +1229,32 @@ def main():
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
+        # An instance that died on its own with an NTSTATUS code means the
+        # crash handler ran mid-suite (e.g. 0xC0000005 access violation).
+        # Surface it as an explicit failure so an intermittent crash cannot
+        # silently masquerade as unrelated downstream timeouts.
+        for p in app_procs:
+            if p in killed_procs:
+                continue
+            rc = p.poll()
+            if rc is not None and rc not in (0, 1):
+                check(f"app instance exited cleanly (rc={rc})", False,
+                      "unexpected process death - search copper.log for [CRASH]")
+
     finally:
         try:
             proc.terminate()
             proc.wait(timeout=5)
         except Exception:
             proc.kill()
+        # Detached instances (e.g. launched by the native host) are not in
+        # app_procs - sweep them so they cannot squat on the port for the
+        # next run or outlive the suite.
+        kill_stale_instances()
+        if failed == 0:
+            shutil.rmtree(profile_root, ignore_errors=True)
+        else:
+            print(f"  profile kept for triage: {profile_root}")
 
     print(f"\n{passed} passed, {failed} failed")
     return 0 if failed == 0 else 1
