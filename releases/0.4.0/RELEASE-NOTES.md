@@ -73,5 +73,3 @@ Local-API consumers outside this repository must send
 ## Known limitations
 - Binaries are not code-signed (no signing certificate available in
   this cycle); Windows SmartScreen may warn on first run.
-- The CI matrix runs on push; it was configured but not executed for
-  this tag locally.

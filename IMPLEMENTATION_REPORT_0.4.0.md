@@ -54,7 +54,7 @@ as NOT RUN, never inferred.
 | Windows metadata (version resource) | **PASS** | `check_version_consistency.py` verifies FILEVERSION/PRODUCTVERSION/FileVersion/ProductVersion strings = 0.4.0 |
 | Signing preparation | **BLOCKED** | No code-signing certificate available; prep delivered as documented procedure (RELEASE.md §7, commented `SignTool` scaffolding in the .iss) |
 | Release validation & docs | **PASS** | This report; RELEASE.md updated; `releases/0.4.0/` populated (portable zip, installer, SHA256SUMS, release notes) |
-| CI jobs | **PASS** (configured) / **NOT RUN** (execution) | `.github/workflows/ci.yml`: extension lint; Windows Qt 6.6.3 Debug/Release build + unit tests + CRT/startup smoke + portable zip + installer; Linux build + unit tests + .deb; macOS build. Execution requires a push to GitHub |
+| CI jobs | **PASS** | Run 37835072437: all 6 executed jobs green (Windows Qt 6.6.3 Debug/Release + unit tests + CRT/startup smoke + zip + installer; Linux build + unit tests + .deb; macOS .dmg; Arch .pkg; extension lint; Publish skipped = tag-only). The first run (37833762124) failed 2 of 7 jobs — both root-caused and fixed in `747286f` (stale `PKGBUILD` pkgver; Windows-only pin assertion on Linux) rather than suppressed |
 | Qt matrix documentation | **PASS** | README "Qt version matrix" (local 6.11.2 validated; CI 6.6.3) |
 
 ---
@@ -72,7 +72,7 @@ validators. Overall: **no FAIL anywhere.**
 | Extension lint — `tests/validate_extensions.py` (MV3 shape, permissions, popup wiring, gecko.id, native-token handshake, HTTP dispatch, cancel path) | **PASS — Chrome OK, Firefox OK** | Final |
 | Version consistency — `tools/check_version_consistency.py` | **PASS — 81 files, version 0.4.0 everywhere** | Final |
 | Opt-in real-playlist cases (network, yt-dlp + ffmpeg required; expected 95 = 88 + 7) | **NOT RUN** | Requires network + installed tools; unchanged from 0.3.1 |
-| CI matrix execution (Qt 6.6.3, Linux, macOS) | **NOT RUN** | Requires push to GitHub |
+| CI matrix execution (Qt 6.6.3, Linux, macOS, Arch) | **PASS** | Run 37835072437, 6/6 executed jobs green after the `747286f` fixes (first run's 2 failures root-caused and fixed, not suppressed) |
 | Updater digest verification against a live GitHub release | **NOT RUN** | See §1 |
 | Code-signing of artifacts | **BLOCKED** | No certificate |
 
@@ -140,7 +140,7 @@ Build configuration (the validated one): Qt 6.11.2 `mingw_64`,
 MinGW 13.1.0, CMake + Ninja, `Release` with `-O2 -g`, windres +
 `fix_version_resource.py` preserved.
 
-## 5. Commit series (9 commits, `64c2468` → `e357f3d`)
+## 5. Commit series (12 commits, `64c2468` → `747286f`, pushed to `origin/main`)
 
 | Commit | Content |
 |---|---|
@@ -153,6 +153,9 @@ MinGW 13.1.0, CMake + Ninja, `Release` with `-O2 -g`, windres +
 | `197bfe1` | feat(security): verify dependency downloads, stop killing by port |
 | `1b183df` | feat(reliability): disk guard, conflict policy, HTTP classification, proxy, custom headers, DB safety, diagnostics |
 | `e357f3d` | test(unit): QtTest target + validator drift fixes |
+| `0c854c1` | docs(release): implementation report, release-guide refresh, signing prep |
+| `d061111` | release: stage the 0.4.0 artifacts in releases/0.4.0/ |
+| `747286f` | fix(ci): PKGBUILD version, platform-aware pin test, failure-visible test steps |
 
 ## 6. Breaking change
 
@@ -163,10 +166,11 @@ removed or renamed.
 
 ## 7. Open items / follow-ups
 
-- **Push**: the 9 commits are local; pushing (and therefore running the
-  CI matrix) is pending a decision.
-- **`releases/0.4.0/` placement**: committed to the repository vs kept
-  as a local build product — pending.
+- ~~Push~~ — done: all 12 commits are on `origin/main` and the CI
+  matrix has executed and passed (run 37835072437, 6/6 jobs).
+- ~~`releases/0.4.0/` placement~~ — decided: the artifacts are tracked
+  in the repository; `.gitignore` documents the `*.zip`/`*.exe`
+  force-add exception.
 - **Registry contamination under test profile**: `MainWindow` still
   touches `QSettings("Copper","DownloadManager")`; harmless in practice
   but not redirected under `--test-profile`.
