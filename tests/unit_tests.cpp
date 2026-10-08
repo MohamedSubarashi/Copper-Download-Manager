@@ -197,7 +197,7 @@ void CopperUnitTests::userAgent_followsApplicationVersion() {
     QCOMPARE(Copper::bareUserAgent(), prefix + "9.9.9-test");
     QCoreApplication::setApplicationVersion(QStringLiteral(COPPER_VERSION_STRING));
     // After restoring, the UA must carry the single-source version - this is
-    // what catches a stale hardcoded "CopperDownloadManager/1.0".
+    // what catches a stale hardcoded UA version suffix.
     QVERIFY(Copper::bareUserAgent().endsWith(QStringLiteral(COPPER_VERSION_STRING)));
 }
 

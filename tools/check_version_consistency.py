@@ -31,6 +31,12 @@ import sys
 # contains 0.3.1 until the next release supersedes it).
 PREVIOUS_RELEASES = ("0.3.1",)
 
+# Historical documents that legitimately name old versions and old UA strings
+# when describing the release history (source and machine files must not).
+HISTORY_DOCS = ("OPENCODE_TODO.md",
+                "IMPLEMENTATION_REPORT_0.4.0.md",
+                "releases/0.4.0/RELEASE-NOTES.md")
+
 # Files scanned for stale/forbidden version literals (text files only).
 SCAN_DIRS = ("src", "include", "nativehost", "tests", "tools", "installer",
              "extensions", "cmake", ".github")
@@ -135,12 +141,10 @@ def main():
         except OSError:
             continue
         scanned += 1
+        if rel in HISTORY_DOCS:
+            continue  # history docs legitimately name old versions/UA strings
         for label, pattern in forbidden:
             if re.search(pattern, text):
-                # Historical notes in release notes / TODO logs are allowed to
-                # mention old versions; only source and machine files are not.
-                if rel in ("OPENCODE_TODO.md",):
-                    continue
                 print("  FAIL: %s contains forbidden literal %r" % (rel, label))
                 failures.append("%s: stale %s" % (rel, label))
 

@@ -18,6 +18,14 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
+; --- Code signing (0.4.0 preparation) -------------------------------------
+; No certificate was available for this release, so nothing is signed.
+; When one exists, register a sign tool on the ISCC command line, e.g.
+;   ISCC /S"CopperSign=sign tool /f cert.pfx /p <pw> $f" CopperDownloadManager.iss
+; and uncomment the next two lines (see RELEASE.md section 6):
+; SignTool=CopperSign
+; SignedUninstaller=yes
+; ---------------------------------------------------------------------------
 SetupIconFile=..\Assets\app.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 

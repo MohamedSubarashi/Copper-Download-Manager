@@ -5,11 +5,17 @@ publishing a new version. Follow it top to bottom.
 
 ## 1. Bump the version
 
-1. Update `project(... VERSION X.Y.Z ...)` in `CMakeLists.txt`.
-2. Update `APP_VERSION` (if referenced) and the version resource / installer
-   metadata.
-3. Update the header version in `THIRD-PARTY-NOTICES.txt` and verify Qt/tool
-   versions match what will be deployed.
+1. Update `project(... VERSION X.Y.Z ...)` in `CMakeLists.txt`. This is the
+   single source: the generated `copper_version.h`, the User-Agent and
+   `setApplicationVersion` all derive from it.
+2. Mirror the new version into `app.rc`,
+   `installer/CopperDownloadManager.iss` and the `THIRD-PARTY-NOTICES.txt`
+   header, then run the consistency checker — it fails (exit 1) on any stale
+   version literal or hardcoded UA anywhere in the tracked tree:
+
+   ```powershell
+   python tools\check_version_consistency.py
+   ```
 
 ## 2. Build (Windows Release)
 
@@ -44,7 +50,7 @@ Run the full integration suite against the deployed exe:
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `72 passed, 0 failed` (as of v0.3.0). The suite covers
+Expected result: `88 passed, 0 failed` (as of v0.4.0). The suite covers
 launch/intake, single-instance, protocol forwarding, chunked/truncated/
 unknown-length downloads, the copper:// flow, .torrent injection, the
 native-messaging host -> named-pipe injection (ping + byte-exact download),
@@ -53,7 +59,21 @@ playlist job model (one folder job per playlist, one row per item carrying its
 playlist position and video id, pause/resume/retry of the job) together with the
 selection contract: the ticked positions are stored on the job, nothing outside
 the selection is requested, an empty selection refuses to start, and files are
-numbered over the selection.
+numbered over the selection. From 0.4.0 it additionally covers the
+local-API token (401 without / 200 with, stable across restart), the
+browser-origin allowlist, `GET /api/diagnostics`, byte-exact resume after
+an interrupt, and crash-free relaunch.
+
+Unit tests (QtTest) — run before the suite:
+
+```powershell
+& build\copper_tests.exe -o unit_tests.log,txt
+Get-Content unit_tests.log
+```
+
+Expected result: `17 passed, 0 failed` (as of v0.4.0). The binary is
+isolated from the real profile (QStandardPaths test mode plus
+`APPDATA`/`LOCALAPPDATA` overrides), so it can run beside the app.
 
 One case is opt-in, because the rest of the suite is offline and this one
 downloads real videos from YouTube (about 140 MB):
@@ -63,7 +83,9 @@ $env:COPPER_IT_REAL_PLAYLIST = "1"
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `79 passed, 0 failed`. It needs yt-dlp and ffmpeg in the app's
+Expected result: `95 passed, 0 failed` (88 offline checks + the 7
+real-playlist checks; not executed during the 0.4.0 validation cycle).
+It needs yt-dlp and ffmpeg in the app's
 tools folder (`%APPDATA%\Copper\Copper Download Manager\tools\`) and network
 access. It fetches a fixed playlist, ticks two of its items (positions 11 and
 18), and asserts that exactly two files land on disk, named `001.` and `002.` in
@@ -84,9 +106,10 @@ Extension manifest validation (offline, run in CI and locally):
 python tests\validate_extensions.py
 ```
 Validates the MV3 shape, toolbar `action` + popup wiring, Firefox gecko.id +
-data-collection declaration, the required `downloads` permission, and that both
-extensions hand work to the app over native messaging (with a
-`http://127.0.0.1:24680/api/download` fallback while the host is unavailable).
+data-collection declaration, the required `downloads` permission, the
+`nativeMessaging` permission and `getToken` handshake that supply the local
+API token, and that both extensions dispatch over
+`http://127.0.0.1:24680/api/download` (with the `copper://` launch path).
 
 ## 4. Manual QA checklist
 
@@ -176,8 +199,28 @@ Run through these before publishing.
 - [ ] Create the portable zip and confirm CI packaging smoke check passes.
 - [ ] `THIRD-PARTY-NOTICES.txt` lists every bundled third-party component with
       license, copyright, and source.
+- [ ] Stage `releases/<version>/`: the portable zip (CI-identical layout),
+      the setup exe, `SHA256SUMS` (coreutils format, covering both artifacts)
+      and the release notes; verify with `sha256sum -c SHA256SUMS`.
+- [ ] Smoke the install/uninstall path on a clean machine or VM — a
+      successful ISCC compile alone does not prove it.
 
-## 6. Publish
+## 6. Code signing (preparation)
+
+No signing certificate was available for 0.4.0, so the artifacts are
+unsigned and Windows SmartScreen may warn on first run. When a
+certificate exists:
+
+1. Register a sign tool with ISCC, e.g.
+   `ISCC /S"CopperSign=sign tool /f cert.pfx /p <password> $f" installer\CopperDownloadManager.iss`,
+   and uncomment `SignTool=` / `SignedUninstaller=yes` in the `.iss`
+   `[Setup]` section.
+2. Sign the portable exe separately:
+   `signtool sign /f cert.pfx /td sha256 /fd sha256 /tr <timestamp-url> CopperDownloadManager.exe`
+   (and `copper_native_host.exe`).
+3. Regenerate `SHA256SUMS` after any (re-)signing.
+
+## 7. Publish
 
 1. Commit all changes, tag the release (`git tag vX.Y.Z`), and push.
 2. Let CI run the matrix (Qt 6.6.3 Release/Debug) and the `extension-lint` job;
