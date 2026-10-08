@@ -1,5 +1,6 @@
 #include "utils/FfmpegManager.h"
 #include "utils/Logger.h"
+#include "utils/UserAgent.h"
 #include <QStandardPaths>
 #include <QDir>
 #include <QFile>
@@ -88,7 +89,7 @@ void FfmpegManager::installOrUpdate() {
 void FfmpegManager::startBinaryDownload(const QString& url, const QString& fileName) {
     QNetworkRequest request(url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    request.setRawHeader("User-Agent", "Mozilla/5.0 CopperDownloadManager/1.0");
+    request.setRawHeader("User-Agent", Copper::copperUserAgent().toUtf8());
 
     activeReply = nam->get(request);
 

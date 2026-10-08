@@ -145,6 +145,18 @@ private:
     QString getToolsDir();
     void startDownload(const QString& url, const QString& fileName);
     bool extractAria2c(const QString& zipPath);
+    // File/process half of the install (Expand-Archive + copy): pure work, no
+    // GUI-affine member state, so it can run on the one-shot worker thread.
+    bool extractZipToTools(const QString& zipPath);
+    // Download + extract, running entirely on the worker thread (its own
+    // event loop for the download). Serialised by m_installMutex so an async
+    // fetch and a sync daemon-start install can never write the same zip.
+    bool downloadAndExtractAria2c(const QString& url, const QString& fileName);
+    // Install without blocking the GUI: work runs on a worker thread and done
+    // is invoked on the GUI thread. Used by fetchTorrentFiles so the torrent
+    // dialog's file-list load never blocks or spins a nested event loop.
+    void ensureInstalledAsync(std::function<void(bool)> done);
+    QMutex m_installMutex;
 
     // Install/update helpers: resolve the latest Windows release from the
     // GitHub API (mirroring YtDlpManager) so "Check & Update aria2c" actually

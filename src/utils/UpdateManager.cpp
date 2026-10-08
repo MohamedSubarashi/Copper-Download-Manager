@@ -1,5 +1,6 @@
 #include "utils/UpdateManager.h"
 #include "utils/Logger.h"
+#include "utils/UserAgent.h"
 #include "db/DatabaseManager.h"
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
@@ -46,7 +47,7 @@ void UpdateManager::checkForUpdates(bool silent) {
 
     QNetworkRequest request(QUrl("https://api.github.com/repos/MohamedSubarashi/Copper-Download-Manager/releases/latest"));
     request.setRawHeader("Accept", "application/vnd.github.v3+json");
-    request.setRawHeader("User-Agent", ("CopperDownloadManager/" + QCoreApplication::applicationVersion()).toUtf8());
+    request.setRawHeader("User-Agent", Copper::bareUserAgent().toUtf8());
 
     QNetworkReply* reply = nam->get(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
@@ -131,7 +132,7 @@ void UpdateManager::downloadAndInstall() {
 
     QNetworkRequest request(downloadUrl);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    request.setRawHeader("User-Agent", ("CopperDownloadManager/" + QCoreApplication::applicationVersion()).toUtf8());
+    request.setRawHeader("User-Agent", Copper::bareUserAgent().toUtf8());
 
     QNetworkReply* reply = nam->get(request);
     connect(reply, &QNetworkReply::downloadProgress, this, [this](qint64 received, qint64 total) {

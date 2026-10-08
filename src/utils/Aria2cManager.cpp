@@ -1,5 +1,6 @@
 #include "utils/Aria2cManager.h"
 #include "utils/Logger.h"
+#include "utils/UserAgent.h"
 #include "db/DatabaseManager.h"
 #include <QStandardPaths>
 #include <QDir>
@@ -17,6 +18,7 @@
 #include <QJsonValue>
 #include <QProcess>
 #include <QEventLoop>
+#include <QSharedPointer>
 #include <QRandomGenerator>
 #include <QUrl>
 #include <QRandomGenerator>
@@ -152,7 +154,7 @@ void Aria2cManager::installOrUpdate() {
     // nothing once a file existed.
     QNetworkRequest request(QUrl("https://api.github.com/repos/aria2/aria2/releases/latest"));
     request.setRawHeader("Accept", "application/vnd.github.v3+json");
-    request.setRawHeader("User-Agent", "Mozilla/5.0 CopperDownloadManager/1.0");
+    request.setRawHeader("User-Agent", Copper::bareUserAgent().toUtf8());
 
     QNetworkReply* reply = nam->get(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
@@ -202,70 +204,145 @@ void Aria2cManager::installOrUpdate() {
     });
 }
 
+namespace {
+// Shared state between a blocked GUI thread and the one-shot worker. It is
+// heap-shared so a pathological worker stall (waiting thread already gave up)
+// can never leave the worker writing into freed memory.
+struct BlockingState {
+    QMutex mutex;
+    QWaitCondition cond;
+    bool done = false;
+    bool result = false;
+};
+
+// Runs fn on a one-shot worker thread and blocks the calling thread WITHOUT
+// processing any events. This is the pattern rpcCall already uses: a nested
+// QEventLoop on the GUI thread lets LocalServer sockets fire reentrantly while
+// an install/extract is mid-flight (the reentrancy window behind the
+// use-after-free crash fixed in LocalServer), and QProcess::waitForFinished
+// froze the GUI on the same work. Blocking without event processing keeps
+// reentrancy out; a 10-minute backstop keeps a wedged worker from hanging the
+// app forever (the worker deletes itself when it finishes).
+constexpr int kWorkerWaitMs = 600000;
+
+template <typename Fn>
+static bool runBlockingOffGui(Fn fn) {
+    auto state = QSharedPointer<BlockingState>::create();
+    QThread* thread = QThread::create([state, fn]() {
+        const bool r = fn();
+        QMutexLocker locker(&state->mutex);
+        state->result = r;
+        state->done = true;
+        state->cond.wakeAll();
+    });
+    if (!thread) return fn();  // thread creation failed: degrade to a direct call
+    QObject::connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
+
+    bool result = false;
+    bool finished = false;
+    {
+        QMutexLocker locker(&state->mutex);
+        bool timedOut = false;
+        while (!state->done && !timedOut) {
+            timedOut = !state->cond.wait(&state->mutex, kWorkerWaitMs);
+        }
+        finished = state->done;
+        result = state->result;
+    }
+    if (finished) {
+        thread->wait();
+    } else {
+        Logger::instance().error("Dependency install worker did not finish within 10 minutes; abandoning it");
+    }
+    return finished && result;
+}
+}  // namespace
+
 bool Aria2cManager::ensureInstalled() {
     if (isInstalled()) return true;
 
     Logger::instance().info("aria2c not found, auto-installing...");
 
 #ifdef PLATFORM_WINDOWS
-    QString url = "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip";
-    QString fileName = "aria2-1.37.0-win-64bit-build1.zip";
+    const QString url = "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip";
+    const QString fileName = "aria2-1.37.0-win-64bit-build1.zip";
+    // Download and extraction happen on a worker thread; this thread blocks
+    // without processing events (see runBlockingOffGui). The previous
+    // implementation ran a nested QEventLoop and QProcess::waitForFinished on
+    // the GUI thread - both forbidden: the former reentrancy, the latter the
+    // freeze this refactor removes. Callers on hot paths use
+    // ensureInstalledAsync() instead; this sync entry remains for the daemon
+    // start chain, which already blocks in the same manner.
+    return runBlockingOffGui([this, url, fileName]() {
+        return downloadAndExtractAria2c(url, fileName);
+    });
+#else
+    return false;
+#endif
+}
+
+void Aria2cManager::ensureInstalledAsync(std::function<void(bool)> done) {
+    if (isInstalled()) {
+        done(true);
+        return;
+    }
+    Logger::instance().info("aria2c not found, auto-installing (async)...");
+    QThread* thread = QThread::create([this, done]() {
+        const bool ok = downloadAndExtractAria2c(
+            QStringLiteral("https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip"),
+            QStringLiteral("aria2-1.37.0-win-64bit-build1.zip"));
+        // Continue on the GUI thread: the callback must not run on the worker.
+        QMetaObject::invokeMethod(this, [this, done, ok]() { done(ok && isInstalled()); },
+                                  Qt::QueuedConnection);
+    });
+    if (!thread) {
+        done(false);
+        return;
+    }
+    QObject::connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
+}
+
+bool Aria2cManager::downloadAndExtractAria2c(const QString& url, const QString& fileName) {
+    // Runs on a one-shot worker thread (see runBlockingOffGui /
+    // ensureInstalledAsync): it spins its own event loop for the download,
+    // which is fine because nothing GUI-affine executes here. The mutex
+    // serializes concurrent install attempts (an async fetch and a sync daemon
+    // start can overlap) so both never write the same zip at once.
+    QMutexLocker installLock(&m_installMutex);
+    if (isInstalled()) return true;
 
     QString toolsDir = getToolsDir();
     QDir().mkpath(toolsDir);
     QString zipPath = toolsDir + "/" + fileName;
 
+    QNetworkAccessManager localNam;
     QEventLoop loop;
-    bool downloadOk = false;
+    bool ok = false;
 
-    QNetworkRequest request(url);
+    QNetworkRequest request{QUrl{url}};
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+    // A stalled connection must never wedge the installer (and with it the
+    // GUI thread in the sync path).
+    request.setTransferTimeout(120000);
 
-    QNetworkReply* reply = nam->get(request);
+    QNetworkReply* reply = localNam.get(request);
 
-    connect(reply, &QNetworkReply::downloadProgress, [](qint64 received, qint64 total) {
+    QObject::connect(reply, &QNetworkReply::downloadProgress, &loop, [](qint64 received, qint64 total) {
         if (total > 0) {
             int pct = (int)((received * 100) / total);
             Logger::instance().info("Downloading aria2c: " + QString::number(pct) + "%");
         }
     });
 
-    connect(reply, &QNetworkReply::finished, [&]() {
+    QObject::connect(reply, &QNetworkReply::finished, &loop, [&]() {
         if (reply->error() != QNetworkReply::NoError) {
             Logger::instance().error("aria2c download failed: " + reply->errorString());
-            reply->deleteLater();
             loop.quit();
             return;
         }
-
-        int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        if (httpStatus >= 300 && httpStatus < 400) {
-            QUrl redirectUrl = reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
-            reply->deleteLater();
-            QNetworkRequest redirRequest(redirectUrl);
-            redirRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-            redirRequest.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-            reply = nam->get(redirRequest);
-            connect(reply, &QNetworkReply::finished, this, [&]() {
-                QByteArray data = reply->readAll();
-                reply->deleteLater();
-                QFile zipFile(zipPath);
-                if (zipFile.open(QIODevice::WriteOnly)) {
-                    zipFile.write(data);
-                    zipFile.close();
-                }
-                bool ok = extractAria2c(zipPath);
-                QFile::remove(zipPath);
-                if (ok && isInstalled()) {
-                    Logger::instance().info("aria2c auto-installed: " + getVersion());
-                    downloadOk = true;
-                }
-                loop.quit();
-            });
-            return;
-        }
-
         QByteArray data = reply->readAll();
         reply->deleteLater();
 
@@ -278,24 +355,18 @@ bool Aria2cManager::ensureInstalled() {
         zipFile.write(data);
         zipFile.close();
 
-        bool ok = extractAria2c(zipPath);
+        ok = extractZipToTools(zipPath);
         QFile::remove(zipPath);
-
-        if (ok && isInstalled()) {
+        if (ok) {
             Logger::instance().info("aria2c auto-installed: " + getVersion());
-            downloadOk = true;
         } else {
             Logger::instance().error("aria2c auto-install failed");
         }
-
         loop.quit();
     });
 
     loop.exec();
-    return downloadOk;
-#else
-    return false;
-#endif
+    return ok && isInstalled();
 }
 
 QString Aria2cManager::getToolsDir() {
@@ -377,13 +448,10 @@ void Aria2cManager::startDownload(const QString& url, const QString& fileName) {
 
 bool Aria2cManager::extractAria2c(const QString& zipPath) {
 #ifdef PLATFORM_WINDOWS
-    QString toolsDir = getToolsDir();
-    QString extractDir = toolsDir + "/aria2_tmp";
-
     // If a daemon from this session is still alive, release the exe first: a
     // running aria2c.exe cannot be removed or overwritten, which made "Check &
     // Update aria2c" report failure ("Installation failed") while a torrent was
-    // seeding/active.
+    // seeding/active. (GUI-affine: the daemon members are touched here.)
     if (m_daemonProcess) {
         m_daemonProcess->kill();
         m_daemonProcess->waitForFinished(1000);
@@ -393,14 +461,41 @@ bool Aria2cManager::extractAria2c(const QString& zipPath) {
     m_daemonRunning = false;
     m_pollInProgress = false;
 
-    QDir dir;
-    if (dir.exists(extractDir)) dir.removeRecursively();
-    dir.mkpath(extractDir);
+    // Extraction (Expand-Archive + copy retries) runs on a worker thread; this
+    // thread blocks without processing events (see runBlockingOffGui) instead
+    // of running QProcess::waitForFinished on the GUI thread.
+    return runBlockingOffGui([this, zipPath]() { return extractZipToTools(zipPath); });
+#else
+    return false;
+#endif
+}
+
+bool Aria2cManager::extractZipToTools(const QString& zipPath) {
+#ifdef PLATFORM_WINDOWS
+    // Pure file/process work - safe on any thread; touches no member state
+    // (daemon handling belongs to the GUI-side caller in extractAria2c).
+    QString toolsDir = getToolsDir();
+    QString extractDir = toolsDir + "/aria2_tmp";
+
+    // Clean any leftover partial extraction. The QDir MUST be constructed on
+    // extractDir: a default-constructed QDir points at the process's current
+    // working directory, and removeRecursively() on it deleted that directory
+    // every time aria2 was auto-installed - wiping every unlocked file next to
+    // CopperDownloadManager.exe on a writable install (copper_native_host.exe,
+    // image-format plugins, ...) while the running exe and its loaded DLLs
+    // survived only because Windows held them open.
+    QDir tmpDir(extractDir);
+    if (tmpDir.exists()) tmpDir.removeRecursively();
+    QDir().mkpath(extractDir);
 
     QString psCmd = "Expand-Archive -Path '" + zipPath + "' -DestinationPath '" + extractDir + "' -Force";
     QProcess process;
     process.start("powershell", QStringList() << "-NoProfile" << "-Command" << psCmd);
-    process.waitForFinished(120000);
+    if (!process.waitForFinished(120000)) {
+        process.kill();
+        Logger::instance().error("aria2c extraction timed out");
+        return false;
+    }
 
     if (process.exitCode() != 0) {
         Logger::instance().error("PowerShell error: " + process.readAllStandardError());
@@ -430,9 +525,10 @@ bool Aria2cManager::extractAria2c(const QString& zipPath) {
         }
     }
 
-    dir.removeRecursively();
+    tmpDir.removeRecursively();
     return found;
 #else
+    Q_UNUSED(zipPath);
     return false;
 #endif
 }
@@ -1259,13 +1355,20 @@ int Aria2cManager::getNextId() {
 
 void Aria2cManager::fetchTorrentFiles(const QString& magnetOrFile, std::function<void(const QVector<PlaylistEntry>&, const TorrentInfo&)> callback) {
     if (!isInstalled()) {
+        // Install on a worker thread and retry this fetch from the callback.
+        // This runs while the torrent dialog loads its file list, so the GUI
+        // thread must neither block on the download nor spin a nested event
+        // loop (the reentrancy window the LocalServer crash fix closed).
         Logger::instance().info("aria2c not found, attempting auto-install...");
-        bool installed = ensureInstalled();
-        if (!installed) {
-            Logger::instance().error("aria2c could not be installed automatically");
-            callback(QVector<PlaylistEntry>(), TorrentInfo());
-            return;
-        }
+        ensureInstalledAsync([this, magnetOrFile, callback](bool installed) {
+            if (!installed) {
+                Logger::instance().error("aria2c could not be installed automatically");
+                callback(QVector<PlaylistEntry>(), TorrentInfo());
+                return;
+            }
+            fetchTorrentFiles(magnetOrFile, callback);
+        });
+        return;
     }
 
     bool isMagnet = magnetOrFile.startsWith("magnet:?");

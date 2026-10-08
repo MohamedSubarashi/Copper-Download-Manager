@@ -1,6 +1,7 @@
 #include "utils/YtDlpManager.h"
 #include "utils/Logger.h"
 #include "utils/FfmpegManager.h"
+#include "utils/UserAgent.h"
 #include "db/DatabaseManager.h"
 #include <QStandardPaths>
 #include <QDir>
@@ -111,7 +112,7 @@ void YtDlpManager::installOrUpdate() {
 
     QNetworkRequest request(QUrl("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"));
     request.setRawHeader("Accept", "application/vnd.github.v3+json");
-    request.setRawHeader("User-Agent", "CopperDownloadManager/1.0");
+    request.setRawHeader("User-Agent", Copper::bareUserAgent().toUtf8());
 
     QNetworkReply* reply = nam->get(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
@@ -175,7 +176,7 @@ void YtDlpManager::installOrUpdate() {
 void YtDlpManager::startBinaryDownload(const QString& url, const QString& fileName) {
     QNetworkRequest request(url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    request.setRawHeader("User-Agent", "Mozilla/5.0 CopperDownloadManager/1.0");
+    request.setRawHeader("User-Agent", Copper::copperUserAgent().toUtf8());
     request.setRawHeader("Accept", "application/octet-stream");
 
     activeReply = nam->get(request);
