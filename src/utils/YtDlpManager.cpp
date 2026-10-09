@@ -1,4 +1,5 @@
 #include "utils/YtDlpManager.h"
+#include "utils/YtDlpArgs.h"
 #include "utils/Logger.h"
 #include "utils/FfmpegManager.h"
 #include "utils/UserAgent.h"
@@ -9,6 +10,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QOperatingSystemVersion>
+#include <QProcessEnvironment>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
@@ -19,15 +21,6 @@
 #include <algorithm>
 
 namespace {
-
-// Progress/print protocol shared with yt-dlp. A custom --progress-template
-// replaces yt-dlp's default progress line, which is what lets a single playlist
-// process report per-video numbers the table can attribute to individual rows.
-//   COPPER|<state>|<downloaded>|<total>|<speed>|<eta>|<info.id>|<frag idx>|<frag count>
-//   COPPERPATH|<playlist_index or -1>|<final path>
-const char* kProgressTemplate =
-    "download:COPPER|%(progress.status)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|"
-    "%(progress.speed)s|%(progress.eta)s|%(info.id)s|%(progress.fragment_index)s|%(progress.fragment_count)s";
 
 // yt-dlp prints "NA" for unknown values in templates.
 qint64 parseNum(const QString& s, qint64 def = -1) {
@@ -278,7 +271,11 @@ void YtDlpManager::startBinaryDownload(const QString& url, const QString& fileNa
 // ---------------------------------------------------------------------------
 
 bool YtDlpManager::hasFfmpegFor(const QString& format) const {
-    return format != "mkv" && format != "best" && FfmpegManager::instance().isInstalled();
+    // Every supported format needs ffmpeg (mp3 transcodes; mp4/mkv/best mux the
+    // separate video+audio streams). The previous expression returned false for
+    // "mkv" and "best" unconditionally, so those formats were rejected even when
+    // ffmpeg was installed.
+    return YtDlpArgs::requiresFfmpeg(format) && FfmpegManager::instance().isInstalled();
 }
 
 QString YtDlpManager::getOutputTemplate(const QString& outputPath) const {
@@ -372,60 +369,25 @@ void YtDlpManager::launchJob(int id, const YtDlpJobSpec& spec) {
     job.spec = spec;
     jobs.insert(id, job);
 
-    QStringList args;
-    args << "-o" << spec.outputTemplate;
-    args << "--newline";
-    args << "--no-warnings";
-    args << "--progress";
-    // Resume partial .part files instead of restarting the transfer.
-    args << "--continue";
-    args << "--user-agent" << DatabaseManager::instance().getUserAgent();
-#ifdef PLATFORM_WINDOWS
-    // Match the app's own filename sanitizing so the file on disk is the file the
-    // table (and the resume check on restart) expects.
-    args << "--windows-filenames";
-#endif
-    // Per-video progress + the final path of every finished file.
-    args << "--progress-template" << kProgressTemplate;
-    args << "--print" << (spec.isPlaylist
-                              ? QString("after_move:COPPERPATH|%(playlist_index)s|%(filepath)s")
-                              : QString("after_move:COPPERPATH|-1|%(filepath)s"));
+    // Hand yt-dlp the ffmpeg Copper installed in its own tools dir. Without this
+    // yt-dlp cannot mux bestvideo+bestaudio and silently leaves the video and the
+    // audio as two separate files (see YtDlpArgs::build).
+    const bool ffmpegReady = FfmpegManager::instance().isInstalled();
+    const QString ffmpegPath = ffmpegReady ? FfmpegManager::instance().getFfmpegPath() : QString();
+    QStringList args = YtDlpArgs::build(spec, DatabaseManager::instance().getUserAgent(), ffmpegPath);
 
-    if (spec.isPlaylist) {
-        // A single unavailable/removed item must not cancel the whole playlist,
-        // and a bounded socket timeout keeps a dead TCP connection from hanging
-        // the job forever.
-        args << "--ignore-errors";
-        args << "--no-abort-on-error";
-        args << "--socket-timeout" << "30";
-        if (spec.fragments > 1) {
-            args << "-N" << QString::number(spec.fragments);
-        }
-        if (!spec.archivePath.isEmpty()) {
-            // Resuming/restarting a job must not re-download items that already
-            // finished, which is exactly what this archive makes yt-dlp skip.
-            args << "--download-archive" << spec.archivePath;
-        }
-        if (!spec.selectedItems.isEmpty()) {
-            // Only fetch the videos the user actually picked. Without this, pointing
-            // yt-dlp at the playlist URL downloads every item and leaves files on
-            // disk that no table row refers to.
-            QStringList positions;
-            for (int idx : spec.selectedItems) positions << QString::number(idx);
-            args << "--playlist-items" << positions.join(",");
-        }
+    if (ffmpegReady) {
+        // Belt-and-suspenders: also put the tools dir on PATH so anything yt-dlp
+        // spawns (including its own ffprobe lookup) resolves even if it ignores
+        // --ffmpeg-location.
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        const QString toolsDir = QFileInfo(ffmpegPath).absolutePath();
+        const QString key = QStringLiteral("PATH");
+        const QString existing = env.value(key);
+        env.insert(key, existing.isEmpty() ? toolsDir
+                                           : toolsDir + QDir::listSeparator() + existing);
+        process->setProcessEnvironment(env);
     }
-
-    if (spec.format == "mp3") {
-        args << "--extract-audio";
-        args << "--audio-format" << "mp3";
-    } else if (spec.format == "mkv") {
-        args << "--merge-output-format" << "mkv";
-    } else if (spec.format != "best") {
-        args << "--merge-output-format" << "mp4";
-    }
-
-    args << spec.url;
 
     // Drain BOTH channels continuously. If stdout is never read the OS pipe
     // buffer fills and yt-dlp blocks, which hangs the transfer.
@@ -502,6 +464,15 @@ void YtDlpManager::handleLine(int id, const QString& line, bool isStdErr) {
     if (isStdErr) {
         job.errorTail += line + "\n";
         if (job.errorTail.size() > 4000) job.errorTail = job.errorTail.right(2000);
+        // yt-dlp exits 0 even when it skips the mux step, so this warning is the
+        // only signal that the video and audio were left as two files instead of
+        // one. Record it so finalizeJob can fail the download with an actionable
+        // message rather than reporting a silent success.
+        if (line.contains("won't be merged", Qt::CaseInsensitive) ||
+            line.contains("merging of multiple formats", Qt::CaseInsensitive) ||
+            line.contains("ffmpeg is not installed", Qt::CaseInsensitive)) {
+            job.ffmpegMissing = true;
+        }
         return;
     }
 
@@ -571,6 +542,7 @@ void YtDlpManager::finalizeJob(int id, int exitCode) {
     bool wasPaused = false;
     bool wasCancelled = false;
     bool isPlaylist = false;
+    bool ffmpegMissing = false;
     {
         auto it = jobs.find(id);
         if (it == jobs.end()) return;
@@ -578,6 +550,7 @@ void YtDlpManager::finalizeJob(int id, int exitCode) {
         wasPaused = it.value().paused;
         wasCancelled = it.value().cancelled;
         isPlaylist = it.value().spec.isPlaylist;
+        ffmpegMissing = it.value().ffmpegMissing;
         stopStallWatchdog(id);
         if (it.value().process) {
             it.value().process->deleteLater();
@@ -593,13 +566,23 @@ void YtDlpManager::finalizeJob(int id, int exitCode) {
         return;
     }
 
-    if (exitCode == 0) {
+    if (exitCode == 0 && !ffmpegMissing) {
         Logger::instance().info("yt-dlp job finished: " + QString::number(id));
         emit downloadFinished(id);
         if (isPlaylist) emit playlistFinished(id, true, QString());
     } else {
-        QString err = tail;
-        if (err.isEmpty()) err = QString("yt-dlp exited with code %1").arg(exitCode);
+        QString err;
+        if (ffmpegMissing) {
+            // yt-dlp reported success but could not find ffmpeg, so it left the
+            // video and audio as separate files. Surface the real cause instead of
+            // pretending the merge worked.
+            err = "yt-dlp could not find FFmpeg, so it left the video and audio as "
+                  "separate files instead of merging them. Open Settings > Tools, "
+                  "install (or reinstall) FFmpeg, then retry the download.";
+        } else {
+            err = tail;
+            if (err.isEmpty()) err = QString("yt-dlp exited with code %1").arg(exitCode);
+        }
         Logger::instance().error("yt-dlp job failed: " + err);
         emit downloadFailed(id, err);
         if (isPlaylist) emit playlistFinished(id, false, err);

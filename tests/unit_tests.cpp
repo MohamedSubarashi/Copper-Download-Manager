@@ -17,6 +17,7 @@
 #include "utils/UserAgent.h"
 #include "utils/ApiToken.h"
 #include "utils/UrlDetector.h"
+#include "utils/YtDlpArgs.h"
 
 class CopperUnitTests : public QObject {
     Q_OBJECT
@@ -48,6 +49,13 @@ private slots:
 
     // API token (0.4.0): 64-hex, stable, constant-time matching semantics.
     void apiToken_roundTrip();
+
+    // yt-dlp arguments (0.4.1): ffmpeg must be locatable or the video and audio
+    // are left as two separate files; the merge container must match the choice.
+    void ytDlpArgs_passesFfmpegLocation();
+    void ytDlpArgs_omitsFfmpegLocationWhenUnavailable();
+    void ytDlpArgs_picksContainerForMergeFormats();
+    void ytDlpArgs_allFormatsRequireFfmpeg();
 
 private:
     QTemporaryDir m_profile;
@@ -220,6 +228,73 @@ void CopperUnitTests::apiToken_roundTrip() {
     QVERIFY(!ApiToken::matches(token.left(63)));
     // Stable across calls (persisted + cached).
     QCOMPARE(ApiToken::token(), token);
+}
+
+// --- yt-dlp arguments (0.4.1) -----------------------------------------------
+
+namespace {
+// Value that follows `flag` in argv, or an empty string when the flag is absent.
+QString flagValue(const QStringList& args, const QString& flag) {
+    const int i = args.indexOf(flag);
+    return i >= 0 ? args.value(i + 1) : QString();
+}
+}  // namespace
+
+void CopperUnitTests::ytDlpArgs_passesFfmpegLocation() {
+    // Regression: the bundled ffmpeg was never handed to yt-dlp, so yt-dlp could
+    // not mux bestvideo+bestaudio and wrote the video and audio as two files.
+    YtDlpJobSpec spec;
+    spec.url = "https://www.youtube.com/watch?v=abc";
+    spec.outputTemplate = "%(title)s.%(ext)s";
+    spec.format = "mp4";
+    const QString ffmpeg = "C:/Users/x/AppData/Roaming/Copper Download Manager/tools/ffmpeg.exe";
+    const QStringList args = YtDlpArgs::build(spec, "Copper/1.0", ffmpeg);
+    QCOMPARE(flagValue(args, "--ffmpeg-location"), ffmpeg);
+    QCOMPARE(args.last(), spec.url);
+    QCOMPARE(flagValue(args, "--merge-output-format"), QStringLiteral("mp4"));
+}
+
+void CopperUnitTests::ytDlpArgs_omitsFfmpegLocationWhenUnavailable() {
+    YtDlpJobSpec spec;
+    spec.url = "u";
+    spec.outputTemplate = "t";
+    spec.format = "mp4";
+    const QStringList args = YtDlpArgs::build(spec, "UA", QString());
+    QVERIFY(!args.contains("--ffmpeg-location"));
+}
+
+void CopperUnitTests::ytDlpArgs_picksContainerForMergeFormats() {
+    YtDlpJobSpec spec;
+    spec.url = "u";
+    spec.outputTemplate = "t";
+
+    spec.format = "mp4";
+    QCOMPARE(flagValue(YtDlpArgs::build(spec, "UA", "f"), "--merge-output-format"),
+             QStringLiteral("mp4"));
+    // MKV used to be unmapped and silently became mp4.
+    spec.format = "mkv";
+    QCOMPARE(flagValue(YtDlpArgs::build(spec, "UA", "f"), "--merge-output-format"),
+             QStringLiteral("mkv"));
+    // mp3 asks yt-dlp to extract audio rather than merge a video container.
+    spec.format = "mp3";
+    {
+        const QStringList args = YtDlpArgs::build(spec, "UA", "f");
+        QVERIFY(args.contains("--extract-audio"));
+        QCOMPARE(flagValue(args, "--audio-format"), QStringLiteral("mp3"));
+        QVERIFY(!args.contains("--merge-output-format"));
+    }
+    // "best" lets yt-dlp choose the container.
+    spec.format = "best";
+    QVERIFY(!YtDlpArgs::build(spec, "UA", "f").contains("--merge-output-format"));
+}
+
+void CopperUnitTests::ytDlpArgs_allFormatsRequireFfmpeg() {
+    // Regression: mkv/best were reported as not requiring ffmpeg and then
+    // rejected outright, so those formats never worked even with ffmpeg present.
+    QVERIFY(YtDlpArgs::requiresFfmpeg("mp3"));
+    QVERIFY(YtDlpArgs::requiresFfmpeg("mp4"));
+    QVERIFY(YtDlpArgs::requiresFfmpeg("mkv"));
+    QVERIFY(YtDlpArgs::requiresFfmpeg("best"));
 }
 
 QTEST_MAIN(CopperUnitTests)

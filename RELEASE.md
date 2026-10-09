@@ -50,7 +50,7 @@ Run the full integration suite against the deployed exe:
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `99 passed, 0 failed` (as of v0.4.0). The suite covers
+Expected result: `99 passed, 0 failed` (as of v0.4.1). The suite covers
 launch/intake, single-instance, protocol forwarding, chunked/truncated/
 unknown-length downloads, the copper:// flow, .torrent injection, the
 native-messaging host -> named-pipe injection (ping + byte-exact download),
@@ -73,9 +73,18 @@ Unit tests (QtTest) — run before the suite:
 Get-Content unit_tests.log
 ```
 
-Expected result: `17 passed, 0 failed` (as of v0.4.0). The binary is
+Expected result: `21 passed, 0 failed` (as of v0.4.1). The binary is
 isolated from the real profile (QStandardPaths test mode plus
 `APPDATA`/`LOCALAPPDATA` overrides), so it can run beside the app.
+
+Four of those cases are the 0.4.1 merge regression guard: they assert the
+yt-dlp argv carries `--ffmpeg-location` when ffmpeg is present, omits it when
+it is not, picks `mkv`/`mp4` as the `--merge-output-format` for those formats
+(and `--extract-audio` for mp3), and that mkv/best now report as
+requiring ffmpeg. The matching live check — one real YouTube download whose
+output file holds BOTH a video and an audio stream (`ffprobe`) — is run
+manually from a normal (non `--test-profile`) launch, because it needs the
+real tools folder and network access.
 
 One case is opt-in, because the rest of the suite is offline and this one
 downloads real videos from YouTube (about 140 MB):
@@ -145,6 +154,11 @@ Run through these before publishing.
       missing-tool error points to Settings > Tools.
 - [ ] mp3/mp4 (merge) formats: confirm ffmpeg pre-flight check runs before the
       merge/extract step.
+- [ ] Download a real YouTube video (mp4 or mkv); confirm ONE file lands with
+      both streams (`ffprobe -show_streams` lists a `video` and an `audio`
+      stream), not a separate video-only file plus an audio-only file. This is
+      the 0.4.1 fix; before it, yt-dlp could not locate Copper's private ffmpeg
+      and silently skipped the mux.
 - [ ] Playlist: select a *subset* of items in the picker and confirm only those
       files appear, numbered over the selection (001 = the first item you
       ticked, 002 = the second, ...), then check the files on disk carry the
@@ -209,7 +223,7 @@ Run through these before publishing.
 
 ## 6. Code signing (preparation)
 
-No signing certificate was available for 0.4.0, so the artifacts are
+No signing certificate was available for 0.4.1, so the artifacts are
 unsigned and Windows SmartScreen may warn on first run. When a
 certificate exists:
 

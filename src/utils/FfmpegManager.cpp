@@ -162,18 +162,55 @@ void FfmpegManager::startBinaryDownload(const QString& url, const QString& fileN
         process.start("powershell", QStringList() << "-NoProfile" << "-Command" << psCmd);
         process.waitForFinished(120000);
 
-        QDirIterator it(toolsDir, {"ffmpeg.exe"}, QDir::Files, QDirIterator::Subdirectories);
-        while (it.hasNext()) {
-            QString src = it.next();
-            QString dest = toolsDir + "/ffmpeg.exe";
-            QFile::remove(dest);
-            QFile::copy(src, dest);
+        // Pull both tools yt-dlp needs out of the archive: ffmpeg to mux the
+        // separate video/audio streams and ffprobe to inspect them. They must end
+        // up directly in the tools dir, which is what --ffmpeg-location points at.
+        for (const QString& exe : {QStringLiteral("ffmpeg.exe"), QStringLiteral("ffprobe.exe")}) {
+            QDirIterator it(toolsDir, {exe}, QDir::Files, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                QString src = it.next();
+                QString dest = toolsDir + "/" + exe;
+                if (QFileInfo(src) == QFileInfo(dest)) continue;
+                QFile::remove(dest);
+                QFile::copy(src, dest);
+            }
         }
         QFile::remove(zipPath);
         // The archive extracts into a directory named after the zip; remove it
-        // once ffmpeg.exe has been copied out.
+        // once the binaries have been copied out.
         QDir(toolsDir + "/" + QFileInfo(fileName).baseName()).removeRecursively();
 #else
+        // Linux gets a .tar.xz and macOS a .zip, neither of which Qt can extract,
+        // so shell out to the OS tools. Extract to a scratch dir, copy the two
+        // binaries into the tools dir, then clean up.
+        QString extractDir = toolsDir + "/ffmpeg_extract";
+        QDir(extractDir).removeRecursively();
+        QDir().mkpath(extractDir);
+        {
+            QProcess extract;
+            if (fileName.endsWith(".zip")) {
+                extract.start("unzip", QStringList() << "-o" << zipPath << "-d" << extractDir);
+            } else {
+                extract.start("tar", QStringList() << "-xf" << zipPath << "-C" << extractDir);
+            }
+            extract.waitForFinished(300000);
+        }
+        for (const QString& exe : {QStringLiteral("ffmpeg"), QStringLiteral("ffprobe")}) {
+            QDirIterator it(extractDir, {exe}, QDir::Files, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                QString src = it.next();
+                QString dest = toolsDir + "/" + exe;
+                QFile::remove(dest);
+                if (QFile::copy(src, dest)) {
+                    QFile::setPermissions(dest, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                                                   QFileDevice::ExeOwner | QFileDevice::ReadUser |
+                                                   QFileDevice::ExeUser | QFileDevice::ReadGroup |
+                                                   QFileDevice::ExeGroup | QFileDevice::ReadOther |
+                                                   QFileDevice::ExeOther);
+                }
+            }
+        }
+        QDir(extractDir).removeRecursively();
         QFile::remove(zipPath);
 #endif
 

@@ -478,7 +478,8 @@ int main(int argc, char* argv[]) {
                 if (!selected.isEmpty()) {
                     DownloadManager::instance().addPlaylistDownload(selected, outputPath, "YtDlp", useTracks, fmt, "", "", url);
                 } else {
-                    DownloadManager::instance().addDownload(url, outputPath, "YtDlp");
+                    DownloadManager::instance().addDownload(url, outputPath, "YtDlp", 16,
+                                                            fmt.isEmpty() ? QStringLiteral("mp4") : fmt);
                 }
             }
         } else {

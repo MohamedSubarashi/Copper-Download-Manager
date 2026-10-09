@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate Chrome/Firefox manifests
         run: python tests/validate_extensions.py
-      - name: Version consistency (0.4.0 single source)
+      - name: Version consistency (0.4.1 single source)
         run: python tools/check_version_consistency.py
 
   build-windows:

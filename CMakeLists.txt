@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(CopperDownloadManager VERSION 0.4.0 LANGUAGES CXX)
+project(CopperDownloadManager VERSION 0.4.1 LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
 # Single-source version. tools/check_version_consistency.py verifies that
@@ -263,6 +263,7 @@ if(COPPER_BUILD_TESTS)
             src/utils/NativeMessaging.cpp
             src/utils/UrlDetector.cpp
             src/utils/Logger.cpp
+            src/utils/YtDlpArgs.cpp
             # Headers listed so AUTOMOC runs on Q_OBJECT classes (same rule
             # the main target gets from the HEADERS glob).
             include/utils/DependencyVerifier.h
@@ -270,6 +271,8 @@ if(COPPER_BUILD_TESTS)
             include/utils/NativeMessaging.h
             include/utils/UrlDetector.h
             include/utils/Logger.h
+            include/utils/YtDlpArgs.h
+            include/utils/YtDlpJobSpec.h
             resources.qrc
         )
         target_include_directories(copper_tests PRIVATE

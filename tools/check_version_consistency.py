@@ -35,7 +35,9 @@ PREVIOUS_RELEASES = ("0.3.1",)
 # when describing the release history (source and machine files must not).
 HISTORY_DOCS = ("OPENCODE_TODO.md",
                 "IMPLEMENTATION_REPORT_0.4.0.md",
-                "releases/0.4.0/RELEASE-NOTES.md")
+                "IMPLEMENTATION_REPORT_0.4.1.md",
+                "releases/0.4.0/RELEASE-NOTES.md",
+                "releases/0.4.1/RELEASE-NOTES.md")
 
 # Files scanned for stale/forbidden version literals (text files only).
 SCAN_DIRS = ("src", "include", "nativehost", "tests", "tools", "installer",
