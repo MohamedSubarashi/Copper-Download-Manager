@@ -98,9 +98,15 @@ No existing behavior was removed.
 |---|---|---|
 | Windows deploy folder `installer/release/0.4.1/` | **PASS** | Built with Qt 6.11.2 MinGW 13.1; `windeployqt` laid out Qt DLLs + plugins; `copper_native_host.exe` and notices present |
 | Installer compiled | **PASS** (compiled) / **NOT RUN** (runtime install) | `CopperDownloadManager-0.4.1-setup.exe` built with ISCC; running it needs UAC elevation |
-| Portable zip + `SHA256SUMS` + notes in `releases/0.4.1/` | **PASS** | See `releases/0.4.1/`; checksums generated coreutils-style and verified |
-| CI matrix | **NOT RUN (at time of writing)** | Tag push triggers the `v*` release job; results recorded after push |
-| Published GitHub release `v0.4.1` | **NOT RUN (at time of writing)** | Created by CI from the tag, then curated notes applied |
+| Portable zip + `SHA256SUMS` + notes in `releases/0.4.1/` | **PASS** | `releases/0.4.1/` holds the portable zip (25 entries, root layout), the setup exe, `SHA256SUMS` (coreutils format, both verifies) and the notes |
+| CI matrix | **PASS** | Tag run [37921901625](https://github.com/MohamedSubarashi/Copper-Download-Manager/actions/runs/37921901625): 7/7 jobs green — Windows Qt 6.6.3 Release + Debug (+unit tests), Linux .deb, macOS .dmg, Arch .pkg, extension lint, Publish. Branch run 37921888348 also green |
+| Published GitHub release `v0.4.1` | **PASS** | [v0.4.1](https://github.com/MohamedSubarashi/Copper-Download-Manager/releases/tag/v0.4.1) is **Latest**, 6 assets (portable zip, setup exe, Linux .deb, Arch .pkg + debug, macOS .dmg); curated notes applied from `releases/0.4.1/RELEASE-NOTES.md` |
+
+### Commits
+
+| SHA | Description |
+|---|---|
+| `0bc98c1` | fix(yt-dlp): merge video+audio so downloads land as one file (0.4.1) — the release tag `v0.4.1` points here |
 
 ---
 
