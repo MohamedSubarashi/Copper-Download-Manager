@@ -15,6 +15,7 @@ Environment:
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -138,18 +139,31 @@ def _pick_free_port():
 # Range-aware local file servers to exercise the chunked download engine.
 # ---------------------------------------------------------------------------
 
-def _make_file_server(payload, mode="normal", chunk_bits=""):
+def _make_file_server(payload, mode="normal", chunk_bits="", record=None):
     """mode: 'normal' (full ranges + Content-Length), _
            'truncate' (server closes range connections early to simulate a dropped link),
            'nolength' (no Content-Length, forces the unknown-size path),
-           'slow' (full ranges but trickle data so a download can be interrupted mid-way)."""
+           'slow' (full ranges but trickle data so a download can be interrupted mid-way),
+           'notfound' (HEAD and GET answer 404, to exercise failure classification).
+       record: optional list; the value of the X-Copper-Test request header is
+           appended for every HEAD/GET served (custom-header end-to-end check)."""
     payload = payload.encode("utf-8") if isinstance(payload, str) else payload
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
+        def _record(self):
+            if record is not None:
+                record.append(self.headers.get("X-Copper-Test"))
+
         def _do_get(self):
+            self._record()
+            if mode == "notfound":
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if mode == "truncate":
                 # Serve at most one range connection at a time, closing the others early.
                 rng = self.headers.get("Range")
@@ -209,6 +223,12 @@ def _make_file_server(payload, mode="normal", chunk_bits=""):
             self.wfile.write(data)
 
         def do_HEAD(self):
+            self._record()
+            if mode == "notfound":
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Accept-Ranges", "bytes")
@@ -483,6 +503,7 @@ def main():
 
         # --- /api/diagnostics (0.4.0 support endpoint) ---
         st, j = http_request(port, "GET", "/api/diagnostics")
+        diag = j if isinstance(j, dict) else {}
         check("GET /api/diagnostics -> 200", st == 200, f"status={st}")
         check("diagnostics reports app name",
               isinstance(j, dict) and j.get("app") == "Copper Download Manager", str(j))
@@ -634,6 +655,85 @@ def main():
                 check("unknown-length download completes byte-exact", ok, str(d))
             finally:
                 srv.shutdown()
+
+            # 3b) File-conflict policy (0.4.0): a fresh add whose target file
+            #     already exists must NOT clobber it - the new download lands at
+            #     "name (n).ext" and the user's original bytes are untouched.
+            conflict_name = "conflict.bin"
+            conflict_original = b"ORIGINAL-DO-NOT-TOUCH"
+            with open(os.path.join(workdir, conflict_name), "wb") as f:
+                f.write(conflict_original)
+            conflict_payload = "CONFLICT-" + ("c" * 8192)
+            srv, sp = _make_file_server(conflict_payload, mode="normal")
+            try:
+                st, mid = add_download(f"http://127.0.0.1:{sp}/conflict.bin",
+                                       conflict_name, workdir)
+                check("add conflicting download -> 200", st == 200, f"status={st}")
+                d = wait_download_status(port, mid, {"Completed", "Failed"})
+                check("conflicting download completes",
+                      d is not None and d.get("status") == "Completed", str(d))
+                saved_path = (d or {}).get("filePath") or ""
+                check("conflict is renamed to 'name (1).ext'",
+                      os.path.basename(saved_path) == "conflict (1).bin", saved_path)
+                with open(os.path.join(workdir, conflict_name), "rb") as f:
+                    check("pre-existing file is left untouched",
+                          f.read() == conflict_original,
+                          "the existing file was overwritten")
+                renamed = os.path.join(workdir, "conflict (1).bin")
+                ok = os.path.isfile(renamed)
+                if ok:
+                    with open(renamed, "rb") as f:
+                        ok = f.read() == conflict_payload.encode("utf-8")
+                check("renamed download holds the new file byte-exact", ok, renamed)
+            finally:
+                srv.shutdown()
+
+            # 3c) HTTP failure classification (0.4.0): a dead link must fail with
+            #     an actionable message, not a raw Qt error string.
+            srv, sp = _make_file_server("gone", mode="notfound")
+            try:
+                st, mid = add_download(f"http://127.0.0.1:{sp}/missing.bin",
+                                       "missing.bin", workdir)
+                check("add missing-file download -> 200", st == 200, f"status={st}")
+                d = wait_download_status(port, mid, {"Failed"}, timeout=30.0)
+                err = (d or {}).get("error") or ""
+                check("404 download is Failed",
+                      d is not None and d.get("status") == "Failed", str(d))
+                check("404 is classified with an actionable message",
+                      "not found" in err.lower() and "404" in err, repr(err))
+            finally:
+                srv.shutdown()
+
+            # 3d) Custom request headers (Settings) are applied to every request
+            #     the engine makes. The setting is written straight into the app's
+            #     running database (WAL) and must take effect without a restart.
+            def set_custom_headers(value):
+                db_path = os.path.join(diag.get("profile") or "", "copper.db")
+                con = sqlite3.connect(db_path, timeout=10)
+                try:
+                    con.execute(
+                        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                        ("customHeaders", value))
+                    con.commit()
+                finally:
+                    con.close()
+
+            seen_headers = []
+            hdr_payload = "HEADERS-" + ("h" * 8192)
+            srv, sp = _make_file_server(hdr_payload, mode="normal", record=seen_headers)
+            try:
+                set_custom_headers("X-Copper-Test: header-ok")
+                st, mid = add_download(f"http://127.0.0.1:{sp}/hdr.bin", "hdr.bin", workdir)
+                check("add custom-header download -> 200", st == 200, f"status={st}")
+                d = wait_download_status(port, mid, {"Completed", "Failed"})
+                check("custom-header download completes",
+                      d is not None and d.get("status") == "Completed", str(d))
+                check("custom header reaches the server on every request",
+                      bool(seen_headers) and all(v == "header-ok" for v in seen_headers),
+                      str(seen_headers[:4]))
+            finally:
+                srv.shutdown()
+                set_custom_headers("")
 
             # 4) copper:// protocol injection: the desktop app must parse a
             #    copper://download?url=...&filename=...&path=... link (as built

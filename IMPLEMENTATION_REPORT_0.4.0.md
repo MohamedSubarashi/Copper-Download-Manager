@@ -23,7 +23,7 @@ as NOT RUN, never inferred.
 | Requirement | Status | Evidence |
 |---|---|---|
 | Version 0.4.0 single-sourced from one place; no stale `0.3.1` / `CopperDownloadManager/1.0`; centralized `copperUserAgent()` | **PASS** | `tools/check_version_consistency.py` (81 tracked files) + `copper_tests::version_isThreePartSemver`, `userAgent_followsApplicationVersion` |
-| Range validation: `206`, `Content-Range`, `Content-Length`, exact-size checks | **PASS** | Integration suite: chunked/truncated/unknown-length + exact-size cases (88/0, run 9) |
+| Range validation: `206`, `Content-Range`, `Content-Length`, exact-size checks | **PASS** | Integration suite: chunked/truncated/unknown-length + exact-size cases (99/0, run 10) |
 | `bool mergeChunks()` merging with per-piece validation | **PASS** | Integration suite: byte-exact completion cases |
 | Resume integrity: atomic resume writes (QSaveFile), stale-state rejection | **PASS** | Suite: interrupt → relaunch → resume byte-exact; API token stability across restart |
 | Local API token auth (`X-Copper-Token`), extensions updated in lockstep | **PASS** | Suite: 401 without token, 200 with token, token stable across restart; extension lint |
@@ -39,10 +39,10 @@ as NOT RUN, never inferred.
 |---|---|---|
 | DB transactional migration + pre-migration backup | **PASS** (migration) / **NOT RUN** (backup, rollback) | Every fresh-profile suite run executes the 0→3 migration in one transaction; backup only triggers for `0 < schema < 3` and failure-rollback needs fault injection — neither scenario was run |
 | Disk-space check before transfer | **NOT RUN** | Requires a full target volume; logic reviewed only |
-| File-conflict resolution on add (never overwrite) | **NOT RUN** | No harness case was added; reported honestly |
-| HTTP error classification (actionable messages) | **NOT RUN** | Suite does not assert negative-status message text |
+| File-conflict resolution on add (never overwrite) | **PASS** | Suite scenario 3b: pre-created target is left byte-identical, the new download lands at `name (1).ext` and is byte-exact (5 checks) |
+| HTTP error classification (actionable messages) | **PASS** | Suite scenario 3c: a 404 server yields `Failed` with "File not found on the server (404)…" (2 checks) |
 | System proxy support | **NOT RUN** | Development machine has `ProxyEnable=0`, so the setting is a no-op here |
-| Custom request headers (Settings UI + application) | **NOT RUN** | UI path not exercised |
+| Custom request headers (application path) | **PASS** | Suite scenario 3d writes `customHeaders` into the live DB and the local HTTP server observes `X-Copper-Test: header-ok` on every request (3 checks); the Settings **dialog** path itself is still not UI-exercised |
 | Browser/environment diagnostics | **PASS** | `GET /api/diagnostics`: 3 harness checks (app name, version, schema + tool state) |
 | Streaming / unknown-length (chunked) responses | **PASS** | Suite unknown-length case reaches 100% and merges byte-exact |
 
@@ -67,11 +67,11 @@ validators. Overall: **no FAIL anywhere.**
 | Test layer | Result | When |
 |---|---|---|
 | Unit tests — `copper_tests` (QtTest, 17 cases: dependency verification fail-closed contract, file-name sanitization, URL intake classification, version/User-Agent single-source, API token round trip) | **PASS — 17 passed, 0 failed** | Final build |
-| Integration suite — `tests/integration_test.py` (88 checks: intake, single-instance, protocol forwarding, chunked/truncated/unknown-length, range validation, byte-exact resume, torrent injection, native-messaging pipe, playlist job model + selection contract, token auth, origin allowlist, diagnostics, crash-free relaunch) | **PASS — 88 passed, 0 failed** | Run 9 (runs 7 and 8 also 85/0 and 88/0) |
-| Crash hunt — repeated full-suite runs looking for `[CRASH]`/WER evidence | **PASS — 6/6 runs clean** | Before Phase 5; runs 7–9 add three more clean full runs |
+| Integration suite — `tests/integration_test.py` (99 checks: intake, single-instance, protocol forwarding, chunked/truncated/unknown-length, range validation, file-conflict policy, HTTP failure classification, custom headers end-to-end, byte-exact resume, torrent injection, native-messaging pipe, playlist job model + selection contract, token auth, origin allowlist, diagnostics, crash-free relaunch) | **PASS — 99 passed, 0 failed** | Run 10 (runs 7–9 also green: 85/0, 88/0, 88/0) |
+| Crash hunt — repeated full-suite runs looking for `[CRASH]`/WER evidence | **PASS — 6/6 runs clean** | Before Phase 5; runs 7–10 add four more clean full runs |
 | Extension lint — `tests/validate_extensions.py` (MV3 shape, permissions, popup wiring, gecko.id, native-token handshake, HTTP dispatch, cancel path) | **PASS — Chrome OK, Firefox OK** | Final |
-| Version consistency — `tools/check_version_consistency.py` | **PASS — 81 files, version 0.4.0 everywhere** | Final |
-| Opt-in real-playlist cases (network, yt-dlp + ffmpeg required; expected 95 = 88 + 7) | **NOT RUN** | Requires network + installed tools; unchanged from 0.3.1 |
+| Version consistency — `tools/check_version_consistency.py` | **PASS — 85 files, version 0.4.0 everywhere** | Final |
+| Opt-in real-playlist cases (network, yt-dlp + ffmpeg required; expected 106 = 99 + 7) | **NOT RUN** | Requires network + installed tools; unchanged from 0.3.1 |
 | CI matrix execution (Qt 6.6.3, Linux, macOS, Arch) | **PASS** | Run 37835776956 (latest), 6/6 executed jobs green incl. the pipeline-enforced version-consistency check; previous run 37835072437 equally green (first run's 2 failures root-caused and fixed in `747286f`, not suppressed) |
 | Updater digest verification against a live GitHub release | **NOT RUN** | See §1 |
 | Code-signing of artifacts | **BLOCKED** | No certificate |
@@ -125,7 +125,7 @@ All were root-caused and fixed in code, not worked around:
 | File | Notes |
 |---|---|
 | `CopperDownloadManager-portable-0.4.0.zip` | 25 entries, contents at zip root (CI-identical layout), integrity-verified |
-| `CopperDownloadManager-0.4.0-setup.exe` | Inno Setup 6.7.3, lzma2, payload = `installer/release/0.4.0/` (the directory the 88-check suite validated) |
+| `CopperDownloadManager-0.4.0-setup.exe` | Inno Setup 6.7.3, lzma2, payload = `installer/release/0.4.0/` (the directory the 99-check suite validated) |
 | `SHA256SUMS` | `sha256sum -c`-compatible |
 | `RELEASE-NOTES.md` | User-facing notes |
 
@@ -140,7 +140,7 @@ Build configuration (the validated one): Qt 6.11.2 `mingw_64`,
 MinGW 13.1.0, CMake + Ninja, `Release` with `-O2 -g`, windres +
 `fix_version_resource.py` preserved.
 
-## 5. Commit series (14 commits, `64c2468` → `caec584`, pushed to `origin/main`)
+## 5. Commit series (`64c2468` → `origin/main`, pushed)
 
 | Commit | Content |
 |---|---|
@@ -159,6 +159,9 @@ MinGW 13.1.0, CMake + Ninja, `Release` with `-O2 -g`, windres +
 | `2311a34` | docs(report): record the executed CI matrix result |
 | `caec584` | ci: enforce the single-source version check in the pipeline |
 
+(Further commits after `caec584` are test-harness and documentation
+updates — see `git log` for the full series.)
+
 ## 6. Breaking change
 
 The local API now requires `X-Copper-Token`. In-repo consumers
@@ -168,8 +171,9 @@ removed or renamed.
 
 ## 7. Open items / follow-ups
 
-- ~~Push~~ — done: all 14 commits are on `origin/main` and the CI
-  matrix has executed and passed (latest run 37835776956, 6/6 jobs).
+- ~~Push~~ — done: the work is on `origin/main` and the CI
+  matrix has executed and passed (latest run 37835776956, 6/6 jobs; the
+  pipeline-enforced version check lands with `caec584`).
 - ~~`releases/0.4.0/` placement~~ — decided: the artifacts are tracked
   in the repository; `.gitignore` documents the `*.zip`/`*.exe`
   force-add exception.
@@ -177,5 +181,6 @@ removed or renamed.
   touches `QSettings("Copper","DownloadManager")`; harmless in practice
   but not redirected under `--test-profile`.
 - **NOT RUN items in §1/§2** are the honest gap list for this cycle;
-  the cheapest next gains are harness cases for the file-conflict
-  policy and a fault-injected migration rollback.
+  the cheapest next gains are a fault-injected migration-rollback case,
+  a disk-full simulation, a runtime installer smoke on a clean VM, and
+  signing once a certificate exists.

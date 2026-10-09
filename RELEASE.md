@@ -50,7 +50,7 @@ Run the full integration suite against the deployed exe:
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `88 passed, 0 failed` (as of v0.4.0). The suite covers
+Expected result: `99 passed, 0 failed` (as of v0.4.0). The suite covers
 launch/intake, single-instance, protocol forwarding, chunked/truncated/
 unknown-length downloads, the copper:// flow, .torrent injection, the
 native-messaging host -> named-pipe injection (ping + byte-exact download),
@@ -62,7 +62,9 @@ the selection is requested, an empty selection refuses to start, and files are
 numbered over the selection. From 0.4.0 it additionally covers the
 local-API token (401 without / 200 with, stable across restart), the
 browser-origin allowlist, `GET /api/diagnostics`, byte-exact resume after
-an interrupt, and crash-free relaunch.
+an interrupt, crash-free relaunch, the file-conflict policy (an existing
+target is never overwritten), HTTP failure classification (a 404 becomes
+an actionable message) and custom request headers reaching the server.
 
 Unit tests (QtTest) — run before the suite:
 
@@ -83,7 +85,7 @@ $env:COPPER_IT_REAL_PLAYLIST = "1"
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `95 passed, 0 failed` (88 offline checks + the 7
+Expected result: `106 passed, 0 failed` (99 offline checks + the 7
 real-playlist checks; not executed during the 0.4.0 validation cycle).
 It needs yt-dlp and ffmpeg in the app's
 tools folder (`%APPDATA%\Copper\Copper Download Manager\tools\`) and network

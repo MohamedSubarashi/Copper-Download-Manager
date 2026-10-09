@@ -56,8 +56,9 @@ unchanged, with one deliberate exception noted under **Breaking change**.
   by `tools/check_version_consistency.py`.
 - **New test layers**: a 17-case QtTest binary (`copper_tests`) for the
   verification/sanitization/token utilities, and the integration suite
-  grew to 88 checks (token auth, origin allowlist, diagnostics,
-  byte-exact resume, crash-free relaunch).
+  grew to 99 checks (token auth, origin allowlist, diagnostics,
+  byte-exact resume, crash-free relaunch, file-conflict policy, HTTP
+  failure classification, custom request headers reaching the server).
 
 ## Breaking change
 Local-API consumers outside this repository must send

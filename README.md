@@ -34,7 +34,7 @@ A high-performance, cross-platform download manager written in C++17 with Qt6.
 
 | Qt version | Platform / toolchain | Validation |
 |------------|----------------------|------------|
-| 6.11.2 | Windows, MinGW 13.1 (local dev) | Full local validation: Release build, unit tests, 88-case integration suite |
+| 6.11.2 | Windows, MinGW 13.1 (local dev) | Full local validation: Release build, unit tests, 99-case integration suite |
 | 6.6.3 | Windows MinGW 13.1, Ubuntu, macOS (CI) | CI: build (Debug + Release), unit tests, CRT/startup smoke checks, packaging |
 | 6.5 – 6.10 | any supported toolchain | Expected to build (only Qt 6.5-era APIs are used); not part of the automated matrix |
 
