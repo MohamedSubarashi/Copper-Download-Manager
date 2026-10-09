@@ -54,7 +54,7 @@ as NOT RUN, never inferred.
 | Windows metadata (version resource) | **PASS** | `check_version_consistency.py` verifies FILEVERSION/PRODUCTVERSION/FileVersion/ProductVersion strings = 0.4.0 |
 | Signing preparation | **BLOCKED** | No code-signing certificate available; prep delivered as documented procedure (RELEASE.md §7, commented `SignTool` scaffolding in the .iss) |
 | Release validation & docs | **PASS** | This report; RELEASE.md updated; `releases/0.4.0/` populated (portable zip, installer, SHA256SUMS, release notes) |
-| CI jobs | **PASS** | Runs 37835072437 and 37835776956: all 6 executed jobs green each (Windows Qt 6.6.3 Debug/Release + unit tests + CRT/startup smoke + zip + installer; Linux build + unit tests + .deb; macOS .dmg; Arch .pkg; extension lint; Publish skipped = tag-only). The first run (37833762124) failed 2 of 7 jobs — both root-caused and fixed in `747286f` (stale `PKGBUILD` pkgver; Windows-only pin assertion on Linux) rather than suppressed. As of `caec584` the pipeline also enforces `check_version_consistency.py` |
+| CI jobs | **PASS** | Runs 37835072437, 37835776956 and 37914334448 (post-hardening suite): all 6 executed jobs green in each (Windows Qt 6.6.3 Debug/Release + unit tests + CRT/startup smoke + zip + installer; Linux build + unit tests + .deb; macOS .dmg; Arch .pkg; extension lint; Publish skipped = tag-only). The first run (37833762124) failed 2 of 7 jobs — both root-caused and fixed in `747286f` (stale `PKGBUILD` pkgver; Windows-only pin assertion on Linux) rather than suppressed. As of `caec584` the pipeline also enforces `check_version_consistency.py` |
 | Qt matrix documentation | **PASS** | README "Qt version matrix" (local 6.11.2 validated; CI 6.6.3) |
 
 ---
