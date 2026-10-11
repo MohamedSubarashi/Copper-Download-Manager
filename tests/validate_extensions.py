@@ -17,8 +17,10 @@ Checks (offline, no external deps):
   * Referenced JS/CSS files exist on disk.
 
   The download path is HTTP-first (the app's local API) with a copper://
-  protocol launch fallback - the "normal" IDM-style integration. The extension
-  must NOT depend on native messaging at all.
+  protocol launch fallback - the "normal" IDM-style integration. The local API
+  is token-gated (0.4.0), so the background obtains the install-scoped token
+  from the native-messaging host (action "getToken") and both the background and
+  the copper.js command-center page attach it as X-Copper-Token.
 
 Usage:
     python tests/validate_extensions.py
@@ -147,6 +149,10 @@ def validate_dir(label, path, is_firefox):
                     "background launches the app via the copper:// protocol")
         ok &= check("sendNativeMessage" in bg_src,
                     "background fetches the API token via the native messaging host")
+        ok &= check("X-Copper-Token" in bg_src,
+                    "background attaches the API token header (X-Copper-Token)")
+        ok &= check("getToken" in bg_src,
+                    "background exposes a getToken action for the status page")
         ok &= check("action.onClicked" in bg_src,
                     "toolbar click opens status page (action.onClicked)")
         ok &= check("openStatusTab" in bg_src,
@@ -157,6 +163,16 @@ def validate_dir(label, path, is_firefox):
                     "background reads the include/exclude filter config via /api/download-filters")
         ok &= check("chrome.downloads.cancel" in bg_src or "downloads.cancel" in bg_src,
                     "background cancels the browser download after a successful dispatch")
+
+    # The command-center page (copper.js) runs its own fetches against the local
+    # API, so it must carry the token too - otherwise its download list is always
+    # "not reachable" while the rest of the extension works.
+    copper_path = os.path.join(path, "copper.js")
+    if os.path.isfile(copper_path):
+        with open(copper_path, encoding="utf-8") as f:
+            copper_src = f.read()
+        ok &= check("X-Copper-Token" in copper_src,
+                    "status page sends the API token (X-Copper-Token)")
 
     return ok
 

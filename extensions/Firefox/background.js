@@ -98,12 +98,26 @@ function ensureApiToken() {
   if (!tokenFetch) {
     tokenFetch = fetchApiToken().then((t) => {
       tokenFetch = null;
-      apiToken = t;
-      apiTokenLoaded = true;
+      if (t) {
+        // Only cache a real token. Caching "" would keep every later call
+        // tokenless (and 401) for the life of the service worker, even after
+        // the app has started and written its config.
+        apiToken = t;
+        apiTokenLoaded = true;
+      }
       return t;
     });
   }
   return tokenFetch;
+}
+
+// Drop any cached token and read it again from the host. Used when the app
+// rewrote copper_host_config.json (stale token) or when it was not running the
+// first time and has only now written it.
+function refreshApiToken() {
+  apiToken = "";
+  apiTokenLoaded = false;
+  return ensureApiToken();
 }
 
 function httpApiOnce(path, method, body, token) {
@@ -141,11 +155,10 @@ function httpApi(path, method, body) {
   return ensureApiToken().then((token) =>
     httpApiOnce(path, method, body, token).then((res) => {
       if (res.status !== 401) return res;
-      // The token went stale (config rewritten by a newer app run): refresh it
-      // once and retry a single time, then surface whatever we get.
-      apiToken = "";
-      apiTokenLoaded = false;
-      return ensureApiToken().then((t) => httpApiOnce(path, method, body, t));
+      // The token went stale (config rewritten by a newer app run) or was never
+      // readable because the app had not started yet: refresh it once and retry
+      // a single time, then surface whatever we get.
+      return refreshApiToken().then((t) => httpApiOnce(path, method, body, t));
     })
   );
 }
@@ -494,6 +507,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     Promise.all([getCurrentEnabledState(), httpPing()]).then(([enabled, reachable]) => {
       try {
         sendResponse({ enabled, reachable, settings, extensionId: chrome.runtime.id });
+      } catch (e) { /* noop */ }
+    });
+    return true;
+  }
+
+  if (request && request.action === "getToken") {
+    // The command-center page (copper.js) runs its own fetches; hand it the
+    // same install-scoped token the background uses so those calls authenticate.
+    ensureApiToken().then((token) => {
+      try {
+        sendResponse({ token: token || "" });
       } catch (e) { /* noop */ }
     });
     return true;

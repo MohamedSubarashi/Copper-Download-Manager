@@ -64,11 +64,11 @@ cmake --build C:\Qt\Builds\CopperDownloadManager\rel
 > reports `FileVersion`/`ProductVersion` in Explorer and via
 > `GetFileVersionInfo`.
 
-The release build is automatically deployed to `installer/release/<version>/` (windeployqt) and the final package (Setup.exe + portable zip) is placed in `Release/`.
+The release build is automatically deployed to `installer/release/<version>/` (windeployqt) and the final package (Setup.exe + portable zip) is placed in `releases/<version>/`.
 
 ## CI
 
-A GitHub Actions workflow (`.github/workflows/ci.yml`) builds the project in Debug and Release on Windows (Qt 6.6.3), smoke-checks that the produced executable is a GUI (non-console) application, and uploads a portable zip artifact. (CI uses the Qt version whose MinGW binaries link against the runner's preinstalled GCC; the local dev machine additionally uses Qt 6.11.2.)
+A GitHub Actions workflow (`.github/workflows/ci.yml`) builds the project in Debug and Release on Windows (Qt 6.6.3), smoke-checks that the produced executable is a GUI (non-console) application, and uploads a portable zip artifact. (CI uses the Qt version whose MinGW binaries link against the runner's preinstalled GCC; the local dev machine additionally uses Qt 6.12.0.)
 
 ## Testing
 
@@ -149,6 +149,12 @@ Copper Download Manager app. It is free and open source.
 
 > Opera is Chromium-based, so the Chrome build can be sideloaded in developer
 > mode until its store listing goes live.
+
+On startup the app writes each browser's native-messaging host manifest
+(`com.copper.dm`) with the extension IDs above and the current host path, so
+the extension can read the install-scoped local-API token without any manual
+setup. Registration merges with any ID already present, so a sideloaded/dev
+build keeps working alongside the store builds.
 
 ## Author
 

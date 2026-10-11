@@ -23,6 +23,11 @@ public:
     // Write/refresh the host manifest for the given browser. For Chrome/Edge the
     // allowed_origins must contain the exact chrome-extension ID; for Firefox
     // allowed_extensions contains the gecko.id. Returns the path written or empty.
+    //
+    // The manifest is *merged*: any still-valid ID already listed in the file is
+    // preserved and the given ids are added, so registering the stable store IDs
+    // at startup never clobbers a sideloaded dev ID added through the "register"
+    // handshake (or --register-native-extension), and vice versa.
     static QString installManifest(const QString& browser, const QStringList& extensionIds);
 
     // Record where the host executable lives and the app launcher, so the host
@@ -47,9 +52,13 @@ public:
     // All browser registration locations that installManifest() may write.
     static QStringList manifestPaths();
 
-    // Default extension IDs the app registers on startup (Firefox gecko.id,
-    // plus any configured stable Chrome ID). Browser names: "chrome", "firefox".
+    // Stable store IDs the app registers on startup so a fresh install works
+    // without a manual step. The Chrome Web Store / Edge Add-ons IDs are derived
+    // from each package's fixed CRX signing key; the Firefox gecko.id is the
+    // add-on's AMO GUID. Sideloaded/dev builds with a different ID are still
+    // added through the "register" handshake or --register-native-extension.
     static QString defaultChromeExtensionId();
+    static QString edgeExtensionId();
     static QString firefoxExtensionId();
 };
 

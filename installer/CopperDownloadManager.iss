@@ -1,5 +1,5 @@
 #define MyAppName "Copper Download Manager"
-#define MyAppVersion "0.4.1"
+#define MyAppVersion "0.4.2"
 #define MyAppPublisher "Mohamed Subarashi"
 #define MyAppExeName "CopperDownloadManager.exe"
 
@@ -16,6 +16,11 @@ OutputBaseFilename=CopperDownloadManager-{#MyAppVersion}-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; Always offer the install-mode page: "Install for all users" (elevates, lands
+; in Program Files) or "Install for me only" (no elevation, per-user). The
+; default is per-user; choosing all-users elevates mid-wizard.
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 ; --- Code signing (0.4.1 preparation) -------------------------------------
@@ -36,7 +41,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "release\0.4.1\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "release\0.4.2\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

@@ -492,6 +492,52 @@ def main():
         check("local API token persisted in host config", bool(API_TOKEN),
               "copper_host_config.json missing/has no apiToken")
 
+        # --- Browser native-messaging registration (0.4.2): the app must write
+        # --- each browser's host manifest with the STABLE store extension IDs on
+        # --- startup. Without this the extension cannot call the host's
+        # --- "getToken" action, so every browser-injected download hits the
+        # --- local API without a token and fails 401 Unauthorized.
+        def read_host_manifest(rel_parts):
+            path = os.path.join(profile_root, *rel_parts, "com.copper.dm.json")
+            if not os.path.isfile(path):
+                return None
+            with open(path, encoding="utf-8") as f:
+                try:
+                    return json.load(f)
+                except json.JSONDecodeError:
+                    return None
+
+        chrome_mf = read_host_manifest(
+            ["local", "Google", "Chrome", "User Data", "NativeMessagingHosts"])
+        check("chrome native-host manifest written on startup",
+              chrome_mf is not None, "manifest missing under the test profile")
+        check("chrome manifest allows the Web Store extension id",
+              bool(chrome_mf) and
+              "chrome-extension://cmokehdedogdpbfhlamopeifgogaihni/" in
+              (chrome_mf.get("allowed_origins") or []),
+              str(chrome_mf and chrome_mf.get("allowed_origins")))
+        check("chrome manifest host path points at the deployed host exe",
+              bool(chrome_mf) and
+              os.path.basename(str(chrome_mf.get("path", ""))) == "copper_native_host.exe" and
+              os.path.normcase(os.path.dirname(str(chrome_mf.get("path", "")))) ==
+              os.path.normcase(exe_dir),
+              str(chrome_mf and chrome_mf.get("path")))
+
+        edge_mf = read_host_manifest(
+            ["local", "Microsoft", "Edge", "User Data", "NativeMessagingHosts"])
+        check("edge manifest allows the Add-ons extension id",
+              bool(edge_mf) and
+              "chrome-extension://fnganciafgifhelimkoeiiapdcdmnnlb/" in
+              (edge_mf.get("allowed_origins") or []),
+              str(edge_mf and edge_mf.get("allowed_origins")))
+
+        firefox_mf = read_host_manifest(["roaming", "Mozilla", "NativeMessagingHosts"])
+        check("firefox manifest allows the AMO add-on guid",
+              bool(firefox_mf) and
+              "CopperDownloadManager@mohamedsubarashi" in
+              (firefox_mf.get("allowed_extensions") or []),
+              str(firefox_mf and firefox_mf.get("allowed_extensions")))
+
         # --- /api/version ---
         st, j = http_request(port, "GET", "/api/version")
         check("GET /api/version -> 200", st == 200, f"status={st}")

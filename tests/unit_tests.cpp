@@ -10,12 +10,17 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QDir>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 #include "copper_version.h"
 #include "utils/DependencyVerifier.h"
 #include "utils/FileNameSanitizer.h"
 #include "utils/UserAgent.h"
 #include "utils/ApiToken.h"
+#include "utils/NativeMessaging.h"
 #include "utils/UrlDetector.h"
 #include "utils/YtDlpArgs.h"
 
@@ -49,6 +54,11 @@ private slots:
 
     // API token (0.4.0): 64-hex, stable, constant-time matching semantics.
     void apiToken_roundTrip();
+
+    // Native messaging (0.4.2): the stable store IDs must be registered so the
+    // extension can fetch the token; registration must merge, not clobber.
+    void nativeMessaging_stableStoreIds();
+    void nativeMessaging_manifestMergesAllowedIds();
 
     // yt-dlp arguments (0.4.1): ffmpeg must be locatable or the video and audio
     // are left as two separate files; the merge container must match the choice.
@@ -228,6 +238,54 @@ void CopperUnitTests::apiToken_roundTrip() {
     QVERIFY(!ApiToken::matches(token.left(63)));
     // Stable across calls (persisted + cached).
     QCOMPARE(ApiToken::token(), token);
+}
+
+// --- Native messaging (0.4.2) ----------------------------------------------
+
+void CopperUnitTests::nativeMessaging_stableStoreIds() {
+    // Regression: these used to be empty/mismatched, so the app never authorized
+    // the real extensions and they could not read the API token (401 on every
+    // browser-injected download).
+    const QString chrome = NativeMessaging::defaultChromeExtensionId();
+    const QString edge = NativeMessaging::edgeExtensionId();
+    const QString firefox = NativeMessaging::firefoxExtensionId();
+    QVERIFY2(QRegularExpression("^[a-p]{32}$").match(chrome).hasMatch(), qPrintable(chrome));
+    QVERIFY2(QRegularExpression("^[a-p]{32}$").match(edge).hasMatch(), qPrintable(edge));
+    // Must match the shipped Firefox manifest's browser_specific_settings.gecko.id.
+    QCOMPARE(firefox, QStringLiteral("CopperDownloadManager@mohamedsubarashi"));
+}
+
+void CopperUnitTests::nativeMessaging_manifestMergesAllowedIds() {
+    const QString devId = QStringLiteral("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+    // A sideloaded dev build registers its own id first...
+    QString path = NativeMessaging::installManifest("chrome", {devId});
+    QVERIFY2(!path.isEmpty(), qPrintable(path));
+    // ...then the startup refresh registers the stable store id.
+    path = NativeMessaging::installManifest("chrome", {NativeMessaging::defaultChromeExtensionId()});
+    QVERIFY2(!path.isEmpty(), qPrintable(path));
+
+    QFile f(path);
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    const QJsonArray origins = QJsonDocument::fromJson(f.readAll()).object()
+                                   .value(QStringLiteral("allowed_origins")).toArray();
+    QStringList got;
+    for (const QJsonValue& v : origins) got.append(v.toString());
+    // Both must survive - clobbering either one breaks a real install.
+    QVERIFY2(got.contains("chrome-extension://" + devId + "/"), qPrintable(got.join(',')));
+    QVERIFY2(got.contains("chrome-extension://" +
+                          NativeMessaging::defaultChromeExtensionId() + "/"),
+             qPrintable(got.join(',')));
+    // A malformed id is rejected rather than written as dead weight.
+    const QString bad = QStringLiteral("ZZZZ-not-an-id");
+    NativeMessaging::installManifest("chrome", {bad});
+    QFile f2(path);
+    QVERIFY(f2.open(QIODevice::ReadOnly));
+    for (const QJsonValue& v : QJsonDocument::fromJson(f2.readAll()).object()
+                                   .value(QStringLiteral("allowed_origins")).toArray()) {
+        QVERIFY2(!v.toString().contains(bad), qPrintable(v.toString()));
+    }
+    QFile::remove(path);
 }
 
 // --- yt-dlp arguments (0.4.1) -----------------------------------------------

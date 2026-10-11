@@ -9,6 +9,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSettings>
 
@@ -33,16 +34,33 @@ static QString hostExePath() {
         NativeMessaging::hostExecutableName());
 }
 
+// Chromium extension IDs are exactly 32 characters drawn from a-p (the hex
+// digest mapped onto the alphabet). A malformed entry in allowed_origins is
+// dead weight at best; if it is the only entry, native messaging is disabled
+// for every extension - which is how the local API token became unreachable.
+static bool isValidChromiumExtensionId(const QString& id) {
+    static const QRegularExpression re(QStringLiteral("^[a-p]{32}$"));
+    return re.match(id).hasMatch();
+}
+
 QString NativeMessaging::firefoxExtensionId() {
-    return "copper-download-manager@copper";
+    // The add-on's AMO GUID (addons.mozilla.org/api/v5/addons/addon/
+    // copper-download-manager -> guid). It must match the shipped
+    // extensions/Firefox/manifest.json browser_specific_settings.gecko.id or the
+    // browser refuses the native-messaging connection.
+    return "CopperDownloadManager@mohamedsubarashi";
 }
 
 QString NativeMessaging::defaultChromeExtensionId() {
-    // Extension ID used by the packaged Chrome Web Store build (derived from the
-    // CRX signing key). For unpacked/development builds the running ID can differ;
-    // the app re-points the manifest via the "register" pipe handshake or the
-    // --register-native-extension CLI.
-    return QString();
+    // Chrome Web Store ID of the packaged build (fixed by its CRX signing key;
+    // see README "Browser extensions"). Registering it on startup is what lets
+    // the extension read the local-API token over native messaging.
+    return "cmokehdedogdpbfhlamopeifgogaihni";
+}
+
+QString NativeMessaging::edgeExtensionId() {
+    // Edge Add-ons ID of the same packaged build (from its store listing).
+    return "fnganciafgifhelimkoeiiapdcdmnnlb";
 }
 
 QStringList NativeMessaging::manifestPaths() {
@@ -114,25 +132,60 @@ QString NativeMessaging::installManifest(const QString& browser, const QStringLi
     QFileInfo fi(target);
     QDir().mkpath(fi.absolutePath());
 
+    const bool isFirefox = (browser == "firefox");
+    const QString listKey = isFirefox ? QStringLiteral("allowed_extensions")
+                                      : QStringLiteral("allowed_origins");
+
+    // Merge, never clobber: keep any ID already registered and add the given
+    // ones. The startup call supplies the stable store ID; a sideloaded build
+    // adds its own through the "register" handshake - each must survive the
+    // other's write.
+    QStringList firefoxIds;
+    QStringList chromiumIds;
+    auto addFirefox = [&firefoxIds](const QString& raw) {
+        const QString id = raw.trimmed();
+        if (!id.isEmpty() && !firefoxIds.contains(id)) firefoxIds.append(id);
+    };
+    auto addChromium = [&chromiumIds](const QString& raw) {
+        const QString id = raw.trimmed();
+        if (isValidChromiumExtensionId(id) && !chromiumIds.contains(id)) chromiumIds.append(id);
+    };
+
+    QFile existing(target);
+    if (existing.open(QIODevice::ReadOnly)) {
+        const QJsonObject prev = QJsonDocument::fromJson(existing.readAll()).object();
+        for (const QJsonValue& v : prev.value(listKey).toArray()) {
+            QString id = v.toString();
+            if (!isFirefox) {
+                const QString prefix = QStringLiteral("chrome-extension://");
+                if (!id.startsWith(prefix)) continue;
+                id = id.mid(prefix.size());
+                if (id.endsWith(QLatin1Char('/'))) id.chop(1);
+            }
+            if (isFirefox) addFirefox(id); else addChromium(id);
+        }
+        existing.close();
+    }
+    for (const QString& id : extensionIds) {
+        if (isFirefox) addFirefox(id); else addChromium(id);
+    }
+
     QJsonObject manifest;
     manifest["name"] = hostName();
     manifest["description"] = "Copper Download Manager native messaging host";
     manifest["path"] = QDir::toNativeSeparators(QDir(QCoreApplication::applicationDirPath()).filePath(hostExecutableName()));
     manifest["type"] = "stdio";
 
-    if (browser == "firefox") {
+    if (isFirefox) {
+        if (firefoxIds.isEmpty()) firefoxIds.append(firefoxExtensionId());
         QJsonArray exts;
-        for (const QString& id : extensionIds) {
-            if (!id.isEmpty()) exts.append(id);
-        }
-        if (exts.isEmpty()) exts.append(firefoxExtensionId());
+        for (const QString& id : firefoxIds) exts.append(id);
         manifest["allowed_extensions"] = exts;
     } else {
+        if (chromiumIds.isEmpty())
+            chromiumIds.append(browser == "edge" ? edgeExtensionId() : defaultChromeExtensionId());
         QJsonArray origins;
-        for (const QString& id : extensionIds) {
-            if (!id.isEmpty()) origins.append("chrome-extension://" + id + "/");
-        }
-        if (origins.isEmpty()) origins.append("chrome-extension://" + defaultChromeExtensionId() + "/");
+        for (const QString& id : chromiumIds) origins.append("chrome-extension://" + id + "/");
         manifest["allowed_origins"] = origins;
     }
 

@@ -356,10 +356,14 @@ int main(int argc, char* argv[]) {
         Logger::instance().warning("Failed to start named pipe intake");
     }
 
-    // Register the Firefox host manifest on startup (its gecko.id is stable and
-    // known ahead of time). Chrome/Edge is registered when a specific extension
-    // id reports in via the "register" handshake, since its id is load-dependent.
+    // Register every browser's host manifest on startup so a fresh install works
+    // with no manual step: the Firefox gecko.id and the Chrome/Edge store IDs
+    // are all stable (fixed by the add-on/CRX signing keys), unlike an unpacked
+    // dev build. installManifest merges, so an id registered later through the
+    // "register" handshake or --register-native-extension is never dropped.
     NativeMessaging::installManifest("firefox", {NativeMessaging::firefoxExtensionId()});
+    NativeMessaging::installManifest("chrome", {NativeMessaging::defaultChromeExtensionId()});
+    NativeMessaging::installManifest("edge", {NativeMessaging::edgeExtensionId()});
     NativeMessaging::writeHostConfig();
 
     QStringList pendingTorrentFiles;

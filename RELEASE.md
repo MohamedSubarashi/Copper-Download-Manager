@@ -50,7 +50,7 @@ Run the full integration suite against the deployed exe:
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `99 passed, 0 failed` (as of v0.4.1). The suite covers
+Expected result: `104 passed, 0 failed` (as of v0.4.2). The suite covers
 launch/intake, single-instance, protocol forwarding, chunked/truncated/
 unknown-length downloads, the copper:// flow, .torrent injection, the
 native-messaging host -> named-pipe injection (ping + byte-exact download),
@@ -64,7 +64,10 @@ local-API token (401 without / 200 with, stable across restart), the
 browser-origin allowlist, `GET /api/diagnostics`, byte-exact resume after
 an interrupt, crash-free relaunch, the file-conflict policy (an existing
 target is never overwritten), HTTP failure classification (a 404 becomes
-an actionable message) and custom request headers reaching the server.
+an actionable message) and custom request headers reaching the server. From
+0.4.2 it also asserts the Chrome/Edge/Firefox native-messaging host manifests
+are written on startup with the stable store extension IDs and a host path that
+points at the deployed `copper_native_host.exe`.
 
 Unit tests (QtTest) — run before the suite:
 
@@ -73,18 +76,15 @@ Unit tests (QtTest) — run before the suite:
 Get-Content unit_tests.log
 ```
 
-Expected result: `21 passed, 0 failed` (as of v0.4.1). The binary is
+Expected result: `23 passed, 0 failed` (as of v0.4.2). The binary is
 isolated from the real profile (QStandardPaths test mode plus
 `APPDATA`/`LOCALAPPDATA` overrides), so it can run beside the app.
 
-Four of those cases are the 0.4.1 merge regression guard: they assert the
-yt-dlp argv carries `--ffmpeg-location` when ffmpeg is present, omits it when
-it is not, picks `mkv`/`mp4` as the `--merge-output-format` for those formats
-(and `--extract-audio` for mp3), and that mkv/best now report as
-requiring ffmpeg. The matching live check — one real YouTube download whose
-output file holds BOTH a video and an audio stream (`ffprobe`) — is run
-manually from a normal (non `--test-profile`) launch, because it needs the
-real tools folder and network access.
+Two of those cases are the 0.4.2 browser-auth guard: they assert the stable
+store IDs (`defaultChromeExtensionId`/`edgeExtensionId` are 32-char `[a-p]`,
+`firefoxExtensionId` equals the add-on's AMO GUID) and that `installManifest`
+merges a dev ID with the store ID instead of clobbering it (and rejects a
+malformed ID).
 
 One case is opt-in, because the rest of the suite is offline and this one
 downloads real videos from YouTube (about 140 MB):
@@ -94,7 +94,7 @@ $env:COPPER_IT_REAL_PLAYLIST = "1"
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `106 passed, 0 failed` (99 offline checks + the 7
+Expected result: `111 passed, 0 failed` (104 offline checks + the 7
 real-playlist checks; not executed during the 0.4.0 validation cycle).
 It needs yt-dlp and ffmpeg in the app's
 tools folder (`%APPDATA%\Copper\Copper Download Manager\tools\`) and network
@@ -119,7 +119,8 @@ python tests\validate_extensions.py
 Validates the MV3 shape, toolbar `action` + popup wiring, Firefox gecko.id +
 data-collection declaration, the required `downloads` permission, the
 `nativeMessaging` permission and `getToken` handshake that supply the local
-API token, and that both extensions dispatch over
+API token (including the `X-Copper-Token` header both the background and the
+copper.js command-center page send), and that both extensions dispatch over
 `http://127.0.0.1:24680/api/download` (with the `copper://` launch path).
 
 ## 4. Manual QA checklist
@@ -133,8 +134,11 @@ Run through these before publishing.
 - [ ] Started fresh (app closed): the extension opens `copper://open` to launch
       the app, retries the API call, and the download still lands.
 - [ ] `copper_native_host.exe` sits in `<version>/` next to the app exe and the
-      app-side pipe tests still pass (the extension itself no longer depends on
-      the host).
+      app-side pipe tests still pass. Confirm each browser's host manifest
+      (`com.copper.dm.json`) lists the store extension ID and a `path` that
+      points at this `<version>/copper_native_host.exe` — that registration is
+      what lets the extension read the local-API token (without it, injected
+      downloads fail with `401 unauthorized`).
 
 
 ### Core downloads
@@ -223,7 +227,7 @@ Run through these before publishing.
 
 ## 6. Code signing (preparation)
 
-No signing certificate was available for 0.4.1, so the artifacts are
+No signing certificate was available for 0.4.2, so the artifacts are
 unsigned and Windows SmartScreen may warn on first run. When a
 certificate exists:
 

@@ -27,9 +27,32 @@ function sendMessage(message) {
   });
 }
 
+// The app's local API requires an install-scoped token (0.4.0). This page cannot
+// read the shared config itself, so it asks the background service worker, which
+// obtained the token from the native-messaging host.
+let apiToken = "";
+let apiTokenLoaded = false;
+
+async function loadApiToken(force) {
+  if (apiTokenLoaded && !force) return apiToken;
+  const reply = await sendMessage({ action: "getToken" });
+  apiToken = reply && reply.token ? String(reply.token) : "";
+  apiTokenLoaded = apiToken !== "";
+  return apiToken;
+}
+
+async function httpApiFetch(path, token) {
+  const opts = { cache: "no-store" };
+  if (token) opts.headers = { "X-Copper-Token": token };
+  return fetch(`${HTTP_API}${path}`, opts);
+}
+
 async function httpApi(path) {
   try {
-    const res = await fetch(`${HTTP_API}${path}`, { cache: "no-store" });
+    let res = await httpApiFetch(path, await loadApiToken(false));
+    if (res.status === 401) {
+      res = await httpApiFetch(path, await loadApiToken(true));
+    }
     return await res.json();
   } catch (e) {
     return null;
