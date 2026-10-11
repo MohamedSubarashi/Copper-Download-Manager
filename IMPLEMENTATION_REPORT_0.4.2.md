@@ -119,14 +119,14 @@ No existing behavior was removed.
 | Windows deploy folder `installer/release/0.4.2/` | **PASS** | Built with Qt 6.12.0 MinGW 13.1 (the local Qt 6.11.2 was superseded on this machine); `windeployqt` laid out Qt DLLs + plugins; `copper_native_host.exe` and notices present; exe version resource reads `0.4.2` |
 | Installer compiled | **PASS** (compiled) / **NOT RUN** (runtime install) | `CopperDownloadManager-0.4.2-setup.exe` built with ISCC (17.0 MB); running it needs UAC elevation |
 | Portable zip + `SHA256SUMS` + notes in `releases/0.4.2/` | **PASS** | `releases/0.4.2/` holds the portable zip (24 entries, root layout, CI-identical), the setup exe, `SHA256SUMS` (coreutils format, both verify) and the notes |
-| CI matrix | **NOT RUN** | To be recorded once the `v0.4.2` tag run completes (expected 7/7: Windows Release + Debug with unit tests, Linux `.deb`, macOS `.dmg`, Arch `.pkg`, extension lint, Publish) |
-| Published GitHub release `v0.4.2` | **NOT RUN** | To be published after the tag run from `releases/0.4.2/RELEASE-NOTES.md` |
+| CI matrix | **PASS** | Tag run [38136131656](https://github.com/MohamedSubarashi/Copper-Download-Manager/actions/runs/38136131656): 7/7 jobs green — Windows Release + Debug (unit tests), Linux `.deb`, macOS `.dmg`, Arch `.pkg`, extension lint, Publish. The `main` push run [38136128783](https://github.com/MohamedSubarashi/Copper-Download-Manager/actions/runs/38136128783) also completed green |
+| Published GitHub release `v0.4.2` | **PASS** | [v0.4.2](https://github.com/MohamedSubarashi/Copper-Download-Manager/releases/tag/v0.4.2) is **Latest**, 6 assets (portable zip, setup exe, Linux `.deb`, Arch `.pkg` + debug, macOS `.dmg`); curated notes applied from `releases/0.4.2/RELEASE-NOTES.md` |
 
 ### Commits
 
 | SHA | Description |
 |---|---|
-| `(recorded below after the release commit)` | fix(auth): register the browser host manifests with the real store IDs (0.4.2) |
+| `8907b88` | fix(auth): register the browser host manifests with the real store IDs (0.4.2) — the release tag `v0.4.2` points here |
 
 ---
 
