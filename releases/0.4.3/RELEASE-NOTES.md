@@ -49,10 +49,15 @@ published store IDs, so even correct registration would never list it in
   ID**; on approval it persists the ID to the host manifest and returns the
   token, so a sideloaded build works with no browser restart and no manual
   command. A denial is not repeatedly nagged.
-- **Browser extension (0.1.2).** When the native host cannot hand over a token,
+- **Browser extension (0.1.3).** When the native host cannot hand over a token,
   the background calls `/api/register` (with a long timeout to allow the
   confirmation prompt) and caches the returned token. Applied to both the Chrome
-  and Firefox builds.
+  and Firefox builds. 0.1.3 also serializes the context-menu build: the MV3
+  service worker restarts and both the boot path and `onInstalled` rebuild the
+  menus, so two overlapping `removeAll`/`create` sequences used to fail with
+  *"Cannot create item with duplicate id copper-link"* — the builds now run
+  through one promise chain and read `runtime.lastError`, so the duplicate and
+  its unchecked-error warning are gone.
 - **Installer cleanup.** The uninstaller now removes the HKCU host keys and the
   per-user host manifest/config, so a later reinstall cannot inherit a stale host
   entry.
@@ -71,7 +76,7 @@ published store IDs, so even correct registration would never list it in
   `…\NativeMessagingHosts\chrome\com.copper.dm.json` and that manifest lists the
   unpacked dev ID; Edge and Firefox keys were written the same way.
 - `tests/validate_extensions.py`: Chrome OK, Firefox OK; both zips rebuilt at
-  0.1.2.
+  0.1.3 (and it fails if the context-menu build is not serialized).
 - `tools/check_version_consistency.py`: version `0.4.3` consistent everywhere.
 
 ## Install
@@ -101,9 +106,9 @@ d1ac979fd355e1fb91ea87ecfdd6221787093206996f7fd2f7b1d9a767234e9d  copper-downloa
   cycle); Windows SmartScreen may warn on first run.
 - The browser add-ons already published in the Chrome Web Store / Edge Add-ons /
   AMO are older than this tree. The **app-side** fix above is what restores
-  injection with those shipped builds. The updated **0.1.2** extension (the
-  `/api/register` fallback) only takes effect after it is republished to the
-  stores; that is a separate manual step.
+  injection with those shipped builds. The updated **0.1.3** extension (the
+  `/api/register` fallback and the context-menu fix) only takes effect after it
+  is republished to the stores; that is a separate manual step.
 - After the very first registration of a brand-new extension ID, Chrome may not
   re-read the host manifest until it restarts. The `/api/register` response
   returns the token immediately, so the download works regardless; a restart only

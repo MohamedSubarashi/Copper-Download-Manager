@@ -168,6 +168,16 @@ def validate_dir(label, path, is_firefox):
                     "background reads the include/exclude filter config via /api/download-filters")
         ok &= check("chrome.downloads.cancel" in bg_src or "downloads.cancel" in bg_src,
                     "background cancels the browser download after a successful dispatch")
+        # Context-menu builds must be serialized: two overlapping removeAll+create
+        # sequences make the second create() fail with "Cannot create item with
+        # duplicate id copper-link" (the MV3 service worker restarts and both the
+        # boot path and onInstalled try to build the menus).
+        ok &= check("menusBuildChain" in bg_src and "MENU_DEFS" in bg_src,
+                    "context-menu builds are serialized through one promise chain "
+                    "(no duplicate-id race)")
+        ok &= check("runtime.lastError" in bg_src,
+                    "context-menu create callbacks read runtime.lastError "
+                    "(no unchecked runtime.lastError)")
 
     # The command-center page (copper.js) runs its own fetches against the local
     # API, so it must carry the token too - otherwise its download list is always

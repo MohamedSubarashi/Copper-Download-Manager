@@ -413,20 +413,47 @@ chrome.downloads.onCreated.addListener((item) => {
 // ---------------------------------------------------------------------------
 // Context menus
 // ---------------------------------------------------------------------------
+//
+// On MV3 the service worker is torn down and restarted constantly, and menus are
+// rebuilt from more than one place (the boot path below and onInstalled). Each
+// build is removeAll-then-create; if two builds overlap, the later create() runs
+// while the earlier menu items still exist and Chrome reports "Cannot create
+// item with duplicate id copper-link". Serialize every build through one promise
+// chain so removeAll always completes before the next create, and read lastError
+// in each create callback so a failure is never an unchecked runtime.lastError.
+const MENU_DEFS = [
+  { id: "copper-link", title: "Download link with Copper", contexts: ["link"] },
+  { id: "copper-image", title: "Download image with Copper", contexts: ["image"] },
+  { id: "copper-video", title: "Download video with Copper", contexts: ["video"] },
+  { id: "copper-audio", title: "Download audio with Copper", contexts: ["audio"] },
+  { id: "copper-selection-video", title: "Download selection as MP4 with Copper", contexts: ["selection"] },
+  { id: "copper-selection-mp3", title: "Download selection as MP3 with Copper", contexts: ["selection"] },
+  { id: "copper-page-media", title: "Download all media on this page with Copper", contexts: ["page"] },
+  { id: "copper-magnet", title: "Send magnet link to Copper", contexts: ["link"] },
+  { id: "copper-playlist-mp4", title: "Download full playlist as MP4", contexts: ["page", "link"] },
+  { id: "copper-playlist-mp3", title: "Download full playlist as MP3", contexts: ["page", "link"] },
+];
+
+let menusBuildChain = Promise.resolve();
+
+function removeAllMenus() {
+  return new Promise((resolve) => {
+    chrome.contextMenus.removeAll(() => {
+      void chrome.runtime.lastError;
+      resolve();
+    });
+  });
+}
 
 function buildMenus() {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({ id: "copper-link", title: "Download link with Copper", contexts: ["link"] });
-    chrome.contextMenus.create({ id: "copper-image", title: "Download image with Copper", contexts: ["image"] });
-    chrome.contextMenus.create({ id: "copper-video", title: "Download video with Copper", contexts: ["video"] });
-    chrome.contextMenus.create({ id: "copper-audio", title: "Download audio with Copper", contexts: ["audio"] });
-    chrome.contextMenus.create({ id: "copper-selection-video", title: "Download selection as MP4 with Copper", contexts: ["selection"] });
-    chrome.contextMenus.create({ id: "copper-selection-mp3", title: "Download selection as MP3 with Copper", contexts: ["selection"] });
-    chrome.contextMenus.create({ id: "copper-page-media", title: "Download all media on this page with Copper", contexts: ["page"] });
-    chrome.contextMenus.create({ id: "copper-magnet", title: "Send magnet link to Copper", contexts: ["link"] });
-    chrome.contextMenus.create({ id: "copper-playlist-mp4", title: "Download full playlist as MP4", contexts: ["page", "link"] });
-    chrome.contextMenus.create({ id: "copper-playlist-mp3", title: "Download full playlist as MP3", contexts: ["page", "link"] });
+  const run = () => removeAllMenus().then(() => {
+    for (const def of MENU_DEFS) {
+      chrome.contextMenus.create(def, () => void chrome.runtime.lastError);
+    }
   });
+  // .then(run, run): a failed previous link must not stall the chain.
+  menusBuildChain = menusBuildChain.then(run, run);
+  return menusBuildChain;
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -524,11 +551,12 @@ function collectPageMedia(opts) {
 // ---------------------------------------------------------------------------
 
 function rebuildMenus(enabled) {
-  if (enabled) {
-    chrome.contextMenus.removeAll(() => buildMenus());
-  } else {
-    chrome.contextMenus.removeAll(() => {});
-  }
+  if (enabled) return buildMenus();
+  // Route the disable path through the same chain: a bare removeAll() here could
+  // interleave with a build's create() and either resurrect menus or fail.
+  const run = () => removeAllMenus();
+  menusBuildChain = menusBuildChain.then(run, run);
+  return menusBuildChain;
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {

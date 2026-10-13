@@ -78,13 +78,22 @@ correct registration.
 - `MainWindow` installs the callback as a `QMessageBox::question` naming the
   extension ID (Yes/No, default No).
 
-### 2.3 Browser extension (0.1.2) (`extensions/Chrome`, `extensions/Firefox`)
+### 2.3 Browser extension (0.1.3) (`extensions/Chrome`, `extensions/Firefox`)
 
 - Background: when the native `getToken` fails, `registerWithApp()` calls
   `/api/register` with a 60 s timeout (the user has to click) and caches the
   token; a denial is remembered for 60 s in memory (`registrationDeniedUntil`).
 - `httpApiOnce()` gained a timeout parameter. Chrome and Firefox backgrounds kept
   byte-identical. Both manifests bumped `0.1.1 → 0.1.2`.
+- **Follow-up (0.1.3): the context-menu build is serialized.** The MV3 service
+  worker restarts constantly and menus are rebuilt from both the boot path and
+  `onInstalled`; each build was `removeAll`-then-`create`, so two overlapping
+  builds made the second `create()` fail with *"Cannot create item with duplicate
+  id copper-link"* (surfaced as an unchecked `runtime.lastError`). `buildMenus()`
+  now runs through a single promise chain (`menusBuildChain`) over a `MENU_DEFS`
+  list, and every `create`/`removeAll` callback reads `chrome.runtime.lastError`,
+  so neither the duplicate nor the unchecked-error warning can occur. The same
+  serialization covers the disable path (`rebuildMenus(false)`).
 
 ### 2.4 Installer (`installer/CopperDownloadManager.iss`)
 
@@ -140,7 +149,7 @@ reconciled to the published artifacts.
 | Windows installer built | **PASS** | `releases/0.4.3/CopperDownloadManager-0.4.3-setup.exe` (published artifact, `sha256 43899580…`) |
 | Windows portable zip built | **PASS** | `releases/0.4.3/CopperDownloadManager-portable-0.4.3.zip` (published artifact, `sha256 69977818…`) |
 | SHA256SUMS describes the shipped assets | **PASS** | `releases/0.4.3/SHA256SUMS`; both hashes re-computed from freshly downloaded release assets and matched the GitHub `digest` field |
-| Extension zips rebuilt | **PASS** | `extensions/*/Copper Download Manager *.zip` at 0.1.2 (root layout, forward-slash `icons/`) |
+| Extension zips rebuilt | **PASS** | `extensions/*/Copper Download Manager *.zip` at 0.1.3 (root layout, forward-slash `icons/`); `validate_extensions.py` fails if the menu build is not serialized |
 
 ### 3.5 Not executed (reported honestly)
 
@@ -148,7 +157,7 @@ reconciled to the published artifacts.
 | --- | --- | --- |
 | Interactive installer install **and uninstall** (registry cleanup) | **NOT RUN** | Needs UAC / a disposable VM; the `[Registry]`/`[UninstallDelete]` entries compile but the removal was not exercised end-to-end |
 | Real browser E2E (drive Chrome with the unpacked extension) | **NOT RUN** | Not automatable headlessly here; the native-host → pipe → token path is covered by the integration suite, the registry/manifest path by the live check above |
-| Republished store-extension smoke | **NOT RUN** | Republishing the 0.1.2 add-ons to the stores is a separate manual step |
+| Republished store-extension smoke | **NOT RUN** | Republishing the 0.1.3 add-ons to the stores is a separate manual step |
 | Opt-in real-playlist suite (`COPPER_REAL_PLAYLIST=1`) | **NOT RUN** | Optional; requires yt-dlp/ffmpeg and network |
 | Code signing | **BLOCKED** | No certificate available this cycle |
 
