@@ -76,10 +76,24 @@ published store IDs, so even correct registration would never list it in
 
 ## Install
 
-- **Installer**: `CopperDownloadManager-0.4.3-setup.exe`
-- **Portable**: extract `CopperDownloadManager-portable-0.4.3.zip`
+- **Windows installer**: `CopperDownloadManager-0.4.3-setup.exe`
+- **Windows portable**: extract `CopperDownloadManager-portable-0.4.3.zip`
   anywhere and run `CopperDownloadManager.exe`
-- Verify downloads with `SHA256SUMS` (`sha256sum -c SHA256SUMS`).
+- **Linux**: `copper-download-manager-0.4.3-Linux.deb` (Debian/Ubuntu) or
+  `copper-download-manager-0.4.3-1-x86_64.pkg.tar.zst` (Arch)
+- **macOS**: `CopperDownloadManager.dmg`
+- `SHA256SUMS` lists the Windows assets; the full set is below.
+
+### SHA-256 of the published assets
+
+```
+5dff5753668bf0453e29117e611ebb47c62706640d27fd1c9a20127320c1aff6  copper-download-manager-0.4.3-1-x86_64.pkg.tar.zst
+d1ac979fd355e1fb91ea87ecfdd6221787093206996f7fd2f7b1d9a767234e9d  copper-download-manager-0.4.3-Linux.deb
+80325fca0379268a21886aef76ebe828df34905681fa5699a3f256e2c2e39fe6  copper-download-manager-debug-0.4.3-1-x86_64.pkg.tar.zst
+438995800b3df5a65b4f161c25c51c79bdb9a4d10573846c4181d745af31dabb  CopperDownloadManager-0.4.3-setup.exe
+69977818ef81fe9eb34ce1b4c67182bb802b0123c40561c8172de24493dd0c75  CopperDownloadManager-portable-0.4.3.zip
+175abb13563f5e181dee4be6354f2ba1baebfca6bd9fe6eb776b92387575a8d0  CopperDownloadManager.dmg
+```
 
 ## Known limitations
 

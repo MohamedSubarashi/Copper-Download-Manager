@@ -130,11 +130,16 @@ correct registration.
 
 ### 3.4 Packaging
 
+The **published** assets are the ones CI built from the tag (the same flow as
+0.4.2); the local pre-tag build is not byte-reproducible because a zip carries
+file mtimes and the CI Inno Setup version differs, so `releases/0.4.3/` was
+reconciled to the published artifacts.
+
 | Check | Status | Evidence |
 | --- | --- | --- |
-| Portable zip + no-op check | **PASS** | `releases/0.4.3/CopperDownloadManager-portable-0.4.3.zip` |
-| Installer build | **PASS** | `releases/0.4.3/CopperDownloadManager-0.4.3-setup.exe` |
-| SHA256SUMS | **PASS** | `releases/0.4.3/SHA256SUMS` |
+| Windows installer built | **PASS** | `releases/0.4.3/CopperDownloadManager-0.4.3-setup.exe` (published artifact, `sha256 43899580…`) |
+| Windows portable zip built | **PASS** | `releases/0.4.3/CopperDownloadManager-portable-0.4.3.zip` (published artifact, `sha256 69977818…`) |
+| SHA256SUMS describes the shipped assets | **PASS** | `releases/0.4.3/SHA256SUMS`; both hashes re-computed from freshly downloaded release assets and matched the GitHub `digest` field |
 | Extension zips rebuilt | **PASS** | `extensions/*/Copper Download Manager *.zip` at 0.1.2 (root layout, forward-slash `icons/`) |
 
 ### 3.5 Not executed (reported honestly)
@@ -157,7 +162,28 @@ correct registration.
 - No interactive installer/uninstall run, no real-browser automation, no code
   signing (see 3.5).
 
-## 5. Supersedes 0.4.2
+## 5. Release
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Release commit + tag | **PASS** | `1a88e27` on `main`, annotated tag `v0.4.3` |
+| CI green on `main` | **PASS** | run `38372062906` → `success` |
+| CI green on `v0.4.3` (incl. Publish) | **PASS** | run `38372066643` → all jobs success; "Publish GitHub release" ok |
+| GitHub release published | **PASS** | https://github.com/MohamedSubarashi/Copper-Download-Manager/releases/tag/v0.4.3 (6 assets) |
+| Curated release notes applied | **PASS** | `gh release edit v0.4.3 --notes-file releases/0.4.3/RELEASE-NOTES.md` |
+
+Published assets:
+
+```
+copper-download-manager-0.4.3-1-x86_64.pkg.tar.zst             5dff5753…   (Arch)
+copper-download-manager-0.4.3-Linux.deb                        d1ac979f…   (Debian/Ubuntu)
+copper-download-manager-debug-0.4.3-1-x86_64.pkg.tar.zst       80325fca…   (Arch debug)
+CopperDownloadManager-0.4.3-setup.exe                          43899580…   (Windows)
+CopperDownloadManager-portable-0.4.3.zip                       69977818…   (Windows)
+CopperDownloadManager.dmg                                      175abb13…   (macOS)
+```
+
+## 6. Supersedes 0.4.2
 
 0.4.2's approach (adding store IDs to the JSON manifest under `User Data\`) was
 ineffective on Windows because the browser never reads that path. 0.4.3 keeps
