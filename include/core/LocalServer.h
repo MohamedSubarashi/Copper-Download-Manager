@@ -8,6 +8,7 @@
 #include <QByteArray>
 #include <QJsonObject>
 #include <QPointer>
+#include <functional>
 
 class LocalServer : public QObject {
     Q_OBJECT
@@ -17,6 +18,13 @@ public:
     void stop();
     bool isRunning() const;
     int getPort() const;
+
+    // Asked when an unknown browser extension calls POST /api/register: return
+    // true to authorize it (the GUI shows a one-time confirmation). Unset means
+    // deny, which is what happens headless/in tests. Runs on the GUI thread.
+    using RegistrationConfirm =
+        std::function<bool(const QString& browser, const QString& extensionId)>;
+    void setRegistrationConfirm(RegistrationConfirm cb) { m_confirmRegistration = std::move(cb); }
 
 signals:
     void downloadRequested(const QString& url, const QString& filename, const QString& path);
@@ -51,6 +59,7 @@ private:
 
     QTcpServer* server;
     int serverPort;
+    RegistrationConfirm m_confirmRegistration;
 };
 
 #endif

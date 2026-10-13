@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Copper Download Manager",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Powerful download assistant for Copper Download Manager: context menus, media detection, playlist capture and a live command center.",
   "icons": {
     "16": "icons/icon16.png",

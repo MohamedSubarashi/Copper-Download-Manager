@@ -8,6 +8,7 @@
 #include "utils/FfmpegManager.h"
 #include "utils/YtDlpManager.h"
 #include "utils/UpdateManager.h"
+#include "utils/NativeMessaging.h"
 #include "db/DatabaseManager.h"
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -36,6 +37,31 @@ QByteArray reasonPhrase(int statusCode) {
         case 431: return "Request Header Fields Too Large";
         default: return "Error";
     }
+}
+
+// Pull the browser and extension id out of a browser-extension Origin. Only a
+// real extension page can produce such an Origin (a web page cannot forge the
+// Origin header, and a cross-origin request from one is refused earlier by
+// isAllowedOrigin), so the id derived here is trustworthy.
+bool parseExtensionOrigin(const QString& origin, QString& browser, QString& extensionId) {
+    static const QRegularExpression chromeRe(
+        QStringLiteral("^chrome-extension://([a-p]{32})$"));
+    static const QRegularExpression mozRe(QStringLiteral(
+        "^moz-extension://([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+        "-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"));
+    QRegularExpressionMatch m = chromeRe.match(origin);
+    if (m.hasMatch()) {
+        browser = QStringLiteral("chrome");
+        extensionId = m.captured(1);
+        return true;
+    }
+    m = mozRe.match(origin);
+    if (m.hasMatch()) {
+        browser = QStringLiteral("firefox");
+        extensionId = m.captured(1);
+        return true;
+    }
+    return false;
 }
 }  // namespace
 
@@ -247,6 +273,43 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         socket->write(response);
         socket->flush();
         socket->disconnectFromHost();
+        return;
+    }
+
+    // Self-registration (0.4.3): an unpacked/dev build has a path-derived
+    // extension id that the stable store ids do not cover, so it cannot obtain
+    // the API token over native messaging until the host manifest lists it. This
+    // tokenless endpoint lets an extension-origin request authorize itself - a
+    // known id is answered immediately, an unknown one is confirmed in the GUI
+    // once and then persisted. It sits before the token check on purpose (the
+    // caller has no token yet) and is safe because only a real
+    // chrome-extension:// / moz-extension:// origin reaches it: a web page's
+    // Origin is rejected by isAllowedOrigin above.
+    if (path == "/api/register" && method == "POST") {
+        QString browser, extensionId;
+        if (!parseExtensionOrigin(origin, browser, extensionId)) {
+            sendJsonResponse(guard, 403, {{"error", "Not a browser-extension origin"}}, allowedOrigin);
+            return;
+        }
+        // A Chromium origin cannot say whether it is Chrome or Edge, so a newly
+        // authorized id is written to both manifests.
+        const bool known = NativeMessaging::isExtensionAllowed(browser, extensionId) ||
+                           (browser == "chrome" &&
+                            NativeMessaging::isExtensionAllowed("edge", extensionId));
+        if (!known) {
+            if (!m_confirmRegistration || !m_confirmRegistration(browser, extensionId)) {
+                Logger::instance().warning(
+                    "LocalServer: extension registration denied for " + extensionId);
+                sendJsonResponse(guard, 403, {{"error", "Registration denied"}}, allowedOrigin);
+                return;
+            }
+            NativeMessaging::installManifest(browser, {extensionId});
+            if (browser == "chrome") NativeMessaging::installManifest("edge", {extensionId});
+        }
+        QJsonObject resp;
+        resp["ok"] = true;
+        resp["token"] = ApiToken::token();
+        sendJsonResponse(guard, 200, resp, allowedOrigin);
         return;
     }
 

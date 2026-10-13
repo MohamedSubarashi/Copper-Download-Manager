@@ -27,9 +27,9 @@ import subprocess
 import sys
 
 # Previous released versions that must no longer appear anywhere in tracked
-# source/docs. Append to this list when cutting a release (0.4.0's list still
-# contains 0.3.1 until the next release supersedes it).
-PREVIOUS_RELEASES = ("0.3.1",)
+# source/docs. Append to this list when cutting a release (0.4.3's list carries
+# 0.3.1 from 0.4.0 until a later release drops it).
+PREVIOUS_RELEASES = ("0.3.1", "0.4.2")
 
 # Historical documents that legitimately name old versions and old UA strings
 # when describing the release history (source and machine files must not).
@@ -37,9 +37,11 @@ HISTORY_DOCS = ("OPENCODE_TODO.md",
                 "IMPLEMENTATION_REPORT_0.4.0.md",
                 "IMPLEMENTATION_REPORT_0.4.1.md",
                 "IMPLEMENTATION_REPORT_0.4.2.md",
+                "IMPLEMENTATION_REPORT_0.4.3.md",
                 "releases/0.4.0/RELEASE-NOTES.md",
                 "releases/0.4.1/RELEASE-NOTES.md",
-                "releases/0.4.2/RELEASE-NOTES.md")
+                "releases/0.4.2/RELEASE-NOTES.md",
+                "releases/0.4.3/RELEASE-NOTES.md")
 
 # Files scanned for stale/forbidden version literals (text files only).
 SCAN_DIRS = ("src", "include", "nativehost", "tests", "tools", "installer",

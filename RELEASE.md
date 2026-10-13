@@ -50,7 +50,7 @@ Run the full integration suite against the deployed exe:
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `104 passed, 0 failed` (as of v0.4.2). The suite covers
+Expected result: `117 passed, 0 failed` (as of v0.4.3). The suite covers
 launch/intake, single-instance, protocol forwarding, chunked/truncated/
 unknown-length downloads, the copper:// flow, .torrent injection, the
 native-messaging host -> named-pipe injection (ping + byte-exact download),
@@ -65,9 +65,13 @@ browser-origin allowlist, `GET /api/diagnostics`, byte-exact resume after
 an interrupt, crash-free relaunch, the file-conflict policy (an existing
 target is never overwritten), HTTP failure classification (a 404 becomes
 an actionable message) and custom request headers reaching the server. From
-0.4.2 it also asserts the Chrome/Edge/Firefox native-messaging host manifests
+0.4.3 it also asserts the Chrome/Edge/Firefox native-messaging host manifests
 are written on startup with the stable store extension IDs and a host path that
-points at the deployed `copper_native_host.exe`.
+points at the deployed `copper_native_host.exe`, that on Windows each browser's
+HKCU host key default value points at such a manifest (the browser locates the
+host through the registry there), and that app-side self-registration
+(`POST /api/register`) hands the token to an authorized extension origin while
+refusing a website or missing Origin.
 
 Unit tests (QtTest) — run before the suite:
 
@@ -76,15 +80,17 @@ Unit tests (QtTest) — run before the suite:
 Get-Content unit_tests.log
 ```
 
-Expected result: `23 passed, 0 failed` (as of v0.4.2). The binary is
+Expected result: `25 passed, 0 failed` (as of v0.4.3). The binary is
 isolated from the real profile (QStandardPaths test mode plus
 `APPDATA`/`LOCALAPPDATA` overrides), so it can run beside the app.
 
-Two of those cases are the 0.4.2 browser-auth guard: they assert the stable
+Four of those cases are the browser-auth guard: they assert the stable
 store IDs (`defaultChromeExtensionId`/`edgeExtensionId` are 32-char `[a-p]`,
-`firefoxExtensionId` equals the add-on's AMO GUID) and that `installManifest`
+`firefoxExtensionId` equals the add-on's AMO GUID), that `installManifest`
 merges a dev ID with the store ID instead of clobbering it (and rejects a
-malformed ID).
+malformed ID), that `isExtensionAllowed` recognizes exactly the persisted IDs,
+and (on Windows) that each browser's HKCU host key default value is written and
+points at an existing manifest.
 
 One case is opt-in, because the rest of the suite is offline and this one
 downloads real videos from YouTube (about 140 MB):
@@ -94,7 +100,7 @@ $env:COPPER_IT_REAL_PLAYLIST = "1"
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `111 passed, 0 failed` (104 offline checks + the 7
+Expected result: `124 passed, 0 failed` (117 offline checks + the 7
 real-playlist checks; not executed during the 0.4.0 validation cycle).
 It needs yt-dlp and ffmpeg in the app's
 tools folder (`%APPDATA%\Copper\Copper Download Manager\tools\`) and network
@@ -227,7 +233,7 @@ Run through these before publishing.
 
 ## 6. Code signing (preparation)
 
-No signing certificate was available for 0.4.2, so the artifacts are
+No signing certificate was available for 0.4.3, so the artifacts are
 unsigned and Windows SmartScreen may warn on first run. When a
 certificate exists:
 

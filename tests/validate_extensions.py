@@ -153,6 +153,11 @@ def validate_dir(label, path, is_firefox):
                     "background attaches the API token header (X-Copper-Token)")
         ok &= check("getToken" in bg_src,
                     "background exposes a getToken action for the status page")
+        ok &= check("/api/register" in bg_src,
+                    "background self-registers with /api/register when the host "
+                    "cannot supply a token (0.4.3)")
+        ok &= check("sendNativeMessage" in bg_src and "registerWithApp" in bg_src,
+                    "background falls back from native getToken to app registration")
         ok &= check("action.onClicked" in bg_src,
                     "toolbar click opens status page (action.onClicked)")
         ok &= check("openStatusTab" in bg_src,

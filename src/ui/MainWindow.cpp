@@ -106,6 +106,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), currentFilter(0) 
     connect(&PipeServer::instance(), &PipeServer::argumentForwarded, this, &MainWindow::onArgumentForwarded);
     connect(&PipeServer::instance(), &PipeServer::registerExtension, this, &MainWindow::onRegisterExtension);
 
+    // Self-registration from an unpacked/dev browser extension: confirm once,
+    // naming the id, before LocalServer authorizes and persists it. This is what
+    // lets a sideloaded build (whose id differs from the store ids) obtain the
+    // local API token without a manual --register-native-extension step.
+    LocalServer::instance().setRegistrationConfirm(
+        [this](const QString& browser, const QString& extensionId) {
+            const QString vendor = browser.compare(QStringLiteral("firefox"), Qt::CaseInsensitive) == 0
+                ? QStringLiteral("Firefox") : QStringLiteral("Chrome/Edge");
+            const QMessageBox::StandardButton reply = QMessageBox::question(
+                this, QStringLiteral("Browser extension"),
+                QStringLiteral("A browser extension (%1) wants to send downloads to "
+                               "Copper Download Manager.\n\nExtension ID:\n%2\n\n"
+                               "Only allow this if you installed the Copper browser extension.")
+                    .arg(vendor, extensionId),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+            return reply == QMessageBox::Yes;
+        });
+
     connect(&UpdateManager::instance(), &UpdateManager::updateAvailable, this, [this](const QString& version) {
         QString msg = "A new version of Copper Download Manager is available:\n\n"
                       "Current version: " + QCoreApplication::applicationVersion() + "\n"

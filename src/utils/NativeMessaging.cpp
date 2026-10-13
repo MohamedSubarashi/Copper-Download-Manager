@@ -15,6 +15,97 @@
 
 #ifdef PLATFORM_WINDOWS
 #include <windows.h>
+#include <string>
+#endif
+
+// ---------------------------------------------------------------------------
+// Registration locations
+// ---------------------------------------------------------------------------
+
+// Per-user directory that owns the host manifest and the copper_host_config,
+// deliberately outside any browser's data dir: the app writes the manifest once
+// and points every browser at it through the registry, so nothing breaks when a
+// browser profile moves or a second profile is added.
+#ifdef PLATFORM_WINDOWS
+static QString windowsManifestDir() {
+    QString base = qEnvironmentVariable("LOCALAPPDATA");
+    if (base.isEmpty())
+        base = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
+    return base + "/Copper/Copper Download Manager/NativeMessagingHosts";
+}
+#endif
+
+// The file installManifest() writes (and the registry points at) for a browser.
+// Empty means the browser is not supported on this platform.
+static QString manifestTargetPath(const QString& browser) {
+#if defined(PLATFORM_WINDOWS)
+    if (browser == "chrome" || browser == "edge" || browser == "firefox")
+        return QDir(windowsManifestDir()).filePath(browser + "/" +
+                                                   NativeMessaging::hostName() + ".json");
+    return QString();
+#elif defined(PLATFORM_MACOS)
+    const QString name = NativeMessaging::hostName() + ".json";
+    if (browser == "chrome")
+        return QDir::homePath() + "/Library/Application Support/Google/Chrome/NativeMessagingHosts/" + name;
+    if (browser == "edge")
+        return QDir::homePath() + "/Library/Application Support/Microsoft Edge/NativeMessagingHosts/" + name;
+    if (browser == "firefox")
+        return QDir::homePath() + "/Library/Application Support/Mozilla/NativeMessagingHosts/" + name;
+    return QString();
+#else
+    const QString name = NativeMessaging::hostName() + ".json";
+    const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    if (browser == "chrome")
+        return dataDir + "/google-chrome/NativeMessagingHosts/" + name;
+    if (browser == "edge")
+        return dataDir + "/microsoft-edge/NativeMessagingHosts/" + name;
+    if (browser == "firefox")
+        return dataDir + "/mozilla/native-messaging-hosts/" + name;
+    return QString();
+#endif
+}
+
+#ifdef PLATFORM_WINDOWS
+namespace {
+// On Windows a browser does not scan its profile for host manifests: it resolves
+// <name> through HKCU\Software\<vendor>\NativeMessagingHosts\<name> and reads the
+// path to the manifest from that key's default (unnamed) value. The JSON-only
+// registration the app used to do was therefore invisible to Chrome/Edge/Firefox
+// (User Data\NativeMessagingHosts is a macOS/Linux convention), so the host was
+// never found and the extension never obtained the API token.
+bool writeRegistryDefaultString(const QString& subKey, const QString& value) {
+    const std::wstring key = subKey.toStdWString();
+    HKEY handle = nullptr;
+    LONG rc = RegCreateKeyExW(HKEY_CURRENT_USER, key.c_str(), 0, nullptr,
+                              REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &handle, nullptr);
+    if (rc != ERROR_SUCCESS) return false;
+    const std::wstring data = QDir::toNativeSeparators(value).toStdWString();
+    const DWORD bytes = static_cast<DWORD>((data.size() + 1) * sizeof(wchar_t));
+    rc = RegSetValueExW(handle, nullptr, 0, REG_SZ,
+                        reinterpret_cast<const BYTE*>(data.c_str()), bytes);
+    RegCloseKey(handle);
+    return rc == ERROR_SUCCESS;
+}
+
+// HKCU subkeys whose default value must point at the browser's manifest. In test
+// mode they are redirected under Software\Copper\... so a test run can never
+// re-point the developer's real browser at a throwaway profile manifest.
+QStringList registryHostKeys(const QString& browser) {
+    const QString prefix = QStandardPaths::isTestModeEnabled()
+        ? QStringLiteral("Software\\Copper\\TestNativeMessagingHosts\\")
+        : QStringLiteral("Software\\");
+    const QString name = NativeMessaging::hostName();
+    QStringList keys;
+    if (browser == "chrome") {
+        keys << prefix + "Google\\Chrome\\NativeMessagingHosts\\" + name;
+    } else if (browser == "edge") {
+        keys << prefix + "Microsoft\\Edge\\NativeMessagingHosts\\" + name;
+    } else if (browser == "firefox") {
+        keys << prefix + "Mozilla\\NativeMessagingHosts\\" + name;
+    }
+    return keys;
+}
+}  // namespace
 #endif
 
 QString NativeMessaging::hostName() {
@@ -66,14 +157,8 @@ QString NativeMessaging::edgeExtensionId() {
 QStringList NativeMessaging::manifestPaths() {
     QStringList paths;
 #ifdef PLATFORM_WINDOWS
-    const QString localAppData = qEnvironmentVariable("LOCALAPPDATA");
-    const QString appData = qEnvironmentVariable("APPDATA");
-    paths
-        << localAppData + "/Google/Chrome/User Data/NativeMessagingHosts/" + hostName() + ".json"
-        << localAppData + "/Google/Chrome Beta/User Data/NativeMessagingHosts/" + hostName() + ".json"
-        << localAppData + "/Google/Chrome SxS/User Data/NativeMessagingHosts/" + hostName() + ".json"
-        << localAppData + "/Microsoft/Edge/User Data/NativeMessagingHosts/" + hostName() + ".json"
-        << appData + "/Mozilla/NativeMessagingHosts/" + hostName() + ".json";
+    paths << manifestTargetPath("chrome") << manifestTargetPath("edge")
+          << manifestTargetPath("firefox");
 #elif defined(PLATFORM_MACOS)
     paths
         << QDir::homePath() + "/Library/Application Support/Google/Chrome/NativeMessagingHosts/" + hostName() + ".json"
@@ -90,44 +175,8 @@ QStringList NativeMessaging::manifestPaths() {
 }
 
 QString NativeMessaging::installManifest(const QString& browser, const QStringList& extensionIds) {
-    QString target;
-#if defined(PLATFORM_WINDOWS)
-    const QString localAppData = qEnvironmentVariable("LOCALAPPDATA");
-    const QString appData = qEnvironmentVariable("APPDATA");
-    const QString name = hostName() + ".json";
-    if (browser == "chrome") {
-        target = localAppData + "/Google/Chrome/User Data/NativeMessagingHosts/" + name;
-    } else if (browser == "edge") {
-        target = localAppData + "/Microsoft/Edge/User Data/NativeMessagingHosts/" + name;
-    } else if (browser == "firefox") {
-        target = appData + "/Mozilla/NativeMessagingHosts/" + name;
-    } else {
-        return QString();
-    }
-#elif defined(PLATFORM_MACOS)
-    const QString name = hostName() + ".json";
-    if (browser == "chrome") {
-        target = QDir::homePath() + "/Library/Application Support/Google/Chrome/NativeMessagingHosts/" + name;
-    } else if (browser == "edge") {
-        target = QDir::homePath() + "/Library/Application Support/Microsoft Edge/NativeMessagingHosts/" + name;
-    } else if (browser == "firefox") {
-        target = QDir::homePath() + "/Library/Application Support/Mozilla/NativeMessagingHosts/" + name;
-    } else {
-        return QString();
-    }
-#else
-    const QString name = hostName() + ".json";
-    const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
-    if (browser == "chrome") {
-        target = dataDir + "/google-chrome/NativeMessagingHosts/" + name;
-    } else if (browser == "edge") {
-        target = dataDir + "/microsoft-edge/NativeMessagingHosts/" + name;
-    } else if (browser == "firefox") {
-        target = dataDir + "/mozilla/native-messaging-hosts/" + name;
-    } else {
-        return QString();
-    }
-#endif
+    const QString target = manifestTargetPath(browser);
+    if (target.isEmpty()) return QString();
 
     QFileInfo fi(target);
     QDir().mkpath(fi.absolutePath());
@@ -198,6 +247,19 @@ QString NativeMessaging::installManifest(const QString& browser, const QStringLi
     f.close();
 
     Logger::instance().info("NativeMessaging: wrote manifest for " + browser + " at " + target);
+
+#ifdef PLATFORM_WINDOWS
+    // Point the browser at the manifest. This registry value - not the JSON file
+    // alone - is what makes the browser find the host on Windows.
+    for (const QString& subKey : registryHostKeys(browser)) {
+        if (writeRegistryDefaultString(subKey, target))
+            Logger::instance().info("NativeMessaging: registered host for " + browser +
+                                    " at HKCU\\" + subKey);
+        else
+            Logger::instance().warning("NativeMessaging: failed to register host at HKCU\\" + subKey);
+    }
+#endif
+
     writeHostConfig();
     return target;
 }
@@ -256,4 +318,26 @@ bool NativeMessaging::writeHostConfig() {
     }
     Logger::instance().info("NativeMessaging: wrote host config to " + configPath);
     return true;
+}
+
+bool NativeMessaging::isExtensionAllowed(const QString& browser, const QString& extensionId) {
+    const QString id = extensionId.trimmed();
+    if (id.isEmpty()) return false;
+    const QString target = manifestTargetPath(browser);
+    if (target.isEmpty()) return false;
+    QFile f(target);
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    const QJsonObject manifest = QJsonDocument::fromJson(f.readAll()).object();
+    const bool isFirefox = (browser == "firefox");
+    const QJsonArray list = manifest.value(isFirefox ? QStringLiteral("allowed_extensions")
+                                                     : QStringLiteral("allowed_origins")).toArray();
+    for (const QJsonValue& v : list) {
+        const QString entry = v.toString();
+        if (isFirefox) {
+            if (entry == id) return true;
+        } else if (entry == "chrome-extension://" + id + "/") {
+            return true;
+        }
+    }
+    return false;
 }

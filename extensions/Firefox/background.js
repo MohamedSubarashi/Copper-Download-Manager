@@ -20,6 +20,9 @@ const LAST_RESULT_KEY = "copperLastResult";
 const STATUS_PAGE = "copper.html";
 const HTTP_API = "http://127.0.0.1:24680";
 const HTTP_TIMEOUT = 3000;
+// The self-registration call may open a one-time confirmation prompt in the app,
+// so it gets a much longer budget than a normal API call (the user has to click).
+const REGISTER_TIMEOUT = 60000;
 const LAUNCH_RETRY_MS = 1500;
 
 const DEFAULT_SETTINGS = {
@@ -79,8 +82,12 @@ const NATIVE_HOST = "com.copper.dm";
 let apiToken = "";
 let apiTokenLoaded = false;
 let tokenFetch = null;
+// After the user declines self-registration, don't nag on every call. The
+// window is short and in-memory (a service-worker restart clears it); a fresh
+// download attempt may ask again, which is the desired behaviour.
+let registrationDeniedUntil = 0;
 
-function fetchApiToken() {
+function nativeGetToken() {
   return new Promise((resolve) => {
     try {
       chrome.runtime.sendNativeMessage(NATIVE_HOST, { action: "getToken" }, (reply) => {
@@ -91,6 +98,28 @@ function fetchApiToken() {
       resolve("");
     }
   });
+}
+
+// Fallback when the native host cannot hand over a token: ask the app itself.
+// The app checks whether this extension's id is already authorized and, if not,
+// prompts the user once before adding it to the host manifest. On success it
+// returns the token, so the very next API call authenticates - no browser
+// restart needed for the freshly authorized id.
+function registerWithApp() {
+  if (Date.now() < registrationDeniedUntil) return Promise.resolve("");
+  return httpApiOnce("/api/register", "POST", { extensionId: chrome.runtime.id }, "",
+                     REGISTER_TIMEOUT).then((res) => {
+    if (res.ok && res.json && res.json.token) return String(res.json.token);
+    if (res.status === 403) registrationDeniedUntil = Date.now() + 60000;
+    return "";
+  });
+}
+
+function fetchApiToken() {
+  // Prefer the native host: the token never crosses the network there. Only when
+  // that fails (typically an unpacked/dev build whose path-derived id is not in
+  // the host manifest yet) fall back to app-side self-registration.
+  return nativeGetToken().then((t) => (t ? t : registerWithApp()));
 }
 
 function ensureApiToken() {
@@ -120,7 +149,7 @@ function refreshApiToken() {
   return ensureApiToken();
 }
 
-function httpApiOnce(path, method, body, token) {
+function httpApiOnce(path, method, body, token, timeoutMs) {
   return new Promise((resolve) => {
     let timer;
     const controller = new AbortController();
@@ -147,7 +176,7 @@ function httpApiOnce(path, method, body, token) {
         resolve({ ok: false, status: 0, json: null, error: e.message });
       })
       .finally(() => clearTimeout(timer));
-    timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT);
+    timer = setTimeout(() => controller.abort(), timeoutMs || HTTP_TIMEOUT);
   });
 }
 

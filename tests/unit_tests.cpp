@@ -11,6 +11,8 @@
 #include <QTemporaryDir>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QSettings>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -55,10 +57,14 @@ private slots:
     // API token (0.4.0): 64-hex, stable, constant-time matching semantics.
     void apiToken_roundTrip();
 
-    // Native messaging (0.4.2): the stable store IDs must be registered so the
-    // extension can fetch the token; registration must merge, not clobber.
+    // Native messaging (0.4.3): the stable store IDs must be registered so the
+    // extension can fetch the token; registration must merge, not clobber, and
+    // on Windows must record the manifest path in the HKCU host key the browser
+    // actually reads (the JSON file alone is not enough).
     void nativeMessaging_stableStoreIds();
     void nativeMessaging_manifestMergesAllowedIds();
+    void nativeMessaging_isExtensionAllowed();
+    void nativeMessaging_registryRegistration();
 
     // yt-dlp arguments (0.4.1): ffmpeg must be locatable or the video and audio
     // are left as two separate files; the merge container must match the choice.
@@ -240,7 +246,7 @@ void CopperUnitTests::apiToken_roundTrip() {
     QCOMPARE(ApiToken::token(), token);
 }
 
-// --- Native messaging (0.4.2) ----------------------------------------------
+// --- Native messaging (0.4.3) ----------------------------------------------
 
 void CopperUnitTests::nativeMessaging_stableStoreIds() {
     // Regression: these used to be empty/mismatched, so the app never authorized
@@ -286,6 +292,76 @@ void CopperUnitTests::nativeMessaging_manifestMergesAllowedIds() {
         QVERIFY2(!v.toString().contains(bad), qPrintable(v.toString()));
     }
     QFile::remove(path);
+}
+
+void CopperUnitTests::nativeMessaging_isExtensionAllowed() {
+    // installManifest persists the id, and isExtensionAllowed is how the local
+    // API decides between "known id, hand back the token silently" and "unknown
+    // id, ask the user" (LocalServer /api/register).
+    const QString devId = QStringLiteral("cccccccccccccccccccccccccccccccc");
+    const QString path = NativeMessaging::installManifest("firefox", {devId});
+    QVERIFY2(!path.isEmpty(), qPrintable(path));
+    QVERIFY(NativeMessaging::isExtensionAllowed("firefox", devId));
+    // The stable store id is a fallback only when no id is supplied, so it is not
+    // present until startup registers it (what main.cpp does).
+    QVERIFY(!NativeMessaging::isExtensionAllowed("firefox",
+                                                 NativeMessaging::firefoxExtensionId()));
+    NativeMessaging::installManifest("firefox", {NativeMessaging::firefoxExtensionId()});
+    QVERIFY(NativeMessaging::isExtensionAllowed("firefox", devId));
+    QVERIFY(NativeMessaging::isExtensionAllowed("firefox",
+                                                NativeMessaging::firefoxExtensionId()));
+    QVERIFY(!NativeMessaging::isExtensionAllowed("firefox", QStringLiteral("not-registered")));
+    QVERIFY(!NativeMessaging::isExtensionAllowed("firefox", QString()));
+
+    // Chromium ids are stored as chrome-extension://<id>/ and matched exactly.
+    const QString chromeDev = QStringLiteral("dddddddddddddddddddddddddddddddd");
+    NativeMessaging::installManifest("chrome", {chromeDev});
+    QVERIFY(NativeMessaging::isExtensionAllowed("chrome", chromeDev));
+    QVERIFY(!NativeMessaging::isExtensionAllowed("chrome", QStringLiteral("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")));
+
+    QFile::remove(path);
+    QFile::remove(NativeMessaging::installManifest("chrome", {}));
+}
+
+void CopperUnitTests::nativeMessaging_registryRegistration() {
+#ifdef PLATFORM_WINDOWS
+    // Windows browsers resolve the host through HKCU, not by scanning the profile
+    // (the JSON-only registration the app used to do was invisible to them, which
+    // is why native messaging - and therefore the API token - never worked).
+    // Test mode redirects the key under Software\Copper\... so this test can
+    // never re-point the developer's real Chrome at a throwaway profile.
+    const QString devId = QStringLiteral("ffffffffffffffffffffffffffffffff");
+    const QString path = NativeMessaging::installManifest("chrome", {devId});
+    QVERIFY2(!path.isEmpty(), qPrintable(path));
+
+    QSettings reg(QStringLiteral("HKEY_CURRENT_USER\\Software\\Copper\\"
+                                 "TestNativeMessagingHosts\\Google\\Chrome\\"
+                                 "NativeMessagingHosts\\com.copper.dm"),
+                  QSettings::NativeFormat);
+    const QString value = reg.value(QStringLiteral(".")).toString();
+    QVERIFY2(!value.isEmpty(), "registry default value was not written");
+    QCOMPARE(QDir::fromNativeSeparators(value), path);
+    // The value must point at a manifest that exists - a stale path is the exact
+    // failure that broke real installs.
+    QVERIFY2(QFileInfo::exists(value), qPrintable("missing manifest: " + value));
+
+    // Edge and Firefox get their own keys pointing at their own manifests.
+    QSettings edgeReg(QStringLiteral("HKEY_CURRENT_USER\\Software\\Copper\\"
+                                     "TestNativeMessagingHosts\\Microsoft\\Edge\\"
+                                     "NativeMessagingHosts\\com.copper.dm"),
+                      QSettings::NativeFormat);
+    QCOMPARE(QDir::fromNativeSeparators(edgeReg.value(QStringLiteral(".")).toString()),
+             NativeMessaging::installManifest("edge", {devId}));
+
+    QSettings ffReg(QStringLiteral("HKEY_CURRENT_USER\\Software\\Copper\\"
+                                   "TestNativeMessagingHosts\\Mozilla\\"
+                                   "NativeMessagingHosts\\com.copper.dm"),
+                    QSettings::NativeFormat);
+    QCOMPARE(QDir::fromNativeSeparators(ffReg.value(QStringLiteral(".")).toString()),
+             NativeMessaging::installManifest("firefox", {devId}));
+#else
+    QSKIP("Windows-only: registry-based native-messaging registration");
+#endif
 }
 
 // --- yt-dlp arguments (0.4.1) -----------------------------------------------

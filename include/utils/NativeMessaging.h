@@ -28,7 +28,20 @@ public:
     // preserved and the given ids are added, so registering the stable store IDs
     // at startup never clobbers a sideloaded dev ID added through the "register"
     // handshake (or --register-native-extension), and vice versa.
+    //
+    // On Windows writing the JSON file is not enough: Chrome, Edge and Firefox
+    // locate the host through the HKCU\Software\<vendor>\NativeMessagingHosts
+    // registry value, so this also (re)writes that key's default value to the
+    // manifest path. Without it the browser reports "Specified native messaging
+    // host not found", the extension never gets the API token, and every
+    // browser-injected download fails 401 Unauthorized.
     static QString installManifest(const QString& browser, const QStringList& extensionIds);
+
+    // Whether the given extension id is already listed as allowed for the
+    // browser's host manifest. Used to decide between silently handing back the
+    // API token (a known/authorized build) and asking the user to authorize a
+    // never-seen id (e.g. an unpacked dev build).
+    static bool isExtensionAllowed(const QString& browser, const QString& extensionId);
 
     // Record where the host executable lives and the app launcher, so the host
     // can find and start Copper independently of the browser.

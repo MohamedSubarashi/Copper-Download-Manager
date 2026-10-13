@@ -26,6 +26,11 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote
 
+try:
+    import winreg  # Windows only: the browser host key lives in HKCU
+except ImportError:  # pragma: no cover - non-Windows dev shell
+    winreg = None
+
 DEFAULT_PORT = 24680
 
 
@@ -492,23 +497,26 @@ def main():
         check("local API token persisted in host config", bool(API_TOKEN),
               "copper_host_config.json missing/has no apiToken")
 
-        # --- Browser native-messaging registration (0.4.2): the app must write
-        # --- each browser's host manifest with the STABLE store extension IDs on
-        # --- startup. Without this the extension cannot call the host's
-        # --- "getToken" action, so every browser-injected download hits the
-        # --- local API without a token and fails 401 Unauthorized.
-        def read_host_manifest(rel_parts):
-            path = os.path.join(profile_root, *rel_parts, "com.copper.dm.json")
+        # --- Browser native-messaging registration (0.4.3): the app must write
+        # --- each browser's host manifest with the STABLE store extension IDs and,
+        # --- on Windows, point the browser at it through the HKCU host key - a
+        # --- JSON file alone is invisible to Chrome/Edge/Firefox. Without this the
+        # --- extension cannot reach the host's "getToken" action, so every
+        # --- browser-injected download hits the local API without a token and
+        # --- fails 401 Unauthorized.
+        def read_host_manifest(browser_dir):
+            path = os.path.join(profile_root, "local", "Copper",
+                                "Copper Download Manager", "NativeMessagingHosts",
+                                browser_dir, "com.copper.dm.json")
             if not os.path.isfile(path):
-                return None
+                return None, path
             with open(path, encoding="utf-8") as f:
                 try:
-                    return json.load(f)
+                    return json.load(f), path
                 except json.JSONDecodeError:
-                    return None
+                    return None, path
 
-        chrome_mf = read_host_manifest(
-            ["local", "Google", "Chrome", "User Data", "NativeMessagingHosts"])
+        chrome_mf, chrome_mf_path = read_host_manifest("chrome")
         check("chrome native-host manifest written on startup",
               chrome_mf is not None, "manifest missing under the test profile")
         check("chrome manifest allows the Web Store extension id",
@@ -523,20 +531,52 @@ def main():
               os.path.normcase(exe_dir),
               str(chrome_mf and chrome_mf.get("path")))
 
-        edge_mf = read_host_manifest(
-            ["local", "Microsoft", "Edge", "User Data", "NativeMessagingHosts"])
+        edge_mf, edge_mf_path = read_host_manifest("edge")
         check("edge manifest allows the Add-ons extension id",
               bool(edge_mf) and
               "chrome-extension://fnganciafgifhelimkoeiiapdcdmnnlb/" in
               (edge_mf.get("allowed_origins") or []),
               str(edge_mf and edge_mf.get("allowed_origins")))
 
-        firefox_mf = read_host_manifest(["roaming", "Mozilla", "NativeMessagingHosts"])
+        firefox_mf, firefox_mf_path = read_host_manifest("firefox")
         check("firefox manifest allows the AMO add-on guid",
               bool(firefox_mf) and
               "CopperDownloadManager@mohamedsubarashi" in
               (firefox_mf.get("allowed_extensions") or []),
               str(firefox_mf and firefox_mf.get("allowed_extensions")))
+
+        # Windows: the browser resolves the host through the HKCU key's default
+        # value, so a manifest with no registry entry is still "host not found".
+        # Test mode redirects the key under Software\Copper\... so this never
+        # touches the developer's real browser registration.
+        def read_registry_default(subkey):
+            if winreg is None:
+                return None
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, subkey) as k:
+                    return winreg.QueryValueEx(k, "")[0]
+            except OSError:
+                return None
+
+        if winreg is not None:
+            hkcu = r"Software\Copper\TestNativeMessagingHosts"
+            for browser, key_tail, mf_path in (
+                    ("chrome", r"Google\Chrome\NativeMessagingHosts\com.copper.dm",
+                     chrome_mf_path),
+                    ("edge", r"Microsoft\Edge\NativeMessagingHosts\com.copper.dm",
+                     edge_mf_path),
+                    ("firefox", r"Mozilla\NativeMessagingHosts\com.copper.dm",
+                     firefox_mf_path)):
+                value = read_registry_default(hkcu + "\\" + key_tail)
+                check(f"{browser} HKCU host key default value set",
+                      bool(value), "no value at " + hkcu + "\\" + key_tail)
+                check(f"{browser} HKCU host key points at its manifest",
+                      value is not None and
+                      os.path.normcase(os.path.normpath(value)) ==
+                      os.path.normcase(os.path.normpath(mf_path)),
+                      f"registry={value} expected={mf_path}")
+                check(f"{browser} registered manifest path exists",
+                      bool(value) and os.path.isfile(value), str(value))
 
         # --- /api/version ---
         st, j = http_request(port, "GET", "/api/version")
@@ -633,6 +673,30 @@ def main():
             st, _ = http_request(port, "GET", "/api/version",
                                  headers={"Origin": bad_origin})
             check(f"malformed Origin {bad_origin} -> 403", st == 403, f"status={st}")
+
+        # --- Self-registration (0.4.3): an extension that is already authorized
+        # --- gets the token back with no prompt. The endpoint is intentionally
+        # --- tokenless (the caller has none yet) but gated to extension origins,
+        # --- which is what lets an unpacked/dev build authenticate without a
+        # --- manual --register-native-extension step.
+        store_origin = "chrome-extension://cmokehdedogdpbfhlamopeifgogaihni"
+        st, j = http_request(port, "POST", "/api/register", {"extensionId": "x"},
+                             headers={"Origin": store_origin}, with_token=False)
+        check("POST /api/register from an authorized extension origin -> 200",
+              st == 200, f"status={st} resp={j}")
+        check("/api/register returns the API token",
+              isinstance(j, dict) and j.get("token") == API_TOKEN, str(j))
+
+        st, j = http_request(port, "POST", "/api/register", {"extensionId": "x"},
+                             headers={"Origin": "https://evil.example.com"},
+                             with_token=False)
+        check("POST /api/register from a website origin -> 403",
+              st == 403, f"status={st} resp={j}")
+
+        st, j = http_request(port, "POST", "/api/register", {"extensionId": "x"},
+                             with_token=False)
+        check("POST /api/register without an Origin -> 403",
+              st == 403, f"status={st} resp={j}")
 
         # --- Unsupported URL scheme rejection ---
         st, j = http_request(port, "POST", "/api/download", {"url": "file:///C:/Windows/notepad.exe"})

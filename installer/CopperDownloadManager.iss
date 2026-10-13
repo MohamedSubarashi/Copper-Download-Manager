@@ -1,5 +1,5 @@
 #define MyAppName "Copper Download Manager"
-#define MyAppVersion "0.4.2"
+#define MyAppVersion "0.4.3"
 #define MyAppPublisher "Mohamed Subarashi"
 #define MyAppExeName "CopperDownloadManager.exe"
 
@@ -41,7 +41,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "release\0.4.2\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "release\0.4.3\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -50,3 +50,16 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[Registry]
+; The app writes the browser native-messaging host registration into HKCU at
+; runtime (Google\Chrome, Microsoft\Edge, Mozilla). Removing those keys on
+; uninstall keeps a later reinstall from inheriting a stale host entry.
+Root: HKCU; Subkey: "Software\Google\Chrome\NativeMessagingHosts\com.copper.dm"; ValueType: none; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Microsoft\Edge\NativeMessagingHosts\com.copper.dm"; ValueType: none; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Mozilla\NativeMessagingHosts\com.copper.dm"; ValueType: none; Flags: uninsdeletekey
+
+[UninstallDelete]
+; The host manifest(s) and the host config live in the per-user local app data.
+Type: filesandordirs; Name: "{localappdata}\Copper\Copper Download Manager\NativeMessagingHosts"
+Type: files; Name: "{localappdata}\Copper\copper_host_config.json"
