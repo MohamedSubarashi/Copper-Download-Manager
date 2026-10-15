@@ -13,8 +13,12 @@ browsers expect and what previous releases shipped:
 Entries are written with a fixed timestamp and sorted order, so rebuilding an
 unchanged extension produces an identical archive.
 
+`--check` verifies the committed zips still match their sources instead of
+writing them (used by CI): line endings are normalized before comparing, so a
+zip built on Windows is accepted by a Linux checkout of the same content.
+
 Usage:
-    python tools/build_extension_zips.py
+    python tools/build_extension_zips.py [--check]
 """
 
 import os
@@ -77,10 +81,48 @@ def build(label, root, zip_name):
     return True
 
 
+def normalized(data):
+    """Line-ending-insensitive bytes so Windows/Linux checkouts compare equal."""
+    return data.replace(b"\r\n", b"\n")
+
+
+def verify(label, root, zip_name):
+    """Compare the committed zip against its sources instead of writing it."""
+    out = os.path.join(root, zip_name)
+    if not os.path.isfile(out):
+        print("FAIL: %s is missing - run tools/build_extension_zips.py" % out)
+        return False
+    members = iter_members(root)
+    with zipfile.ZipFile(out) as z:
+        packed = sorted(z.namelist())
+        if packed != sorted(members):
+            print("FAIL: %s zip entry list differs from its sources" % label)
+            print("    zip:    %s" % ", ".join(packed))
+            print("    source: %s" % ", ".join(sorted(members)))
+            return False
+        stale = []
+        for name in members:
+            with open(os.path.join(root, *name.split("/")), "rb") as f:
+                if normalized(f.read()) != normalized(z.read(name)):
+                    stale.append(name)
+    if stale:
+        print("FAIL: %s zip is stale (out-of-date entries): %s"
+              % (label, ", ".join(stale)))
+        print("      fix: python tools/build_extension_zips.py")
+        return False
+    print("ok  : %s zip matches its sources (%d entries)"
+          % (label, len(members)))
+    return True
+
+
 def main():
+    checking = "--check" in sys.argv[1:]
     ok = True
     for label, root, zip_name in TARGETS:
-        ok &= build(label, root, zip_name)
+        if checking:
+            ok = verify(label, root, zip_name) and ok
+        else:
+            ok = build(label, root, zip_name) and ok
     return 0 if ok else 1
 
 

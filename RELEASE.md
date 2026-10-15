@@ -8,10 +8,12 @@ publishing a new version. Follow it top to bottom.
 1. Update `project(... VERSION X.Y.Z ...)` in `CMakeLists.txt`. This is the
    single source: the generated `copper_version.h`, the User-Agent and
    `setApplicationVersion` all derive from it.
-2. Mirror the new version into `app.rc`,
-   `installer/CopperDownloadManager.iss` and the `THIRD-PARTY-NOTICES.txt`
-   header, then run the consistency checker — it fails (exit 1) on any stale
-   version literal or hardcoded UA anywhere in the tracked tree:
+2. Mirror the new version into `app.rc`, `installer/CopperDownloadManager.iss`,
+   `installer/arch/PKGBUILD` (`pkgver`) and the `THIRD-PARTY-NOTICES.txt`
+   header (plus the `Version consistency` step label in
+   `.github/workflows/ci.yml`), then run the consistency checker — it fails
+   (exit 1) on any stale version literal or hardcoded UA anywhere in the
+   tracked tree:
 
    ```powershell
    python tools\check_version_consistency.py
@@ -28,9 +30,12 @@ Notes:
 
 - MinGW bin must be on `PATH` before compiling, otherwise `cc1plus` fails with
   `STATUS_DLL_NOT_FOUND (0xC0000135)`.
-- `windeployqt --release --no-translations --no-opengl-sw` runs as part of the
-  install step and lays out Qt DLLs + plugin folders into
-  `installer/release/<version>/`.
+- `windeployqt --release --no-opengl-sw` runs as part of the install step and
+  lays out Qt DLLs + plugin folders into `installer/release/<version>/`.
+  Translations are deliberately **not** suppressed: Qt's own `qtbase_*.qm`
+  files are deployed into `installer/release/<version>/translations/` so the
+  built-in dialogs (file pickers, message boxes) are localized too. The app's
+  own catalogs need no deploy step — they are compiled and embedded in the exe.
 - `THIRD-PARTY-NOTICES.txt` is copied into the release folder automatically.
 - `copper_native_host.exe` (the browser native-messaging host) is built and
   copied into the release folder automatically as a second CMake target.
@@ -50,7 +55,7 @@ Run the full integration suite against the deployed exe:
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `117 passed, 0 failed` (as of v0.4.3). The suite covers
+Expected result: `117 passed, 0 failed` (as of v0.5.0). The suite covers
 launch/intake, single-instance, protocol forwarding, chunked/truncated/
 unknown-length downloads, the copper:// flow, .torrent injection, the
 native-messaging host -> named-pipe injection (ping + byte-exact download),
@@ -80,9 +85,15 @@ Unit tests (QtTest) — run before the suite:
 Get-Content unit_tests.log
 ```
 
-Expected result: `25 passed, 0 failed` (as of v0.4.3). The binary is
+Expected result: `26 passed, 0 failed` (as of v0.5.0). The binary is
 isolated from the real profile (QStandardPaths test mode plus
 `APPDATA`/`LOCALAPPDATA` overrides), so it can run beside the app.
+
+One of those cases is the i18n guard: `translations_areEmbeddedAndLocalized`
+loads `:/translations/copper_<code>.qm` from the embedded resource and asserts
+that a known message really resolves to the translated text (and to RTL Arabic
+where applicable), so a catalog that silently fails to build can't fall back to
+English unnoticed.
 
 Four of those cases are the browser-auth guard: they assert the stable
 store IDs (`defaultChromeExtensionId`/`edgeExtensionId` are 32-char `[a-p]`,
@@ -128,6 +139,36 @@ data-collection declaration, the required `downloads` permission, the
 API token (including the `X-Copper-Token` header both the background and the
 copper.js command-center page send), and that both extensions dispatch over
 `http://127.0.0.1:24680/api/download` (with the `copper://` launch path).
+From 0.5.0 it also validates i18n: `default_locale`,
+`_locales/{en,fr,ar,es,pt_BR}` key parity, `$1` placeholder parity, no empty
+messages, and that every `__MSG_*__` reference in the manifests resolves in the
+`en` catalog.
+
+Translation catalogs (offline, run in CI and locally):
+
+```powershell
+# refresh the catalogs whenever a user-facing string is added or changed
+lupdate main.cpp src include -ts translations/copper_*.ts -no-obsolete
+
+# translate the new entries (Qt Linguist), then verify
+python tools\check_translations.py
+```
+Fails on a catalog that went stale after a source change: a missing or
+`unfinished` message, an empty translation, a dropped `%1` placeholder, an `en`
+catalog carrying its own copy of the English instead of the source text, a
+language on disk that `CMakeLists.txt` never compiles, or a locale set that no
+longer matches the browser extensions.
+
+Extension zips (offline, run in CI and locally):
+
+```powershell
+python tools\build_extension_zips.py --check   # verify the tracked zips
+python tools\build_extension_zips.py           # rebuild them, then commit
+```
+The zips are tracked release artifacts (contents at the zip root, `_locales`
+included). `--check` fails when a source file changed without a rebuild; it
+compares with line endings normalized, so a Windows-built zip passes a Linux
+CI checkout.
 
 ## 4. Manual QA checklist
 
@@ -202,6 +243,22 @@ Run through these before publishing.
 - [ ] Chrome: toolbar popup opens; intercepted links reach the app via the host.
 - [ ] Firefox: same flow works (add-on is signed / identified by gecko.id).
 
+### Language & translations
+- [ ] Settings > General > Language: choose a language and accept the restart
+      prompt; after the restart the UI, menus, dialogs and status text are in
+      that language ("Auto (system)" picks the Windows language up too).
+- [ ] Switch back to "Auto (system)" / English and confirm the app restores.
+- [ ] Qt's own dialogs (file picker, confirmation message boxes) are localized
+      as well — not English inside an otherwise translated window.
+- [ ] Arabic: layout flips to RTL (menus, dialogs, tab order) with no clipped
+      or overlapping labels. **Requires a visual pass on a real machine —
+      not possible in the automated environment.**
+- [ ] A message missing from a language falls back to English instead of
+      showing an empty label.
+- [ ] Browser extension follows the browser's UI language: status-page text,
+      media-bar labels and right-click menu entries are localized (Arabic sets
+      `dir="rtl"` on the status page).
+
 ### Settings & protocol
 - [ ] Change theme (Light/Dark/System) and confirm it applies immediately.
 - [ ] Speed limiter applies immediately and does not stall the UI.
@@ -220,6 +277,9 @@ Run through these before publishing.
       all Qt DLLs and plugin folders (platforms, imageformats, iconengines,
       styles, sqldrivers, tls, networkinformation), and
       `THIRD-PARTY-NOTICES.txt`.
+- [ ] `installer/release/<version>/translations/` holds Qt's `qtbase_*.qm`
+      (windeployqt is run without `--no-translations`), while the app's own
+      catalogs ship embedded in the exe and need no file there.
 - [ ] MinGW runtime DLLs (`libgcc_s_seh-1.dll`, `libstdc++-6.dll`,
       `libwinpthread-1.dll`) are present and covered by the notices file.
 - [ ] Create the portable zip and confirm CI packaging smoke check passes.
@@ -233,7 +293,7 @@ Run through these before publishing.
 
 ## 6. Code signing (preparation)
 
-No signing certificate was available for 0.4.3, so the artifacts are
+No signing certificate was available for 0.5.0, so the artifacts are
 unsigned and Windows SmartScreen may warn on first run. When a
 certificate exists:
 
@@ -254,4 +314,7 @@ certificate exists:
 3. Attach the portable artifact from CI (or the locally built zip) to the
    release.
 4. Update the in-app changelog/version and the README if the feature set
-   changed.
+   changed. For a localization release, state plainly that the French,
+   Arabic, Spanish and Brazilian Portuguese strings are machine-assisted
+   and await native-speaker review, and that the Arabic RTL layout still
+   needs a visual QA pass.

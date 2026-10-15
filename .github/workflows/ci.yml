@@ -15,7 +15,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate Chrome/Firefox manifests
         run: python tests/validate_extensions.py
-      - name: Version consistency (0.4.3 single source)
+      - name: Translation catalogs (app .ts + extension _locales)
+        run: python tools/check_translations.py
+      - name: Extension zips match their sources
+        run: python tools/build_extension_zips.py --check
+      - name: Version consistency (0.5.0 single source)
         run: python tools/check_version_consistency.py
 
   build-windows:
