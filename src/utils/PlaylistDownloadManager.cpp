@@ -15,13 +15,13 @@ PlaylistDownloadManager& PlaylistDownloadManager::instance() {
 
 void PlaylistDownloadManager::fetchPlaylist(const QString& url, std::function<void(const QVector<PlaylistEntry>&)> callback) {
     Logger::instance().info("Fetching playlist: " + url);
-    emit progress("Fetching playlist information...");
+    emit progress(tr("Fetching playlist information..."));
 
     YtDlpManager::instance().fetchPlaylistInfo(url, [this, callback](const QVector<PlaylistEntry>& entries) {
         if (entries.isEmpty()) {
-            emit error("No entries found in playlist");
+            emit error(tr("No entries found in playlist"));
         } else {
-            emit progress("Found " + QString::number(entries.size()) + " entries");
+            emit progress(tr("Found %1 entries").arg(entries.size()));
         }
         callback(entries);
     });
@@ -35,6 +35,6 @@ void PlaylistDownloadManager::downloadPlaylist(const QVector<PlaylistEntry>& ent
         if (entry.selected) selectedCount++;
     }
 
-    emit progress("Starting download of " + QString::number(selectedCount) + " files...");
+    emit progress(tr("Starting download of %1 files...").arg(selectedCount));
     DownloadManager::instance().addPlaylistDownload(entries, outputPath, type);
 }

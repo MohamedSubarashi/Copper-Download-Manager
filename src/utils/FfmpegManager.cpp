@@ -65,13 +65,13 @@ void FfmpegManager::installOrUpdate() {
 
     if (isInstalled()) {
         Logger::instance().info("ffmpeg already installed: " + getVersion() + " (skipping download)");
-        emit installationProgress("Already installed: " + getVersion());
+        emit installationProgress(tr("Already installed: %1").arg(getVersion()));
         return;
     }
 
     isDownloading = true;
     Logger::instance().info("Installing/updating ffmpeg...");
-    emit installationProgress("Starting download...");
+    emit installationProgress(tr("Starting download..."));
 
 #ifdef PLATFORM_WINDOWS
     // Versioned release package (not a rolling "latest" build) so the SHA-256
@@ -86,7 +86,7 @@ void FfmpegManager::installOrUpdate() {
     QString fileName = "ffmpeg.zip";
 #endif
 
-    emit installationProgress("Downloading ffmpeg...");
+    emit installationProgress(tr("Downloading ffmpeg..."));
     startBinaryDownload(url, fileName);
 }
 
@@ -100,7 +100,7 @@ void FfmpegManager::startBinaryDownload(const QString& url, const QString& fileN
     connect(activeReply, &QNetworkReply::downloadProgress, [this](qint64 received, qint64 total) {
         if (total > 0) {
             int pct = (int)((received * 100) / total);
-            emit installationProgress("Downloading: " + QString::number(pct) + "%");
+            emit installationProgress(tr("Downloading: %1%").arg(pct));
         }
     });
 
@@ -112,7 +112,7 @@ void FfmpegManager::startBinaryDownload(const QString& url, const QString& fileN
 
         if (reply->error() != QNetworkReply::NoError) {
             Logger::instance().error("ffmpeg download failed: " + reply->errorString());
-            emit installationProgress("Download failed: " + reply->errorString());
+            emit installationProgress(tr("Download failed: %1").arg(reply->errorString()));
             emit errorOccurred(reply->errorString());
             isDownloading = false;
             reply->deleteLater();
@@ -135,13 +135,13 @@ void FfmpegManager::startBinaryDownload(const QString& url, const QString& fileN
         QString verifyError;
         if (!DependencyVerifier::verifyPinned(QStringLiteral("ffmpeg"), url, data, &verifyError)) {
             Logger::instance().error("ffmpeg install blocked: " + verifyError);
-            emit installationProgress("Verification failed - install blocked");
+            emit installationProgress(tr("Verification failed - install blocked"));
             emit errorOccurred(verifyError);
             isDownloading = false;
             return;
         }
 
-        emit installationProgress("Extracting...");
+        emit installationProgress(tr("Extracting..."));
 
         QString toolsDir = getToolsDir();
         QDir().mkpath(toolsDir);
@@ -149,7 +149,7 @@ void FfmpegManager::startBinaryDownload(const QString& url, const QString& fileN
 
         QFile zipFile(zipPath);
         if (!zipFile.open(QIODevice::WriteOnly)) {
-            emit installationProgress("Write error");
+            emit installationProgress(tr("Write error"));
             isDownloading = false;
             return;
         }
@@ -215,10 +215,10 @@ void FfmpegManager::startBinaryDownload(const QString& url, const QString& fileN
 #endif
 
         if (isInstalled()) {
-            emit installationProgress("Installed: " + getVersion());
+            emit installationProgress(tr("Installed: %1").arg(getVersion()));
             Logger::instance().info("ffmpeg installed successfully");
         } else {
-            emit installationProgress("Installation failed - please install manually");
+            emit installationProgress(tr("Installation failed - please install manually"));
         }
 
         isDownloading = false;
@@ -227,7 +227,7 @@ void FfmpegManager::startBinaryDownload(const QString& url, const QString& fileN
 
 void FfmpegManager::convert(const QString& input, const QString& output, const QString& format) {
     if (!isInstalled()) {
-        emit errorOccurred("ffmpeg not installed");
+        emit errorOccurred(tr("ffmpeg not installed"));
         return;
     }
 
@@ -247,7 +247,7 @@ void FfmpegManager::convert(const QString& input, const QString& output, const Q
         if (exitCode == 0) {
             emit conversionFinished();
         } else {
-            emit errorOccurred("Conversion failed with code " + QString::number(exitCode));
+            emit errorOccurred(tr("Conversion failed with code %1").arg(exitCode));
         }
         convertProcess->deleteLater();
         convertProcess = nullptr;

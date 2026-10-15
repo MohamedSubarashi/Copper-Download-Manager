@@ -1,6 +1,7 @@
 #include "ui/SettingsDialog.h"
 #include "utils/Logger.h"
 #include "utils/ThemeManager.h"
+#include "utils/TranslationManager.h"
 #include "utils/YtDlpManager.h"
 #include "utils/FfmpegManager.h"
 #include "utils/Aria2cManager.h"
@@ -29,7 +30,7 @@
 #include <QProcess>
 
 SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
-    setWindowTitle("Settings");
+    setWindowTitle(tr("Settings"));
     setWindowIcon(QIcon(":/icons/Settings.png"));
     resize(650, 550);
 
@@ -40,14 +41,14 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     QWidget* generalTab = new QWidget();
     QVBoxLayout* generalLayout = new QVBoxLayout(generalTab);
 
-    QGroupBox* themeGroup = new QGroupBox("Appearance");
+    QGroupBox* themeGroup = new QGroupBox(tr("Appearance"));
     QVBoxLayout* themeBoxLayout = new QVBoxLayout(themeGroup);
     QHBoxLayout* themeLayout = new QHBoxLayout();
     auto* themeCombo = new QComboBox();
-    QLabel* themeLabel = new QLabel("Theme:");
+    QLabel* themeLabel = new QLabel(tr("Theme:"));
     themeLabel->setBuddy(themeCombo);
     themeLayout->addWidget(themeLabel);
-    themeCombo->setAccessibleName("Theme");
+    themeCombo->setAccessibleName(tr("Theme"));
     themeCombo->addItem(QIcon(":/icons/LightMode.png"), "Light");
     themeCombo->addItem(QIcon(":/icons/DarkMode.png"), "Dark");
     themeCombo->addItem(QIcon(":/icons/FollowSystem.png"), "System");
@@ -61,17 +62,44 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     themeBoxLayout->addLayout(themeLayout);
     generalLayout->addWidget(themeGroup);
 
-    QGroupBox* folderGroup = new QGroupBox("Download Folder");
+    QGroupBox* languageGroup = new QGroupBox(tr("Language"));
+    QHBoxLayout* languageLayout = new QHBoxLayout(languageGroup);
+    QLabel* languageLabel = new QLabel(tr("Language:"));
+    languageCombo = new QComboBox();
+    languageLabel->setBuddy(languageCombo);
+    languageCombo->setAccessibleName(tr("Language"));
+    for (const TranslationManager::Language& language : TranslationManager::availableLanguages()) {
+        // Endonyms are intentionally not translated (see TranslationManager);
+        // only the generic "system" entry is localized.
+        const QString display = language.code == QLatin1String("system")
+                                    ? tr("Auto (system)")
+                                    : language.native;
+        languageCombo->addItem(display, language.code);
+    }
+    const int languageIndex = languageCombo->findData(
+        DatabaseManager::instance().getSetting("language", "system"));
+    if (languageIndex >= 0) languageCombo->setCurrentIndex(languageIndex);
+    connect(languageCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
+        DatabaseManager::instance().saveSetting("language", languageCombo->currentData().toString());
+        QMessageBox::information(this, tr("Language"),
+            tr("The new language will be applied after you restart Copper Download Manager."));
+    });
+    languageLayout->addWidget(languageLabel);
+    languageLayout->addWidget(languageCombo);
+    languageLayout->addStretch();
+    generalLayout->addWidget(languageGroup);
+
+    QGroupBox* folderGroup = new QGroupBox(tr("Download Folder"));
     QVBoxLayout* folderBoxLayout = new QVBoxLayout(folderGroup);
     QHBoxLayout* folderLayout = new QHBoxLayout();
-    QLabel* folderLabel = new QLabel("Folder:");
+    QLabel* folderLabel = new QLabel(tr("Folder:"));
     folderLabel->setBuddy(downloadPathEdit = new QLineEdit());
     folderLayout->addWidget(folderLabel);
-    downloadPathEdit->setAccessibleName("Download folder path");
+    downloadPathEdit->setAccessibleName(tr("Download folder path"));
     downloadPathEdit->setReadOnly(true);
     downloadPathEdit->setText(DatabaseManager::instance().getSetting("downloadPath", QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)));
-    QPushButton* browseBtn = new QPushButton("Browse...");
-    browseBtn->setAccessibleName("Browse download folder");
+    QPushButton* browseBtn = new QPushButton(tr("Browse..."));
+    browseBtn->setAccessibleName(tr("Browse download folder"));
     connect(browseBtn, &QPushButton::clicked, this, &SettingsDialog::onBrowseDownloadPath);
     folderLayout->addWidget(downloadPathEdit);
     folderLayout->addWidget(browseBtn);
@@ -79,32 +107,32 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     generalLayout->addWidget(folderGroup);
 
     generalLayout->addStretch();
-    tabWidget->addTab(generalTab, "General");
+    tabWidget->addTab(generalTab, tr("General"));
 
     // Downloads Tab
     QWidget* downloadsTab = new QWidget();
     QVBoxLayout* downloadsLayout = new QVBoxLayout(downloadsTab);
 
-    QGroupBox* chunksGroup = new QGroupBox("Download Options");
+    QGroupBox* chunksGroup = new QGroupBox(tr("Download Options"));
     QVBoxLayout* chunksBoxLayout = new QVBoxLayout(chunksGroup);
     QHBoxLayout* chunkLayout = new QHBoxLayout();
-    QLabel* chunkLabel = new QLabel("Default download chunks:");
+    QLabel* chunkLabel = new QLabel(tr("Default download chunks:"));
     chunkLabel->setBuddy(chunkCombo = new QComboBox());
     chunkLayout->addWidget(chunkLabel);
-    chunkCombo->setAccessibleName("Default download chunks");
+    chunkCombo->setAccessibleName(tr("Default download chunks"));
     for (int i : {4, 8, 12, 16, 24, 32}) chunkCombo->addItem(QString::number(i));
     chunkCombo->setCurrentText(DatabaseManager::instance().getSetting("chunks", "16"));
     chunkLayout->addWidget(chunkCombo);
     chunksBoxLayout->addLayout(chunkLayout);
     downloadsLayout->addWidget(chunksGroup);
 
-    QGroupBox* speedGroup = new QGroupBox("Speed Limiter");
+    QGroupBox* speedGroup = new QGroupBox(tr("Speed Limiter"));
     QVBoxLayout* speedBoxLayout = new QVBoxLayout(speedGroup);
     QHBoxLayout* speedLayout = new QHBoxLayout();
-    QLabel* speedLabel = new QLabel("Download speed limit (KB/s, 0 = unlimited):");
+    QLabel* speedLabel = new QLabel(tr("Download speed limit (KB/s, 0 = unlimited):"));
     speedLabel->setBuddy(speedLimitSpin = new QSpinBox());
     speedLayout->addWidget(speedLabel);
-    speedLimitSpin->setAccessibleName("Download speed limit");
+    speedLimitSpin->setAccessibleName(tr("Download speed limit"));
     speedLimitSpin->setRange(0, 1000000);
     speedLimitSpin->setValue(DatabaseManager::instance().getSetting("speedLimit", "0").toInt());
     speedLimitSpin->setSuffix(" KB/s");
@@ -112,134 +140,134 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     speedBoxLayout->addLayout(speedLayout);
     downloadsLayout->addWidget(speedGroup);
 
-    QGroupBox* concurrencyGroup = new QGroupBox("Parallelism & Retries");
+    QGroupBox* concurrencyGroup = new QGroupBox(tr("Parallelism & Retries"));
     QVBoxLayout* concurrencyLayout = new QVBoxLayout(concurrencyGroup);
 
     QHBoxLayout* maxLayout = new QHBoxLayout();
-    QLabel* maxLabel = new QLabel("Maximum simultaneous downloads:");
+    QLabel* maxLabel = new QLabel(tr("Maximum simultaneous downloads:"));
     maxLabel->setBuddy(maxConcurrentSpin = new QSpinBox());
     maxLayout->addWidget(maxLabel);
-    maxConcurrentSpin->setAccessibleName("Maximum simultaneous downloads");
+    maxConcurrentSpin->setAccessibleName(tr("Maximum simultaneous downloads"));
     maxConcurrentSpin->setRange(1, 20);
     maxConcurrentSpin->setValue(qBound(1, DatabaseManager::instance().getSetting("maxConcurrentDownloads", "5").toInt(), 20));
     maxLayout->addWidget(maxConcurrentSpin);
     concurrencyLayout->addLayout(maxLayout);
 
     QHBoxLayout* jobsLayout = new QHBoxLayout();
-    QLabel* jobsLabel = new QLabel("Maximum simultaneous yt-dlp jobs:");
+    QLabel* jobsLabel = new QLabel(tr("Maximum simultaneous yt-dlp jobs:"));
     jobsLabel->setBuddy(maxYtDlpJobsSpin = new QSpinBox());
     jobsLayout->addWidget(jobsLabel);
-    maxYtDlpJobsSpin->setAccessibleName("Maximum simultaneous yt-dlp jobs");
+    maxYtDlpJobsSpin->setAccessibleName(tr("Maximum simultaneous yt-dlp jobs"));
     maxYtDlpJobsSpin->setRange(1, 8);
     maxYtDlpJobsSpin->setValue(qBound(1, DatabaseManager::instance().getSetting("maxYtDlpJobs", "2").toInt(), 8));
     jobsLayout->addWidget(maxYtDlpJobsSpin);
     concurrencyLayout->addLayout(jobsLayout);
 
     QLabel* jobsHint = new QLabel(
-        "A playlist counts as ONE yt-dlp job. Running several at once is what gets "
-        "requests throttled and makes playlists fail, so keep this low.");
+        tr("A playlist counts as ONE yt-dlp job. Running several at once is what gets "
+        "requests throttled and makes playlists fail, so keep this low."));
     jobsHint->setWordWrap(true);
     jobsHint->setStyleSheet("color: gray; font-size: 11px;");
     concurrencyLayout->addWidget(jobsHint);
 
     QHBoxLayout* fragsLayout = new QHBoxLayout();
-    QLabel* fragsLabel = new QLabel("Fragments downloaded in parallel per video:");
+    QLabel* fragsLabel = new QLabel(tr("Fragments downloaded in parallel per video:"));
     fragsLabel->setBuddy(ytDlpFragmentsSpin = new QSpinBox());
     fragsLayout->addWidget(fragsLabel);
-    ytDlpFragmentsSpin->setAccessibleName("Fragments downloaded in parallel per video");
+    ytDlpFragmentsSpin->setAccessibleName(tr("Fragments downloaded in parallel per video"));
     ytDlpFragmentsSpin->setRange(1, 16);
     ytDlpFragmentsSpin->setValue(qBound(1, DatabaseManager::instance().getSetting("ytDlpFragments", "4").toInt(), 16));
     fragsLayout->addWidget(ytDlpFragmentsSpin);
     concurrencyLayout->addLayout(fragsLayout);
 
     QLabel* fragsHint = new QLabel(
-        "Playlists download one video at a time; parallel fragments make up for it.");
+        tr("Playlists download one video at a time; parallel fragments make up for it."));
     fragsHint->setWordWrap(true);
     fragsHint->setStyleSheet("color: gray; font-size: 11px;");
     concurrencyLayout->addWidget(fragsHint);
 
     QHBoxLayout* retriesLayout = new QHBoxLayout();
-    QLabel* retriesLabel = new QLabel("Automatic retries for a failed download:");
+    QLabel* retriesLabel = new QLabel(tr("Automatic retries for a failed download:"));
     retriesLabel->setBuddy(maxRetriesSpin = new QSpinBox());
     retriesLayout->addWidget(retriesLabel);
-    maxRetriesSpin->setAccessibleName("Automatic retries for a failed download");
+    maxRetriesSpin->setAccessibleName(tr("Automatic retries for a failed download"));
     maxRetriesSpin->setRange(0, 10);
     maxRetriesSpin->setValue(qBound(0, DatabaseManager::instance().getSetting("maxRetries", "3").toInt(), 10));
     retriesLayout->addWidget(maxRetriesSpin);
     concurrencyLayout->addLayout(retriesLayout);
 
     QLabel* retriesHint = new QLabel(
-        "Retries run with a growing delay and continue the partial file. 0 disables them.");
+        tr("Retries run with a growing delay and continue the partial file. 0 disables them."));
     retriesHint->setWordWrap(true);
     retriesHint->setStyleSheet("color: gray; font-size: 11px;");
     concurrencyLayout->addWidget(retriesHint);
 
     downloadsLayout->addWidget(concurrencyGroup);
 
-    QGroupBox* windowGroup = new QGroupBox("Download Windows");
+    QGroupBox* windowGroup = new QGroupBox(tr("Download Windows"));
     QVBoxLayout* windowLayout = new QVBoxLayout(windowGroup);
-    autoOpenInfoCheck = new QCheckBox("Open a download-info window for every new download");
-    autoOpenInfoCheck->setAccessibleName("Open a download-info window for every new download");
+    autoOpenInfoCheck = new QCheckBox(tr("Open a download-info window for every new download"));
+    autoOpenInfoCheck->setAccessibleName(tr("Open a download-info window for every new download"));
     autoOpenInfoCheck->setChecked(DatabaseManager::instance().getSetting("autoOpenDownloadInfo", "false") == "true");
     windowLayout->addWidget(autoOpenInfoCheck);
     QLabel* windowHint = new QLabel(
-        "The info window can always be opened from the row's context menu or with Ctrl+I. "
-        "A playlist opens one window listing all of its items.");
+        tr("The info window can always be opened from the row's context menu or with Ctrl+I. "
+        "A playlist opens one window listing all of its items."));
     windowHint->setWordWrap(true);
     windowHint->setStyleSheet("color: gray; font-size: 11px;");
     windowLayout->addWidget(windowHint);
     downloadsLayout->addWidget(windowGroup);
 
-    QGroupBox* uaGroup = new QGroupBox("User-Agent");
+    QGroupBox* uaGroup = new QGroupBox(tr("User-Agent"));
     QVBoxLayout* uaLayout = new QVBoxLayout(uaGroup);
     QHBoxLayout* uaRow = new QHBoxLayout();
-    QLabel* uaLabel = new QLabel("User-Agent:");
+    QLabel* uaLabel = new QLabel(tr("User-Agent:"));
     uaLabel->setBuddy(userAgentEdit = new QLineEdit());
     uaRow->addWidget(uaLabel);
-    userAgentEdit->setAccessibleName("Custom User-Agent for downloads");
-    userAgentEdit->setPlaceholderText("Leave blank for the default browser-like User-Agent");
+    userAgentEdit->setAccessibleName(tr("Custom User-Agent for downloads"));
+    userAgentEdit->setPlaceholderText(tr("Leave blank for the default browser-like User-Agent"));
     userAgentEdit->setText(DatabaseManager::instance().getSetting("userAgent", ""));
     uaRow->addWidget(userAgentEdit);
     uaLayout->addLayout(uaRow);
-    QLabel* uaHint = new QLabel("Sent with HTTP(S) download and metadata requests. Some servers require a browser-like User-Agent.");
+    QLabel* uaHint = new QLabel(tr("Sent with HTTP(S) download and metadata requests. Some servers require a browser-like User-Agent."));
     uaHint->setWordWrap(true);
     uaHint->setStyleSheet("color: gray; font-size: 11px;");
     uaLayout->addWidget(uaHint);
     downloadsLayout->addWidget(uaGroup);
 
-    QGroupBox* headersGroup = new QGroupBox("Custom Headers");
+    QGroupBox* headersGroup = new QGroupBox(tr("Custom Headers"));
     QVBoxLayout* headersLayout = new QVBoxLayout(headersGroup);
     headersEdit = new QPlainTextEdit();
-    headersEdit->setAccessibleName("Custom download headers");
-    headersEdit->setPlaceholderText("One header per line, for example:\nReferer: https://example.com/\nAuthorization: Bearer token");
+    headersEdit->setAccessibleName(tr("Custom download headers"));
+    headersEdit->setPlaceholderText(tr("One header per line, for example:\nReferer: https://example.com/\nAuthorization: Bearer token"));
     headersEdit->setMaximumHeight(72);
     headersEdit->setPlainText(DatabaseManager::instance().getSetting("customHeaders", ""));
     headersLayout->addWidget(headersEdit);
-    QLabel* headersHint = new QLabel("Sent with every HTTP(S) download request. Some servers require a specific Referer or Authorization header; invalid headers can make servers reject requests.");
+    QLabel* headersHint = new QLabel(tr("Sent with every HTTP(S) download request. Some servers require a specific Referer or Authorization header; invalid headers can make servers reject requests."));
     headersHint->setWordWrap(true);
     headersHint->setStyleSheet("color: gray; font-size: 11px;");
     headersLayout->addWidget(headersHint);
     downloadsLayout->addWidget(headersGroup);
 
     downloadsLayout->addStretch();
-    tabWidget->addTab(downloadsTab, "Downloads");
+    tabWidget->addTab(downloadsTab, tr("Downloads"));
 
     // Formats Tab (file-format include/exclude filter, applied to every download)
     QWidget* formatsTab = new QWidget();
     QVBoxLayout* formatsLayout = new QVBoxLayout(formatsTab);
 
-    QGroupBox* formatFilterGroup = new QGroupBox("File Format Filter");
+    QGroupBox* formatFilterGroup = new QGroupBox(tr("File Format Filter"));
     QVBoxLayout* formatFilterLayout = new QVBoxLayout(formatFilterGroup);
-    formatFilterEnabledCheck = new QCheckBox("Enable file-format filter for all downloads");
-    formatFilterEnabledCheck->setAccessibleName("Enable file-format filter for all downloads");
+    formatFilterEnabledCheck = new QCheckBox(tr("Enable file-format filter for all downloads"));
+    formatFilterEnabledCheck->setAccessibleName(tr("Enable file-format filter for all downloads"));
     formatFilterEnabledCheck->setChecked(DatabaseManager::instance().getSetting("formatFilterEnabled", "true") == "true");
     formatFilterLayout->addWidget(formatFilterEnabledCheck);
 
-    QLabel* includeLabel = new QLabel("Allow these file formats (comma or space separated). Leave empty to allow every format except the excluded ones:");
+    QLabel* includeLabel = new QLabel(tr("Allow these file formats (comma or space separated). Leave empty to allow every format except the excluded ones:"));
     includeLabel->setWordWrap(true);
     formatFilterLayout->addWidget(includeLabel);
     includeExtensionsEdit = new QPlainTextEdit();
-    includeExtensionsEdit->setAccessibleName("Include file formats");
+    includeExtensionsEdit->setAccessibleName(tr("Include file formats"));
     QString includeSaved = DatabaseManager::instance().getSetting("formatIncludeExtensions", "");
     if (includeSaved.isEmpty()) {
         includeExtensionsEdit->setPlainText("");
@@ -249,11 +277,11 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     includeExtensionsEdit->setMaximumHeight(80);
     formatFilterLayout->addWidget(includeExtensionsEdit);
 
-    QLabel* excludeLabel = new QLabel("Block these file formats (always blocked, even if listed in the allow list):");
+    QLabel* excludeLabel = new QLabel(tr("Block these file formats (always blocked, even if listed in the allow list):"));
     excludeLabel->setWordWrap(true);
     formatFilterLayout->addWidget(excludeLabel);
     excludeExtensionsEdit = new QPlainTextEdit();
-    excludeExtensionsEdit->setAccessibleName("Exclude file formats");
+    excludeExtensionsEdit->setAccessibleName(tr("Exclude file formats"));
     QString excludeSaved = DatabaseManager::instance().getSetting("formatExcludeExtensions", "");
     if (excludeSaved.isEmpty()) {
         excludeExtensionsEdit->setPlainText("png, jpg, jpeg, gif, webp, bmp, svg, ico, avif, jfif, heic, heif, tif, tiff, raw, psd, eps, ai, dng, cr2, nef, arw");
@@ -263,14 +291,14 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     excludeExtensionsEdit->setMaximumHeight(80);
     formatFilterLayout->addWidget(excludeExtensionsEdit);
 
-    QLabel* formatFilterHint = new QLabel("Applied to every download path (manual Add URL, copper://, the API, and the browser extension). The Include list allows only the formats listed; the Exclude list always blocks. A URL with no file extension is always allowed.");
+    QLabel* formatFilterHint = new QLabel(tr("Applied to every download path (manual Add URL, copper://, the API, and the browser extension). The Include list allows only the formats listed; the Exclude list always blocks. A URL with no file extension is always allowed."));
     formatFilterHint->setWordWrap(true);
     formatFilterHint->setStyleSheet("color: gray; font-size: 11px;");
     formatFilterLayout->addWidget(formatFilterHint);
 
     formatsLayout->addWidget(formatFilterGroup);
     formatsLayout->addStretch();
-    tabWidget->addTab(formatsTab, "Formats");
+    tabWidget->addTab(formatsTab, tr("Formats"));
 
     // Tools Tab
     QWidget* toolsTab = new QWidget();
@@ -278,76 +306,76 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
 
     QGroupBox* ytdlpGroup = new QGroupBox("yt-dlp");
     QVBoxLayout* ytdlpLayout = new QVBoxLayout(ytdlpGroup);
-    ytdlpVersionLabel = new QLabel("Status: checking...");
+    ytdlpVersionLabel = new QLabel(tr("Status: checking..."));
     ytdlpLayout->addWidget(ytdlpVersionLabel);
-    QLabel* ytdlpLicenseLabel = new QLabel("License: Unlicense (Public Domain)\nCopper downloads yt-dlp separately. It is not bundled.");
+    QLabel* ytdlpLicenseLabel = new QLabel(tr("License: Unlicense (Public Domain)\nCopper downloads yt-dlp separately. It is not bundled."));
     ytdlpLicenseLabel->setWordWrap(true);
     ytdlpLicenseLabel->setStyleSheet("color: gray; font-size: 11px;");
     ytdlpLayout->addWidget(ytdlpLicenseLabel);
-    QPushButton* updateYtDlpBtn = new QPushButton("Check & Update yt-dlp");
+    QPushButton* updateYtDlpBtn = new QPushButton(tr("Check & Update yt-dlp"));
     connect(updateYtDlpBtn, &QPushButton::clicked, this, &SettingsDialog::onUpdateYtDlp);
     ytdlpLayout->addWidget(updateYtDlpBtn);
     toolsLayout->addWidget(ytdlpGroup);
 
     if (YtDlpManager::instance().isInstalled()) {
-        ytdlpVersionLabel->setText("Version: " + YtDlpManager::instance().getVersion());
+        ytdlpVersionLabel->setText(tr("Version: %1").arg(YtDlpManager::instance().getVersion()));
     } else {
-        ytdlpVersionLabel->setText("Status: Not installed");
+        ytdlpVersionLabel->setText(tr("Status: Not installed"));
     }
 
     connect(&YtDlpManager::instance(), &YtDlpManager::installationProgress, this, [this](const QString& status) {
-        if (ytdlpVersionLabel) ytdlpVersionLabel->setText("Status: " + status);
+        if (ytdlpVersionLabel) ytdlpVersionLabel->setText(tr("Status: %1").arg(status));
     });
     connect(&YtDlpManager::instance(), &YtDlpManager::errorOccurred, this, [this](const QString& error) {
-        if (ytdlpVersionLabel) ytdlpVersionLabel->setText("Error: " + error);
+        if (ytdlpVersionLabel) ytdlpVersionLabel->setText(tr("Error: %1").arg(error));
     });
 
     QGroupBox* ffmpegGroup = new QGroupBox("ffmpeg");
     QVBoxLayout* ffmpegLayout = new QVBoxLayout(ffmpegGroup);
-    ffmpegVersionLabel = new QLabel("Status: checking...");
+    ffmpegVersionLabel = new QLabel(tr("Status: checking..."));
     ffmpegLayout->addWidget(ffmpegVersionLabel);
-    QLabel* ffmpegLicenseLabel = new QLabel("License: GPL v2+ (BtbN build)\nCopper downloads ffmpeg separately. It is not bundled.");
+    QLabel* ffmpegLicenseLabel = new QLabel(tr("License: GPL v2+ (BtbN build)\nCopper downloads ffmpeg separately. It is not bundled."));
     ffmpegLicenseLabel->setWordWrap(true);
     ffmpegLicenseLabel->setStyleSheet("color: gray; font-size: 11px;");
     ffmpegLayout->addWidget(ffmpegLicenseLabel);
-    QPushButton* updateFfmpegBtn = new QPushButton("Check & Update ffmpeg");
+    QPushButton* updateFfmpegBtn = new QPushButton(tr("Check & Update ffmpeg"));
     connect(updateFfmpegBtn, &QPushButton::clicked, this, &SettingsDialog::onUpdateFfmpeg);
     ffmpegLayout->addWidget(updateFfmpegBtn);
     toolsLayout->addWidget(ffmpegGroup);
 
     if (FfmpegManager::instance().isInstalled()) {
-        ffmpegVersionLabel->setText("Version: " + FfmpegManager::instance().getVersion());
+        ffmpegVersionLabel->setText(tr("Version: %1").arg(FfmpegManager::instance().getVersion()));
     } else {
-        ffmpegVersionLabel->setText("Status: Not installed");
+        ffmpegVersionLabel->setText(tr("Status: Not installed"));
     }
 
     connect(&FfmpegManager::instance(), &FfmpegManager::installationProgress, this, [this](const QString& status) {
-        if (ffmpegVersionLabel) ffmpegVersionLabel->setText("Status: " + status);
+        if (ffmpegVersionLabel) ffmpegVersionLabel->setText(tr("Status: %1").arg(status));
     });
     connect(&FfmpegManager::instance(), &FfmpegManager::errorOccurred, this, [this](const QString& error) {
-        if (ffmpegVersionLabel) ffmpegVersionLabel->setText("Error: " + error);
+        if (ffmpegVersionLabel) ffmpegVersionLabel->setText(tr("Error: %1").arg(error));
     });
 
-    QGroupBox* aria2cGroup = new QGroupBox("aria2c (Torrent/Magnet Support)");
+    QGroupBox* aria2cGroup = new QGroupBox(tr("aria2c (Torrent/Magnet Support)"));
     QVBoxLayout* aria2cLayout = new QVBoxLayout(aria2cGroup);
-    aria2cVersionLabel = new QLabel("Status: checking...");
+    aria2cVersionLabel = new QLabel(tr("Status: checking..."));
     aria2cLayout->addWidget(aria2cVersionLabel);
-    QLabel* aria2cLicenseLabel = new QLabel("License: GPL v2\nCopper downloads aria2c separately. It is not bundled.");
+    QLabel* aria2cLicenseLabel = new QLabel(tr("License: GPL v2\nCopper downloads aria2c separately. It is not bundled."));
     aria2cLicenseLabel->setWordWrap(true);
     aria2cLicenseLabel->setStyleSheet("color: gray; font-size: 11px;");
     aria2cLayout->addWidget(aria2cLicenseLabel);
-    QPushButton* updateAria2cBtn = new QPushButton("Check & Update aria2c");
+    QPushButton* updateAria2cBtn = new QPushButton(tr("Check & Update aria2c"));
     connect(updateAria2cBtn, &QPushButton::clicked, this, &SettingsDialog::onUpdateAria2c);
     aria2cLayout->addWidget(updateAria2cBtn);
 
     QHBoxLayout* seedTimeRow = new QHBoxLayout();
-    seedTimeRow->addWidget(new QLabel("Default seed time:"));
+    seedTimeRow->addWidget(new QLabel(tr("Default seed time:")));
     seedTimeCombo = new QComboBox();
-    seedTimeCombo->addItem("No seeding", -1);
-    seedTimeCombo->addItem("30 minutes", 30);
-    seedTimeCombo->addItem("1 hour", 60);
-    seedTimeCombo->addItem("2 hours", 120);
-    seedTimeCombo->addItem("Seed forever", 0);
+    seedTimeCombo->addItem(tr("No seeding"), -1);
+    seedTimeCombo->addItem(tr("30 minutes"), 30);
+    seedTimeCombo->addItem(tr("1 hour"), 60);
+    seedTimeCombo->addItem(tr("2 hours"), 120);
+    seedTimeCombo->addItem(tr("Seed forever"), 0);
     int curSeed = DatabaseManager::instance().getSetting("seedTime", "30").toInt();
     int seedIdx = seedTimeCombo->findData(curSeed);
     if (seedIdx >= 0) seedTimeCombo->setCurrentIndex(seedIdx);
@@ -357,20 +385,20 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     toolsLayout->addWidget(aria2cGroup);
 
     if (Aria2cManager::instance().isInstalled()) {
-        aria2cVersionLabel->setText("Version: " + Aria2cManager::instance().getVersion());
+        aria2cVersionLabel->setText(tr("Version: %1").arg(Aria2cManager::instance().getVersion()));
     } else {
-        aria2cVersionLabel->setText("Status: Not installed");
+        aria2cVersionLabel->setText(tr("Status: Not installed"));
     }
 
     connect(&Aria2cManager::instance(), &Aria2cManager::installationProgress, this, [this](const QString& status) {
-        if (aria2cVersionLabel) aria2cVersionLabel->setText("Status: " + status);
+        if (aria2cVersionLabel) aria2cVersionLabel->setText(tr("Status: %1").arg(status));
     });
     connect(&Aria2cManager::instance(), &Aria2cManager::errorOccurred, this, [this](const QString& error) {
-        if (aria2cVersionLabel) aria2cVersionLabel->setText("Error: " + error);
+        if (aria2cVersionLabel) aria2cVersionLabel->setText(tr("Error: %1").arg(error));
     });
 
     toolsLayout->addStretch();
-    tabWidget->addTab(toolsTab, "Tools");
+    tabWidget->addTab(toolsTab, tr("Tools"));
 
     // Licenses Tab
     QWidget* licensesTab = new QWidget();
@@ -420,21 +448,21 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
         "Source: https://www.sqlite.org/download.html\n"
     );
     licensesLayout->addWidget(licensesText);
-    tabWidget->addTab(licensesTab, "Licenses");
+    tabWidget->addTab(licensesTab, tr("Licenses"));
 
     // System Tab
     QWidget* systemTab = new QWidget();
     QVBoxLayout* systemLayout = new QVBoxLayout(systemTab);
 
-    QGroupBox* updateGroup = new QGroupBox("Updates");
+    QGroupBox* updateGroup = new QGroupBox(tr("Updates"));
     QVBoxLayout* updateBoxLayout = new QVBoxLayout(updateGroup);
-    QLabel* updateInfoLabel = new QLabel("Current version: " + QCoreApplication::applicationVersion());
+    QLabel* updateInfoLabel = new QLabel(tr("Current version: %1").arg(QCoreApplication::applicationVersion()));
     updateBoxLayout->addWidget(updateInfoLabel);
-    QPushButton* checkUpdateBtn = new QPushButton("Check for Updates...");
+    QPushButton* checkUpdateBtn = new QPushButton(tr("Check for Updates..."));
     connect(checkUpdateBtn, &QPushButton::clicked, this, &SettingsDialog::onCheckForUpdates);
     connect(&UpdateManager::instance(), &UpdateManager::updateAvailable, this, &SettingsDialog::onUpdateReady);
     connect(&UpdateManager::instance(), &UpdateManager::noUpdateAvailable, this, [this]() {
-        QMessageBox::information(this, "No Updates", "You are running the latest version of Copper Download Manager.");
+        QMessageBox::information(this, tr("No Updates"), tr("You are running the latest version of Copper Download Manager."));
     });
     connect(&UpdateManager::instance(), &UpdateManager::downloadFinished, this, &SettingsDialog::onUpdateDownloaded);
     connect(&UpdateManager::instance(), &UpdateManager::downloadFailed, this, &SettingsDialog::onUpdateMessage);
@@ -442,23 +470,23 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     updateBoxLayout->addWidget(checkUpdateBtn);
     systemLayout->addWidget(updateGroup);
 
-    QGroupBox* handlerGroup = new QGroupBox("Default Downloader");
+    QGroupBox* handlerGroup = new QGroupBox(tr("Default Downloader"));
     QVBoxLayout* handlerBoxLayout = new QVBoxLayout(handlerGroup);
-    handlerStatusLabel = new QLabel(DefaultHandler::instance().isRegistered() ? "Registered as default downloader" : "Not registered");
+    handlerStatusLabel = new QLabel(DefaultHandler::instance().isRegistered() ? tr("Registered as default downloader") : tr("Not registered"));
     handlerBoxLayout->addWidget(handlerStatusLabel);
     QHBoxLayout* handlerBtnLayout = new QHBoxLayout();
-    QPushButton* registerBtn = new QPushButton("Register as Default Downloader");
+    QPushButton* registerBtn = new QPushButton(tr("Register as Default Downloader"));
     connect(registerBtn, &QPushButton::clicked, this, &SettingsDialog::onRegisterDefaultHandler);
-    QPushButton* unregisterBtn = new QPushButton("Unregister");
+    QPushButton* unregisterBtn = new QPushButton(tr("Unregister"));
     connect(unregisterBtn, &QPushButton::clicked, this, &SettingsDialog::onUnregisterDefaultHandler);
     handlerBtnLayout->addWidget(registerBtn);
     handlerBtnLayout->addWidget(unregisterBtn);
     handlerBoxLayout->addLayout(handlerBtnLayout);
     systemLayout->addWidget(handlerGroup);
 
-    QGroupBox* startupGroup = new QGroupBox("Startup");
+    QGroupBox* startupGroup = new QGroupBox(tr("Startup"));
     QVBoxLayout* startupBoxLayout = new QVBoxLayout(startupGroup);
-    QCheckBox* startupCheck = new QCheckBox("Start with system");
+    QCheckBox* startupCheck = new QCheckBox(tr("Start with system"));
     startupCheck->setChecked(DatabaseManager::instance().getSetting("startup", "true") == "true");
     connect(startupCheck, &QCheckBox::toggled, this, [this](bool checked) {
         DatabaseManager::instance().saveSetting("startup", checked ? "true" : "false");
@@ -466,7 +494,7 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     });
     startupBoxLayout->addWidget(startupCheck);
 
-    QCheckBox* minimizeToTrayCheck = new QCheckBox("Minimize to system tray");
+    QCheckBox* minimizeToTrayCheck = new QCheckBox(tr("Minimize to system tray"));
     minimizeToTrayCheck->setChecked(DatabaseManager::instance().getSetting("minimizeToTray", "true") == "true");
     connect(minimizeToTrayCheck, &QCheckBox::toggled, this, [](bool checked) {
         DatabaseManager::instance().saveSetting("minimizeToTray", checked ? "true" : "false");
@@ -474,7 +502,7 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     startupBoxLayout->addWidget(minimizeToTrayCheck);
     systemLayout->addWidget(startupGroup);
 
-    QGroupBox* statsGroup = new QGroupBox("Statistics");
+    QGroupBox* statsGroup = new QGroupBox(tr("Statistics"));
     QVBoxLayout* statsBoxLayout = new QVBoxLayout(statsGroup);
     int totalDownloads = DownloadManager::instance().getDownloads().size();
     int activeDownloads = 0;
@@ -485,20 +513,20 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     for (const DownloadItem& item : DownloadManager::instance().getDownloads()) {
         if (item.status == "Completed") completedDownloads++;
     }
-    statsBoxLayout->addWidget(new QLabel("Total downloads: " + QString::number(totalDownloads)));
-    statsBoxLayout->addWidget(new QLabel("Active downloads: " + QString::number(activeDownloads)));
-    statsBoxLayout->addWidget(new QLabel("Completed downloads: " + QString::number(completedDownloads)));
+    statsBoxLayout->addWidget(new QLabel(tr("Total downloads: %1").arg(totalDownloads)));
+    statsBoxLayout->addWidget(new QLabel(tr("Active downloads: %1").arg(activeDownloads)));
+    statsBoxLayout->addWidget(new QLabel(tr("Completed downloads: %1").arg(completedDownloads)));
     systemLayout->addWidget(statsGroup);
 
     systemLayout->addStretch();
-    tabWidget->addTab(systemTab, "System");
+    tabWidget->addTab(systemTab, tr("System"));
 
     mainLayout->addWidget(tabWidget);
 
     QHBoxLayout* bottomLayout = new QHBoxLayout();
-    QPushButton* saveBtn = new QPushButton("Save");
+    QPushButton* saveBtn = new QPushButton(tr("Save"));
     connect(saveBtn, &QPushButton::clicked, this, &SettingsDialog::onSave);
-    QPushButton* closeBtn = new QPushButton("Close");
+    QPushButton* closeBtn = new QPushButton(tr("Close"));
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
     bottomLayout->addStretch();
     bottomLayout->addWidget(saveBtn);
@@ -511,7 +539,7 @@ QString SettingsDialog::getDownloadPath() const {
 }
 
 void SettingsDialog::onBrowseDownloadPath() {
-    QString dir = QFileDialog::getExistingDirectory(this, "Select Download Folder", downloadPathEdit->text());
+    QString dir = QFileDialog::getExistingDirectory(this, tr("Select Download Folder"), downloadPathEdit->text());
     if (!dir.isEmpty()) {
         downloadPathEdit->setText(dir);
     }
@@ -519,19 +547,19 @@ void SettingsDialog::onBrowseDownloadPath() {
 
 void SettingsDialog::onUpdateYtDlp() {
     Logger::instance().info("Updating yt-dlp...");
-    ytdlpVersionLabel->setText("Status: Downloading...");
+    ytdlpVersionLabel->setText(tr("Status: Downloading..."));
     YtDlpManager::instance().installOrUpdate();
 }
 
 void SettingsDialog::onUpdateFfmpeg() {
     Logger::instance().info("Updating ffmpeg...");
-    ffmpegVersionLabel->setText("Status: Downloading...");
+    ffmpegVersionLabel->setText(tr("Status: Downloading..."));
     FfmpegManager::instance().installOrUpdate();
 }
 
 void SettingsDialog::onUpdateAria2c() {
     Logger::instance().info("Updating aria2c...");
-    aria2cVersionLabel->setText("Status: Downloading...");
+    aria2cVersionLabel->setText(tr("Status: Downloading..."));
     Aria2cManager::instance().installOrUpdate();
 }
 
@@ -541,11 +569,12 @@ void SettingsDialog::onCheckForUpdates() {
 }
 
 void SettingsDialog::onUpdateReady(const QString& version) {
-    QString msg = "A new version of Copper Download Manager is available:\n\n"
-                  "Current version: " + QCoreApplication::applicationVersion() + "\n"
-                  "Latest version: " + version + "\n\n"
-                  "Do you want to download and install it now?";
-    QMessageBox::StandardButton reply = QMessageBox::question(this, "Update Available", msg,
+    QString msg = tr("A new version of Copper Download Manager is available:\n\n"
+                     "Current version: %1\n"
+                     "Latest version: %2\n\n"
+                     "Do you want to download and install it now?")
+                      .arg(QCoreApplication::applicationVersion(), version);
+    QMessageBox::StandardButton reply = QMessageBox::question(this, tr("Update Available"), msg,
         QMessageBox::Yes | QMessageBox::No);
     if (reply == QMessageBox::Yes) {
         UpdateManager::instance().downloadAndInstall();
@@ -554,8 +583,8 @@ void SettingsDialog::onUpdateReady(const QString& version) {
 
 void SettingsDialog::onUpdateDownloaded() {
     QString installerPath = UpdateManager::instance().installerPathOrEmpty();
-    QMessageBox::StandardButton reply = QMessageBox::question(this, "Update Downloaded",
-        "The update has been downloaded. Restart Copper Download Manager to install the update?",
+    QMessageBox::StandardButton reply = QMessageBox::question(this, tr("Update Downloaded"),
+        tr("The update has been downloaded. Restart Copper Download Manager to install the update?"),
         QMessageBox::Yes | QMessageBox::No);
     if (reply == QMessageBox::Yes) {
         qApp->quit();
@@ -564,26 +593,26 @@ void SettingsDialog::onUpdateDownloaded() {
 }
 
 void SettingsDialog::onUpdateMessage(const QString& error) {
-    QMessageBox::warning(this, "Update", error);
+    QMessageBox::warning(this, tr("Update"), error);
 }
 
 void SettingsDialog::onRegisterDefaultHandler() {
     DefaultHandler::instance().registerAsDefault();
-    handlerStatusLabel->setText("Registered as default downloader");
-    QMessageBox::information(this, "Register as Default Downloader",
-        "Copper Download Manager has been registered as a capable handler for:\n"
+    handlerStatusLabel->setText(tr("Registered as default downloader"));
+    QMessageBox::information(this, tr("Register as Default Downloader"),
+        tr("Copper Download Manager has been registered as a capable handler for:\n"
         "Magnet and copper:// protocols, plus .torrent files.\n\n"
         "It is intentionally NOT registered for HTTP, HTTPS, or FTP:\n"
         "- http/https links stay with your browser\n"
         "- ftp stays with your dedicated FTP client\n\n"
         "Windows Default Apps settings will now open so you can choose Copper\n"
-        "for magnet links and .torrent files if you wish.");
+        "for magnet links and .torrent files if you wish."));
 }
 
 void SettingsDialog::onUnregisterDefaultHandler() {
     DefaultHandler::instance().unregisterAsDefault();
-    handlerStatusLabel->setText("Not registered");
-    QMessageBox::information(this, "Success", "Copper Download Manager has been unregistered.");
+    handlerStatusLabel->setText(tr("Not registered"));
+    QMessageBox::information(this, tr("Success"), tr("Copper Download Manager has been unregistered."));
 }
 
 void SettingsDialog::accept() {

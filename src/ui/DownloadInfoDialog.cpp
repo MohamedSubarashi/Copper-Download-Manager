@@ -16,6 +16,7 @@
 #include <QFileInfo>
 #include <QClipboard>
 #include <QApplication>
+#include <QCoreApplication>
 #include <QCloseEvent>
 #include <QShowEvent>
 #include <QStyle>
@@ -47,12 +48,12 @@ QString formatDuration(qint64 seconds) {
 }
 
 QString statusText(const QString& status) {
-    if (status == "Downloading") return "Downloading";
-    if (status == "Queued") return "Waiting in queue";
-    if (status == "Paused") return "Paused";
-    if (status == "Completed") return "Completed";
-    if (status == "Failed") return "Failed";
-    if (status == "Cancelled") return "Cancelled";
+    if (status == "Downloading") return QCoreApplication::translate("DownloadInfoDialog", "Downloading");
+    if (status == "Queued") return QCoreApplication::translate("DownloadInfoDialog", "Waiting in queue");
+    if (status == "Paused") return QCoreApplication::translate("DownloadInfoDialog", "Paused");
+    if (status == "Completed") return QCoreApplication::translate("DownloadInfoDialog", "Completed");
+    if (status == "Failed") return QCoreApplication::translate("DownloadInfoDialog", "Failed");
+    if (status == "Cancelled") return QCoreApplication::translate("DownloadInfoDialog", "Cancelled");
     return status;
 }
 
@@ -68,7 +69,7 @@ QColor statusColorFor(const QString& status, const QPalette& pal) {
 
 DownloadInfoDialog::DownloadInfoDialog(int downloadId, QWidget* parent)
     : QDialog(parent), m_id(downloadId), m_lastStatus() {
-    setWindowTitle("Download Info");
+    setWindowTitle(tr("Download Info"));
     setAttribute(Qt::WA_DeleteOnClose, false);
     setModal(false);
     buildUi();
@@ -102,8 +103,8 @@ DownloadInfoDialog::DownloadInfoDialog(int downloadId, QWidget* parent)
         if (id == m_id) {
             // The transfer is gone: keep the window open showing what happened
             // instead of leaving a stale panel behind.
-            m_fileName->setText("(removed)");
-            m_statusLabel->setText("Removed from the list");
+            m_fileName->setText(tr("(removed)"));
+            m_statusLabel->setText(tr("Removed from the list"));
             m_progress->setValue(0);
             updateButtons();
         }
@@ -150,11 +151,11 @@ void DownloadInfoDialog::buildUi() {
     m_urlLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_urlLabel->setOpenExternalLinks(false);
 
-    form->addRow("Size:", m_sizeLabel);
-    form->addRow("Speed:", m_speedLabel);
-    form->addRow("Time left:", m_timeLabel);
-    form->addRow("Items:", m_itemsLabel);
-    form->addRow("URL:", m_urlLabel);
+    form->addRow(tr("Size:"), m_sizeLabel);
+    form->addRow(tr("Speed:"), m_speedLabel);
+    form->addRow(tr("Time left:"), m_timeLabel);
+    form->addRow(tr("Items:"), m_itemsLabel);
+    form->addRow(tr("URL:"), m_urlLabel);
     root->addLayout(form);
 
     m_errorLabel = new QLabel(this);
@@ -176,7 +177,7 @@ void DownloadInfoDialog::buildUi() {
     // playlist instead of forcing one window per video.
     m_itemTree = new QTreeWidget(this);
     m_itemTree->setColumnCount(4);
-    m_itemTree->setHeaderLabels({"Item", "Status", "Size", "Progress"});
+    m_itemTree->setHeaderLabels({tr("Item"), tr("Status"), tr("Size"), tr("Progress")});
     m_itemTree->setRootIsDecorated(false);
     m_itemTree->setUniformRowHeights(true);
     m_itemTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
@@ -190,30 +191,30 @@ void DownloadInfoDialog::buildUi() {
     QHBoxLayout* buttons = new QHBoxLayout();
     buttons->addStretch();
 
-    m_cancelButton = new QPushButton("Cancel", this);
-    m_cancelButton->setToolTip("Stop this download and remove it from the list");
+    m_cancelButton = new QPushButton(tr("Cancel"), this);
+    m_cancelButton->setToolTip(tr("Stop this download and remove it from the list"));
     connect(m_cancelButton, &QPushButton::clicked, this, &DownloadInfoDialog::onCancel);
     buttons->addWidget(m_cancelButton);
 
-    m_retryButton = new QPushButton("Retry", this);
-    m_retryButton->setToolTip("Download the failed item(s) again");
+    m_retryButton = new QPushButton(tr("Retry"), this);
+    m_retryButton->setToolTip(tr("Download the failed item(s) again"));
     connect(m_retryButton, &QPushButton::clicked, this, &DownloadInfoDialog::onRetry);
     buttons->addWidget(m_retryButton);
 
-    m_pauseButton = new QPushButton("Pause", this);
-    m_pauseButton->setToolTip("Pause the transfer, keeping the partial file so it can continue later");
+    m_pauseButton = new QPushButton(tr("Pause"), this);
+    m_pauseButton->setToolTip(tr("Pause the transfer, keeping the partial file so it can continue later"));
     connect(m_pauseButton, &QPushButton::clicked, this, &DownloadInfoDialog::onPauseResume);
     buttons->addWidget(m_pauseButton);
 
-    QPushButton* openFolderButton = new QPushButton("Open Folder", this);
+    QPushButton* openFolderButton = new QPushButton(tr("Open Folder"), this);
     connect(openFolderButton, &QPushButton::clicked, this, &DownloadInfoDialog::onOpenFolder);
     buttons->addWidget(openFolderButton);
 
-    QPushButton* openFileButton = new QPushButton("Open File", this);
+    QPushButton* openFileButton = new QPushButton(tr("Open File"), this);
     connect(openFileButton, &QPushButton::clicked, this, &DownloadInfoDialog::onOpenFile);
     buttons->addWidget(openFileButton);
 
-    QPushButton* copyUrlButton = new QPushButton("Copy URL", this);
+    QPushButton* copyUrlButton = new QPushButton(tr("Copy URL"), this);
     connect(copyUrlButton, &QPushButton::clicked, this, &DownloadInfoDialog::onCopyUrl);
     buttons->addWidget(copyUrlButton);
 
@@ -226,7 +227,7 @@ void DownloadInfoDialog::refresh() {
     DownloadItem item = DownloadManager::instance().getDownload(m_id);
     if (item.id == 0 && m_lastStatus != "Removed") {
         // Never existed (should not happen) - nothing useful to show.
-        m_statusLabel->setText("This download no longer exists.");
+        m_statusLabel->setText(tr("This download no longer exists."));
         return;
     }
     if (item.id == 0) return;   // removed: keep the last known state
@@ -273,7 +274,7 @@ void DownloadInfoDialog::refresh() {
     const int jobId = DownloadManager::instance().controllingJobId(m_id);
     m_noteLabel->setVisible(jobId != -1);
     if (jobId != -1) {
-        m_noteLabel->setText(QStringLiteral(
+        m_noteLabel->setText(tr(
             "Part of playlist job #%1, which downloads every file in one transfer. "
             "Pausing, resuming or cancelling here affects the whole playlist.").arg(jobId));
     }
@@ -295,8 +296,8 @@ void DownloadInfoDialog::refresh() {
             if (child.status == "Completed") done++;
             if (child.status == "Failed") failed++;
         }
-        m_itemsLabel->setText(QString("%1 of %2 done").arg(done).arg(childIds.size()) +
-                              (failed > 0 ? QString(", %1 failed").arg(failed) : QString()));
+        m_itemsLabel->setText(tr("%1 of %2 done").arg(done).arg(childIds.size()) +
+                              (failed > 0 ? tr(", %1 failed").arg(failed) : QString()));
         m_itemTree->setVisible(true);
         m_itemTree->setUpdatesEnabled(false);
         m_itemTree->clear();
@@ -313,7 +314,7 @@ void DownloadInfoDialog::refresh() {
                 row->setToolTip(2, child.error);
             }
             if (child.attempts > 0) {
-                row->setToolTip(3, QString("Attempt %1").arg(child.attempts + 1));
+                row->setToolTip(3, tr("Attempt %1").arg(child.attempts + 1));
             }
         }
         m_itemTree->setUpdatesEnabled(true);
@@ -338,24 +339,24 @@ void DownloadInfoDialog::updateButtons() {
 
     // The controls act on the job, not on this row, so they have to say so.
     const bool viaJob = DownloadManager::instance().controllingJobId(m_id) != -1;
-    const QString scope = viaJob ? QStringLiteral(" playlist") : QString();
+    const QString scope = viaJob ? tr(" playlist") : QString();
 
     if (item.status == "Downloading") {
-        m_pauseButton->setText("Pause" + scope);
+        m_pauseButton->setText(tr("Pause%1").arg(scope));
         m_pauseButton->setEnabled(true);
     } else if (item.status == "Paused") {
-        m_pauseButton->setText("Resume" + scope);
+        m_pauseButton->setText(tr("Resume%1").arg(scope));
         m_pauseButton->setEnabled(true);
     } else if (item.status == "Queued") {
-        m_pauseButton->setText("Pause" + scope);
+        m_pauseButton->setText(tr("Pause%1").arg(scope));
         m_pauseButton->setEnabled(false);
     } else {
         m_pauseButton->setEnabled(false);
     }
 
     m_pauseButton->setToolTip(viaJob
-        ? "Pause the whole playlist job this file belongs to, keeping the partial files"
-        : "Pause the transfer, keeping the partial file so it can continue later");
+        ? tr("Pause the whole playlist job this file belongs to, keeping the partial files")
+        : tr("Pause the transfer, keeping the partial file so it can continue later"));
 
     const bool retryable = item.status == "Failed" || item.status == "Cancelled" || item.status == "Paused";
     m_retryButton->setEnabled(retryable);
@@ -363,10 +364,10 @@ void DownloadInfoDialog::updateButtons() {
     const bool cancellable = item.status == "Downloading" || item.status == "Queued" ||
                              item.status == "Paused" || item.status == "Failed";
     m_cancelButton->setEnabled(cancellable);
-    m_cancelButton->setText("Cancel" + scope);
+    m_cancelButton->setText(tr("Cancel%1").arg(scope));
     m_cancelButton->setToolTip(viaJob
-        ? "Cancel the whole playlist job this file belongs to"
-        : "Stop this download and remove it from the list");
+        ? tr("Cancel the whole playlist job this file belongs to")
+        : tr("Stop this download and remove it from the list"));
 }
 
 void DownloadInfoDialog::onPauseResume() {

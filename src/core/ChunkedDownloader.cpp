@@ -64,25 +64,25 @@ namespace {
 QString classifyHttpFailure(QNetworkReply* reply) {
     const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     switch (status) {
-        case 401: return "The server requires authentication (401 Unauthorized).";
-        case 403: return "Access denied by the server (403 Forbidden); the link may be expired, region-blocked, or need a login.";
-        case 404: return "File not found on the server (404); the link may have expired.";
-        case 410: return "The file is no longer available (410 Gone).";
-        case 416: return "The server rejected the byte range (416); this link cannot be resumed.";
-        case 429: return "Too many requests (429); the server is rate-limiting. Retry later.";
+        case 401: return ChunkedDownloader::tr("The server requires authentication (401 Unauthorized).");
+        case 403: return ChunkedDownloader::tr("Access denied by the server (403 Forbidden); the link may be expired, region-blocked, or need a login.");
+        case 404: return ChunkedDownloader::tr("File not found on the server (404); the link may have expired.");
+        case 410: return ChunkedDownloader::tr("The file is no longer available (410 Gone).");
+        case 416: return ChunkedDownloader::tr("The server rejected the byte range (416); this link cannot be resumed.");
+        case 429: return ChunkedDownloader::tr("Too many requests (429); the server is rate-limiting. Retry later.");
         case 500:
         case 502:
         case 503:
         case 504:
-            return QString("Server error (%1); the remote server is having trouble. Retry later.").arg(status);
+            return ChunkedDownloader::tr("Server error (%1); the remote server is having trouble. Retry later.").arg(status);
         default: break;
     }
     switch (reply->error()) {
-        case QNetworkReply::TimeoutError: return "The server timed out.";
-        case QNetworkReply::ConnectionRefusedError: return "The server refused the connection.";
-        case QNetworkReply::HostNotFoundError: return "The server could not be found (DNS lookup failed).";
-        case QNetworkReply::SslHandshakeFailedError: return "The secure connection (TLS) could not be established.";
-        case QNetworkReply::ContentNotFoundError: return "File not found on the server (404).";
+        case QNetworkReply::TimeoutError: return ChunkedDownloader::tr("The server timed out.");
+        case QNetworkReply::ConnectionRefusedError: return ChunkedDownloader::tr("The server refused the connection.");
+        case QNetworkReply::HostNotFoundError: return ChunkedDownloader::tr("The server could not be found (DNS lookup failed).");
+        case QNetworkReply::SslHandshakeFailedError: return ChunkedDownloader::tr("The secure connection (TLS) could not be established.");
+        case QNetworkReply::ContentNotFoundError: return ChunkedDownloader::tr("File not found on the server (404).");
         default: break;
     }
     return reply->errorString();
@@ -257,7 +257,7 @@ void ChunkedDownloader::onHeadFinished() {
         }
 
         Logger::instance().warning("Could not extract real download URL from HTML response");
-        emit downloadFailed(downloadId, "Server returned an HTML page instead of the file. The URL may require browser authentication or a CAPTCHA.");
+        emit downloadFailed(downloadId, tr("Server returned an HTML page instead of the file. The URL may require browser authentication or a CAPTCHA."));
         downloading = false;
         return;
     }
@@ -340,7 +340,7 @@ void ChunkedDownloader::checkFallbackReply(QNetworkReply* reply) {
         }
 
         Logger::instance().warning("Could not extract real download URL from HTML fallback response");
-        emit downloadFailed(downloadId, "Server returned an HTML page instead of the file. The URL may require browser authentication or a CAPTCHA.");
+        emit downloadFailed(downloadId, tr("Server returned an HTML page instead of the file. The URL may require browser authentication or a CAPTCHA."));
         downloading = false;
         return;
     }
@@ -382,7 +382,7 @@ void ChunkedDownloader::checkFallbackReply(QNetworkReply* reply) {
     if (contentLengthHeader.isValid()) {
         qint64 promised = contentLengthHeader.toLongLong();
         if (promised >= 0 && promised != data.size()) {
-            emit downloadFailed(downloadId, QString("Incomplete response: received %1 of %2 bytes.")
+            emit downloadFailed(downloadId, tr("Incomplete response: received %1 of %2 bytes.")
                                                  .arg(data.size()).arg(promised));
             downloading = false;
             return;
@@ -393,17 +393,17 @@ void ChunkedDownloader::checkFallbackReply(QNetworkReply* reply) {
     // a failure/crash mid-write leaves the previous file (if any) untouched.
     QSaveFile outFile(saveFilePath);
     if (!outFile.open(QIODevice::WriteOnly)) {
-        emit downloadFailed(downloadId, "Cannot open file for writing: " + saveFilePath);
+        emit downloadFailed(downloadId, tr("Cannot open file for writing: %1").arg(saveFilePath));
         downloading = false;
         return;
     }
     if (outFile.write(data) != data.size()) {
-        emit downloadFailed(downloadId, "Cannot write file: " + saveFilePath);
+        emit downloadFailed(downloadId, tr("Cannot write file: %1").arg(saveFilePath));
         downloading = false;
         return;   // QSaveFile discards the staged temp file on destruction
     }
     if (!outFile.commit()) {
-        emit downloadFailed(downloadId, "Cannot finalize file: " + saveFilePath);
+        emit downloadFailed(downloadId, tr("Cannot finalize file: %1").arg(saveFilePath));
         downloading = false;
         return;
     }
@@ -425,7 +425,7 @@ void ChunkedDownloader::setupChunks(qint64 totalSize) {
         if (storage.isValid() && storage.isReady() &&
             storage.bytesAvailable() < totalSize + 16LL * 1024 * 1024) {
             Logger::instance().error("Insufficient disk space for " + saveFilePath);
-            emit downloadFailed(downloadId, QString("Not enough free disk space: the file needs %1 MB but only %2 MB are available on %3.")
+            emit downloadFailed(downloadId, tr("Not enough free disk space: the file needs %1 MB but only %2 MB are available on %3.")
                 .arg((totalSize / (1024 * 1024)) + 1)
                 .arg(storage.bytesAvailable() / (1024 * 1024))
                 .arg(QFileInfo(saveFilePath).absolutePath()));
@@ -509,7 +509,7 @@ bool ChunkedDownloader::startChunkRequest(ChunkState& chunk) {
     QIODevice::OpenMode mode = QIODevice::WriteOnly | (append ? QIODevice::Append : QIODevice::Truncate);
     if (!file->open(mode)) {
         Logger::instance().error("Cannot open chunk file: " + chunkFilePath(chunk.index));
-        emit downloadFailed(downloadId, "Cannot open chunk file: " + chunkFilePath(chunk.index));
+        emit downloadFailed(downloadId, tr("Cannot open chunk file: %1").arg(chunkFilePath(chunk.index)));
         delete file;
         downloading = false;
         return false;
@@ -547,13 +547,13 @@ bool ChunkedDownloader::validateChunkResponse(ChunkState& chunk) {
         // onChunkFinished restarts the download once and fails if it recurs.
         pendingRangeViolation = true;
         chunk.error = true;
-        chunk.errorMessage = "Server answered 200 OK to a ranged request (Range ignored or remote file changed)";
+        chunk.errorMessage = tr("Server answered 200 OK to a ranged request (Range ignored or remote file changed)");
         Logger::instance().warning("Chunk " + QString::number(chunk.index) + ": " + chunk.errorMessage);
         return false;
     }
     if (status != 206) {
         chunk.error = true;
-        chunk.errorMessage = "Unexpected HTTP status " + QString::number(status) + " for a ranged request (expected 206)";
+        chunk.errorMessage = tr("Unexpected HTTP status %1 for a ranged request (expected 206)").arg(status);
         Logger::instance().error("Chunk " + QString::number(chunk.index) + ": " + chunk.errorMessage);
         return false;
     }
@@ -564,7 +564,7 @@ bool ChunkedDownloader::validateChunkResponse(ChunkState& chunk) {
     QRegularExpressionMatch m = contentRangeRe.match(QString::fromLatin1(contentRange.trimmed()));
     if (!m.hasMatch()) {
         chunk.error = true;
-        chunk.errorMessage = "Missing or malformed Content-Range header: " + QString::fromLatin1(contentRange);
+        chunk.errorMessage = tr("Missing or malformed Content-Range header: %1").arg(QString::fromLatin1(contentRange));
         Logger::instance().error("Chunk " + QString::number(chunk.index) + ": " + chunk.errorMessage);
         return false;
     }
@@ -575,14 +575,14 @@ bool ChunkedDownloader::validateChunkResponse(ChunkState& chunk) {
 
     if (start != chunk.requestStart || end != chunk.endByte) {
         chunk.error = true;
-        chunk.errorMessage = QString("Content-Range mismatch: got bytes %1-%2, requested bytes %3-%4")
+        chunk.errorMessage = tr("Content-Range mismatch: got bytes %1-%2, requested bytes %3-%4")
                                  .arg(start).arg(end).arg(chunk.requestStart).arg(chunk.endByte);
         Logger::instance().error("Chunk " + QString::number(chunk.index) + ": " + chunk.errorMessage);
         return false;
     }
     if (total >= 0 && totalBytes > 0 && total != totalBytes) {
         chunk.error = true;
-        chunk.errorMessage = QString("Remote file size changed: Content-Range total %1 != expected %2")
+        chunk.errorMessage = tr("Remote file size changed: Content-Range total %1 != expected %2")
                                  .arg(total).arg(totalBytes);
         Logger::instance().error("Chunk " + QString::number(chunk.index) + ": " + chunk.errorMessage);
         return false;
@@ -594,7 +594,7 @@ bool ChunkedDownloader::validateChunkResponse(ChunkState& chunk) {
         qint64 promised = end - start + 1;
         if (len >= 0 && len != promised) {
             chunk.error = true;
-            chunk.errorMessage = QString("Content-Length %1 does not match the promised range size %2")
+            chunk.errorMessage = tr("Content-Length %1 does not match the promised range size %2")
                                      .arg(len).arg(promised);
             Logger::instance().error("Chunk " + QString::number(chunk.index) + ": " + chunk.errorMessage);
             return false;
@@ -804,7 +804,7 @@ void ChunkedDownloader::onChunkFinished() {
 
         if (!mergeChunks()) {
             emit downloadFailed(downloadId,
-                "Failed to assemble the final file: on-disk size verification failed (see log for details).");
+                tr("Failed to assemble the final file: on-disk size verification failed (see log for details)."));
             downloading = false;
             return;
         }
@@ -813,7 +813,7 @@ void ChunkedDownloader::onChunkFinished() {
         if (totalBytes > 0 && finalSize != totalBytes) {
             Logger::instance().error("Download size mismatch: " + QString::number(finalSize) + " vs expected " + QString::number(totalBytes) + " bytes");
             emit downloadFailed(downloadId,
-                QString("Download size mismatch: the final file is %1 bytes, expected %2 bytes.")
+                tr("Download size mismatch: the final file is %1 bytes, expected %2 bytes.")
                     .arg(finalSize)
                     .arg(totalBytes));
             downloading = false;
@@ -1109,7 +1109,7 @@ void ChunkedDownloader::resumeFromState(const QString& url, const QString& fileP
         // All chunks were already fully written; verify and merge them.
         if (!mergeChunks()) {
             emit downloadFailed(downloadId,
-                "Failed to assemble the final file: on-disk size verification failed (see log for details).");
+                tr("Failed to assemble the final file: on-disk size verification failed (see log for details)."));
             downloading = false;
             return;
         }
@@ -1220,7 +1220,7 @@ void ChunkedDownloader::onHangTimer() {
     for (ChunkState& chunk : chunks) {
         if (chunk.reply && !chunk.error) {
             chunk.error = true;
-            chunk.errorMessage = "Chunk timed out (no data received for 90s)";
+            chunk.errorMessage = tr("Chunk timed out (no data received for 90s)");
             toAbort.append(chunk.reply);
         }
     }

@@ -17,7 +17,7 @@
 #include <QMessageBox>
 
 AddUrlDialog::AddUrlDialog(QWidget* parent) : QDialog(parent) {
-    setWindowTitle("Add URL");
+    setWindowTitle(tr("Add URL"));
     setWindowIcon(QIcon(":/icons/AddUrl.png"));
     resize(520, 260);
 
@@ -25,25 +25,25 @@ AddUrlDialog::AddUrlDialog(QWidget* parent) : QDialog(parent) {
     mainLayout->setSpacing(10);
 
     QHBoxLayout* urlLayout = new QHBoxLayout();
-    QLabel* urlLabel = new QLabel("URL:");
+    QLabel* urlLabel = new QLabel(tr("URL:"));
     urlLayout->addWidget(urlLabel);
     urlEdit = new QLineEdit();
-    urlEdit->setPlaceholderText("Enter download URL or paste from clipboard...");
-    urlEdit->setAccessibleName("URL");
+    urlEdit->setPlaceholderText(tr("Enter download URL or paste from clipboard..."));
+    urlEdit->setAccessibleName(tr("URL"));
     urlLabel->setBuddy(urlEdit);
     urlLayout->addWidget(urlEdit);
     mainLayout->addLayout(urlLayout);
 
     QHBoxLayout* typeLayout = new QHBoxLayout();
-    QLabel* typeLabel = new QLabel("Type:");
+    QLabel* typeLabel = new QLabel(tr("Type:"));
     typeLayout->addWidget(typeLabel);
     typeCombo = new QComboBox();
-    typeCombo->setAccessibleName("Type");
+    typeCombo->setAccessibleName(tr("Type"));
     typeLabel->setBuddy(typeCombo);
-    typeCombo->addItem("Auto Detect");
-    typeCombo->addItem("Direct Download");
-    typeCombo->addItem("yt-dlp Video");
-    typeCombo->addItem("Torrent / Magnet");
+    typeCombo->addItem(tr("Auto Detect"));
+    typeCombo->addItem(tr("Direct Download"));
+    typeCombo->addItem(tr("yt-dlp Video"));
+    typeCombo->addItem(tr("Torrent / Magnet"));
     connect(typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &AddUrlDialog::onTypeChanged);
     typeLayout->addWidget(typeCombo);
     typeInfoLabel = new QLabel("");
@@ -52,24 +52,24 @@ AddUrlDialog::AddUrlDialog(QWidget* parent) : QDialog(parent) {
     mainLayout->addLayout(typeLayout);
 
     QHBoxLayout* formatLayout = new QHBoxLayout();
-    formatLayout->addWidget(new QLabel("Output format:"));
+    formatLayout->addWidget(new QLabel(tr("Output format:")));
     formatCombo = new QComboBox();
-    formatCombo->addItem("MP4 (Video)");
-    formatCombo->addItem("MP3 (Audio only)");
-    formatCombo->addItem("MKV (Video)");
-    formatCombo->addItem("Best Quality");
+    formatCombo->addItem(tr("MP4 (Video)"));
+    formatCombo->addItem(tr("MP3 (Audio only)"));
+    formatCombo->addItem(tr("MKV (Video)"));
+    formatCombo->addItem(tr("Best Quality"));
     formatLayout->addWidget(formatCombo);
     formatLayout->addStretch();
     mainLayout->addLayout(formatLayout);
 
     QHBoxLayout* pathLayout = new QHBoxLayout();
-    QLabel* pathLabel = new QLabel("Save to:");
+    QLabel* pathLabel = new QLabel(tr("Save to:"));
     pathLayout->addWidget(pathLabel);
     pathEdit = new QLineEdit();
-    pathEdit->setAccessibleName("Save to");
+    pathEdit->setAccessibleName(tr("Save to"));
     pathLabel->setBuddy(pathEdit);
     pathEdit->setText(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
-    QPushButton* browseBtn = new QPushButton("Browse...");
+    QPushButton* browseBtn = new QPushButton(tr("Browse..."));
     connect(browseBtn, &QPushButton::clicked, this, &AddUrlDialog::onBrowse);
     pathLayout->addWidget(pathEdit);
     pathLayout->addWidget(browseBtn);
@@ -80,14 +80,14 @@ AddUrlDialog::AddUrlDialog(QWidget* parent) : QDialog(parent) {
     mainLayout->addWidget(statusLabel);
 
     QHBoxLayout* btnLayout = new QHBoxLayout();
-    QPushButton* pasteBtn = new QPushButton("Paste");
+    QPushButton* pasteBtn = new QPushButton(tr("Paste"));
     pasteBtn->setFixedWidth(80);
     connect(pasteBtn, &QPushButton::clicked, this, &AddUrlDialog::onPaste);
-    addBtn = new QPushButton("Add Download");
+    addBtn = new QPushButton(tr("Add Download"));
     addBtn->setEnabled(false);
     addBtn->setDefault(true);
     connect(addBtn, &QPushButton::clicked, this, &AddUrlDialog::onAdd);
-    QPushButton* cancelBtn = new QPushButton("Cancel");
+    QPushButton* cancelBtn = new QPushButton(tr("Cancel"));
     cancelBtn->setFixedWidth(80);
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     btnLayout->addWidget(pasteBtn);
@@ -101,7 +101,7 @@ AddUrlDialog::AddUrlDialog(QWidget* parent) : QDialog(parent) {
     QString clipboard = QApplication::clipboard()->text();
     if (!clipboard.isEmpty() && (clipboard.startsWith("http") || clipboard.startsWith("magnet") || clipboard.startsWith("ftp"))) {
         urlEdit->setText(clipboard);
-        statusLabel->setText("Pasted from clipboard");
+        statusLabel->setText(tr("Pasted from clipboard"));
     }
     urlEdit->setFocus();
 }
@@ -162,7 +162,7 @@ void AddUrlDialog::onAdd() {
                 int id = DownloadManager::instance().addDownload(url, savePath, "YtDlp", 16,
                                                                   fmt.isEmpty() ? QStringLiteral("mp4") : fmt);
                 if (id < 0) {
-                    statusLabel->setText("Blocked by file-format filter (Settings > Downloads)");
+                    statusLabel->setText(tr("Blocked by file-format filter (Settings > Downloads)"));
                     return;
                 }
             }
@@ -194,7 +194,7 @@ void AddUrlDialog::onAdd() {
             QString savePath = path.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) : path;
             int id = DownloadManager::instance().addDownload(url, savePath, "HTTP");
             if (id < 0) {
-                statusLabel->setText("Blocked by file-format filter (Settings > Downloads)");
+                statusLabel->setText(tr("Blocked by file-format filter (Settings > Downloads)"));
                 return;
             }
         }
@@ -205,7 +205,7 @@ void AddUrlDialog::onAdd() {
 void AddUrlDialog::onPaste() {
     QString clip = QApplication::clipboard()->text();
     urlEdit->setText(clip);
-    statusLabel->setText(clip.isEmpty() ? "Clipboard is empty" : "Pasted from clipboard");
+    statusLabel->setText(clip.isEmpty() ? tr("Clipboard is empty") : tr("Pasted from clipboard"));
 }
 
 void AddUrlDialog::onTypeChanged(int index) {
@@ -214,7 +214,7 @@ void AddUrlDialog::onTypeChanged(int index) {
 }
 
 void AddUrlDialog::onBrowse() {
-    QString dir = QFileDialog::getExistingDirectory(this, "Select Folder", pathEdit->text());
+    QString dir = QFileDialog::getExistingDirectory(this, tr("Select Folder"), pathEdit->text());
     if (!dir.isEmpty()) {
         pathEdit->setText(dir);
     }
@@ -228,13 +228,13 @@ void AddUrlDialog::validateUrl() {
     if (valid) {
         statusLabel->clear();
         UrlType type = UrlDetector::detect(url);
-        typeInfoLabel->setText("Detected: " + UrlDetector::typeToString(type));
+        typeInfoLabel->setText(tr("Detected: %1").arg(UrlDetector::typeToString(type)));
     } else {
         typeInfoLabel->setText("");
         if (url.isEmpty()) {
             statusLabel->clear();
         } else {
-            statusLabel->setText("Please enter a valid URL (http://, https://, ftp://, or magnet:?)");
+            statusLabel->setText(tr("Please enter a valid URL (http://, https://, ftp://, or magnet:?)"));
         }
     }
 }

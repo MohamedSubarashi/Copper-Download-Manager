@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(CopperDownloadManager VERSION 0.4.3 LANGUAGES CXX)
+project(CopperDownloadManager VERSION 0.5.0 LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
 # Single-source version. tools/check_version_consistency.py verifies that
@@ -48,6 +48,9 @@ if(APPLE AND NOT TARGET WrapOpenGL::WrapOpenGL)
 endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Sql Gui)
+# Optional: the Linguist tools compile the .ts catalogs. When absent the app
+# still builds and simply runs in English.
+find_package(Qt6 COMPONENTS LinguistTools QUIET)
 
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
@@ -210,11 +213,14 @@ if(WIN32)
     # windeployqt flags follow the same split. The installed Qt for MinGW ships
     # only release runtime DLLs, so the Debug deploy reuses them (the app itself
     # still compiles with -O0 -g and active asserts).
+    # windeployqt also copies Qt's own translations (qtbase_*.qm) into the
+    # deploy folder's translations/ subdir, so standard dialogs (QFileDialog,
+    # message-box buttons, ...) are localised too.
     set(DEPLOY_DIR "${CMAKE_SOURCE_DIR}/installer/release/${PROJECT_VERSION}")
-    set(DEPLOY_FLAGS --release --no-translations --no-opengl-sw)
+    set(DEPLOY_FLAGS --release --no-opengl-sw)
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         set(DEPLOY_DIR "${CMAKE_SOURCE_DIR}/debug/${PROJECT_VERSION}")
-        set(DEPLOY_FLAGS --no-translations --no-opengl-sw)
+        set(DEPLOY_FLAGS --no-opengl-sw)
     endif()
     add_custom_command(TARGET copper_native_host POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${DEPLOY_DIR}"
@@ -229,6 +235,61 @@ install(TARGETS ${PROJECT_NAME}
     BUNDLE DESTINATION .
     RUNTIME DESTINATION bin
 )
+
+# ---------------------------------------------------------------------------
+# Translations. The .ts catalogs are compiled to .qm and embedded in the
+# executable as ":/translations/copper_<code>.qm", so every packaging format
+# (portable zip, .deb, .dmg) ships translations with no separate deploy step.
+# Skipped gracefully when the Qt Linguist tools are not installed.
+# ---------------------------------------------------------------------------
+set(COPPER_TS_FILES
+    "${CMAKE_SOURCE_DIR}/translations/copper_en.ts"
+    "${CMAKE_SOURCE_DIR}/translations/copper_fr.ts"
+    "${CMAKE_SOURCE_DIR}/translations/copper_ar.ts"
+    "${CMAKE_SOURCE_DIR}/translations/copper_es.ts"
+    "${CMAKE_SOURCE_DIR}/translations/copper_pt_BR.ts"
+)
+if(TARGET Qt6::lrelease AND TARGET Qt6::rcc)
+    # lrelease compiles each .ts to a .qm; rcc then embeds them under the
+    # /translations resource prefix. We drive these tools directly instead of
+    # using qt_add_translations() because that macro feeds the generated
+    # resource back into the lupdate project's SOURCES genex, which CMake
+    # rejects as "Evaluation file written multiple times with different
+    # content" (and it mishandles absolute paths containing spaces, as in this
+    # project's directory name).
+    set(_copper_qm_dir "${CMAKE_CURRENT_BINARY_DIR}/translations")
+    set(_copper_qm_files "")
+    set(_copper_qrc_content "<!DOCTYPE RCC><RCC version=\"1.0\">\n<qresource prefix=\"/translations\">\n")
+    foreach(_ts_file IN LISTS COPPER_TS_FILES)
+        get_filename_component(_ts_stem "${_ts_file}" NAME_WE)
+        set(_qm_file "${_copper_qm_dir}/${_ts_stem}.qm")
+        add_custom_command(
+            OUTPUT "${_qm_file}"
+            COMMAND Qt6::lrelease "${_ts_file}" -qm "${_qm_file}"
+            DEPENDS "${_ts_file}"
+            COMMENT "Compiling translation ${_ts_stem}.qm"
+            VERBATIM
+        )
+        list(APPEND _copper_qm_files "${_qm_file}")
+        string(APPEND _copper_qrc_content "    <file alias=\"${_ts_stem}.qm\">${_qm_file}</file>\n")
+    endforeach()
+    string(APPEND _copper_qrc_content "</qresource>\n</RCC>\n")
+    set(_copper_qrc_file "${CMAKE_CURRENT_BINARY_DIR}/copper_translations.qrc")
+    file(WRITE "${_copper_qrc_file}" "${_copper_qrc_content}")
+
+    set(_copper_qrc_cpp "${CMAKE_CURRENT_BINARY_DIR}/qrc_copper_translations.cpp")
+    add_custom_command(
+        OUTPUT "${_copper_qrc_cpp}"
+        COMMAND Qt6::rcc --name copper_translations --output "${_copper_qrc_cpp}" "${_copper_qrc_file}"
+        DEPENDS "${_copper_qrc_file}" ${_copper_qm_files}
+        COMMENT "Embedding translations into the executable"
+        VERBATIM
+    )
+    target_sources(${PROJECT_NAME} PRIVATE "${_copper_qrc_cpp}")
+    message(STATUS "Translations enabled: en, fr, ar, es, pt_BR (embedded)")
+else()
+    message(STATUS "Qt LinguistTools not found - building English-only")
+endif()
 
 if(WIN32)
     find_program(WINDEPLOYQT_EXECUTABLE windeployqt HINTS "${QT_DIR}/../../../bin" "${_qt_bin_dir}")
@@ -275,6 +336,11 @@ if(COPPER_BUILD_TESTS)
             include/utils/YtDlpJobSpec.h
             resources.qrc
         )
+        # Also embed the translation catalogs so the runtime lookup
+        # ":/translations/copper_<code>.qm" is exercised by the tests.
+        if(DEFINED _copper_qrc_cpp)
+            target_sources(copper_tests PRIVATE "${_copper_qrc_cpp}")
+        endif()
         target_include_directories(copper_tests PRIVATE
             "${CMAKE_SOURCE_DIR}/include"
             "${CMAKE_SOURCE_DIR}/include/utils"

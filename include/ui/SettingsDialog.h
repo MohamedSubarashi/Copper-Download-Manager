@@ -51,6 +51,7 @@ private:
     QSpinBox* maxRetriesSpin;
     QCheckBox* autoOpenInfoCheck;
     QComboBox* seedTimeCombo;
+    QComboBox* languageCombo;
     QLineEdit* userAgentEdit;
     QPlainTextEdit* headersEdit;
 };

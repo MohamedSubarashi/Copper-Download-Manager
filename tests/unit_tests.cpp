@@ -13,6 +13,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QSettings>
+#include <QTranslator>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -53,6 +54,10 @@ private slots:
     // Version single-source (0.4.0): the UA derives from the generated header.
     void version_isThreePartSemver();
     void userAgent_followsApplicationVersion();
+
+    // Translations: the .qm catalogs are embedded at
+    // ":/translations/copper_<code>.qm" and must resolve localized strings.
+    void translations_areEmbeddedAndLocalized();
 
     // API token (0.4.0): 64-hex, stable, constant-time matching semantics.
     void apiToken_roundTrip();
@@ -429,6 +434,38 @@ void CopperUnitTests::ytDlpArgs_allFormatsRequireFfmpeg() {
     QVERIFY(YtDlpArgs::requiresFfmpeg("mp4"));
     QVERIFY(YtDlpArgs::requiresFfmpeg("mkv"));
     QVERIFY(YtDlpArgs::requiresFfmpeg("best"));
+}
+
+// Translations are compiled into the executable by the build, so every
+// packaging format ships them without a separate deploy step. This pins the
+// resource path (a typo here would silently fall back to English) and proves
+// lrelease kept the %1 placeholder intact in a localized sentence.
+void CopperUnitTests::translations_areEmbeddedAndLocalized() {
+    struct Case { const char* code; const char* context; const char* source; const char* expected; };
+    const Case cases[] = {
+        {"fr", "MainWindow", "Cancel", "Annuler"},
+        {"es", "DownloadManagerDialog", "Cancel", "Cancelar"},
+        {"pt_BR", "DownloadManagerDialog", "Cancel", "Cancelar"},
+        {"ar", "MainWindow", "Cancel", "\xD8\xA5\xD9\x84\xD8\xBA\xD8\xA7\xD8\xA1"}, // إلغاء
+    };
+    for (const Case& c : cases) {
+        const QString path = QStringLiteral(":/translations/copper_%1.qm").arg(QLatin1String(c.code));
+        QVERIFY2(QFile::exists(path), qPrintable(path));
+        QTranslator translator;
+        QVERIFY2(translator.load(path), qPrintable(path));
+        const QString got = translator.translate(c.context, c.source);
+        QVERIFY2(!got.isEmpty(), qPrintable(path + " has no entry for " + c.source));
+        QCOMPARE(got, QString::fromUtf8(c.expected));
+    }
+
+    // A localized sentence must keep its %1 placeholder (QTranslator still
+    // finds the source text when no translation exists, so also require a
+    // genuine difference from the English source).
+    QTranslator fr;
+    QVERIFY(fr.load(":/translations/copper_fr.qm"));
+    const QString localized = fr.translate("MainWindow", "Status: %1");
+    QVERIFY2(localized.contains("%1"), qPrintable(localized));
+    QVERIFY2(localized != QLatin1String("Status: %1"), qPrintable(localized));
 }
 
 QTEST_MAIN(CopperUnitTests)

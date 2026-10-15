@@ -8,7 +8,7 @@
 #include <QApplication>
 
 AboutDialog::AboutDialog(QWidget* parent) : QDialog(parent) {
-    setWindowTitle("About Copper Download Manager");
+    setWindowTitle(tr("About Copper Download Manager"));
     setFixedSize(420, 380);
     setWindowIcon(QIcon(":/icons/app.png"));
 
@@ -29,22 +29,22 @@ AboutDialog::AboutDialog(QWidget* parent) : QDialog(parent) {
     nameLabel->setFont(nameFont);
     mainLayout->addWidget(nameLabel);
 
-    QLabel* versionLabel = new QLabel("Version " + QApplication::applicationVersion(), this);
+    QLabel* versionLabel = new QLabel(tr("Version %1").arg(QApplication::applicationVersion()), this);
     versionLabel->setAlignment(Qt::AlignCenter);
     mainLayout->addWidget(versionLabel);
 
-    QLabel* descLabel = new QLabel("A high-performance, cross-platform download manager\nfor Windows, Linux, and macOS.", this);
+    QLabel* descLabel = new QLabel(tr("A high-performance, cross-platform download manager\nfor Windows, Linux, and macOS."), this);
     descLabel->setAlignment(Qt::AlignCenter);
     descLabel->setWordWrap(true);
     mainLayout->addWidget(descLabel);
 
     mainLayout->addSpacing(10);
 
-    QLabel* devLabel = new QLabel("Developer:", this);
+    QLabel* devLabel = new QLabel(tr("Developer:"), this);
     devLabel->setAlignment(Qt::AlignCenter);
     mainLayout->addWidget(devLabel);
 
-    QPushButton* githubBtn = new QPushButton("Mohamed Subarashi", this);
+    QPushButton* githubBtn = new QPushButton(tr("Mohamed Subarashi"), this);
     githubBtn->setStyleSheet("QPushButton { color: #4298e8; text-decoration: underline; border: none; font-size: 13px; }"
                              "QPushButton:hover { color: #6ab0ff; }");
     connect(githubBtn, &QPushButton::clicked, this, &AboutDialog::onGitHubClicked);
@@ -52,7 +52,7 @@ AboutDialog::AboutDialog(QWidget* parent) : QDialog(parent) {
 
     mainLayout->addSpacing(10);
 
-    QPushButton* kofiBtn = new QPushButton("Support on Ko-fi", this);
+    QPushButton* kofiBtn = new QPushButton(tr("Support on Ko-fi"), this);
     kofiBtn->setStyleSheet("QPushButton { background-color: #FF5E5B; color: white; border: none; border-radius: 6px; padding: 8px 20px; font-size: 13px; font-weight: bold; }"
                            "QPushButton:hover { background-color: #FF7E7B; }");
     kofiBtn->setCursor(Qt::PointingHandCursor);
@@ -61,7 +61,7 @@ AboutDialog::AboutDialog(QWidget* parent) : QDialog(parent) {
 
     mainLayout->addStretch();
 
-    QPushButton* okBtn = new QPushButton("OK", this);
+    QPushButton* okBtn = new QPushButton(tr("OK"), this);
     okBtn->setFixedWidth(100);
     okBtn->setDefault(true);
     connect(okBtn, &QPushButton::clicked, this, &QDialog::accept);

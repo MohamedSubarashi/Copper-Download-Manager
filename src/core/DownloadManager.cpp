@@ -289,8 +289,8 @@ int DownloadManager::addDownload(const QString& url, const QString& path, const 
                 });
             } else {
                 downloads[id].status = "Failed";
-                downloads[id].error = "aria2c not installed";
-                emit downloadFailed(id, "aria2c not installed");
+                downloads[id].error = tr("aria2c not installed");
+                emit downloadFailed(id, tr("aria2c not installed"));
                 emit statusChanged(id, "Failed");
             }
         }
@@ -416,7 +416,7 @@ void DownloadManager::restoreFromDatabase() {
             }
             if (!ChunkedDownloader::hasPersistedData(item.id)) {
                 item.status = "Failed";
-                item.error = "Download interrupted and cannot be resumed (no partial data available).";
+                item.error = tr("Download interrupted and cannot be resumed (no partial data available).");
                 DatabaseManager::instance().updateDownload(item);
                 emit statusChanged(item.id, "Failed");
                 continue;
@@ -625,18 +625,18 @@ int DownloadManager::addPlaylistDownload(const QVector<PlaylistEntry>& entries, 
             Logger::instance().info("Torrent download started, aria2c id=" + QString::number(ariaId) + ", parent=" + parentName + ", files=" + QString::number(selectedIndices.size()));
         } else {
             downloads[parentItem.id].status = "Failed";
-            downloads[parentItem.id].error = "Failed to start aria2c";
+            downloads[parentItem.id].error = tr("Failed to start aria2c");
             // The parent never got an aria2 id: mark any children that were left
             // "Queued" as failed too so they don't linger forever behind the
             // failed parent.
             for (int cid : downloads[parentItem.id].childIds) {
                 if (downloads.contains(cid)) {
                     downloads[cid].status = "Failed";
-                    downloads[cid].error = "Failed to start aria2c";
+                    downloads[cid].error = tr("Failed to start aria2c");
                 }
             }
             DatabaseManager::instance().updateDownload(downloads[parentItem.id]);
-            emit downloadFailed(parentItem.id, "Failed to start aria2c");
+            emit downloadFailed(parentItem.id, tr("Failed to start aria2c"));
             emit statusChanged(parentItem.id, "Failed");
         }
         return parentItem.id;
@@ -1597,7 +1597,7 @@ void DownloadManager::startYtDlpPlaylistJob(int jobId) {
         }
         if (child.trackIndex > 0) continue;
         child.status = "Failed";
-        child.error = "This item has no playlist position, so it cannot be requested.";
+        child.error = tr("This item has no playlist position, so it cannot be requested.");
         child.speed = 0;
         DatabaseManager::instance().updateDownload(child);
         emit statusChanged(cid, "Failed");
@@ -1606,7 +1606,7 @@ void DownloadManager::startYtDlpPlaylistJob(int jobId) {
     if (selected.isEmpty()) {
         // Refusing to start is the only safe answer: the alternative is fetching
         // the whole playlist when nothing is selected.
-        const QString reason = "Nothing is selected in this playlist. Tick at least one file and retry.";
+        const QString reason = tr("Nothing is selected in this playlist. Tick at least one file and retry.");
         Logger::instance().error("Playlist job " + QString::number(jobId) +
                                  " refused to start: empty selection");
         job.status = "Failed";
@@ -1896,14 +1896,14 @@ void DownloadManager::onYtDlpPlaylistFinished(int id, bool ok, const QString& er
         } else if (child.status == "Completed") {
             // Marked complete from the archive but the file is gone.
             child.status = "Failed";
-            child.error = "The downloaded file is missing.";
+            child.error = tr("The downloaded file is missing.");
             failed++;
             DatabaseManager::instance().updateDownload(child);
             emit statusChanged(cid, "Failed");
         } else {
             child.status = "Failed";
             child.speed = 0;
-            child.error = error.isEmpty() ? "Item could not be downloaded." : error;
+            child.error = error.isEmpty() ? tr("Item could not be downloaded.") : error;
             failed++;
             DatabaseManager::instance().updateDownload(child);
             emit statusChanged(cid, "Failed");
@@ -1939,7 +1939,7 @@ void DownloadManager::onYtDlpPlaylistFinished(int id, bool ok, const QString& er
         }
         job.completedAt = QDateTime::currentDateTime();
         job.speed = 0;
-        job.error = failed > 0 ? QString("%1 of %2 item(s) could not be downloaded. Right-click the item and choose Retry.")
+        job.error = failed > 0 ? tr("%1 of %2 item(s) could not be downloaded. Right-click the item and choose Retry.")
                                      .arg(failed).arg(settled)
                                : QString();
         DatabaseManager::instance().updateDownload(job);

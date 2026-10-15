@@ -1,6 +1,7 @@
 #include "utils/DependencyVerifier.h"
 
 #include <QCryptographicHash>
+#include <QCoreApplication>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -58,14 +59,14 @@ bool DependencyVerifier::verifyPinned(const QString& key, const QString& url,
     const QString pinnedUrl = entry.value("url").toString();
     if (pin.isEmpty()) {
         if (error) {
-            *error = QStringLiteral("no %1 pin for %2 in the manifest; refusing to install an unverified binary")
+            *error = QCoreApplication::translate("DependencyVerifier", "no %1 pin for %2 in the manifest; refusing to install an unverified binary")
                          .arg(key, platformKey());
         }
         return false;
     }
     if (url.compare(pinnedUrl, Qt::CaseInsensitive) != 0) {
         if (error) {
-            *error = QStringLiteral("%1 download URL does not match the one pinned in the manifest "
+            *error = QCoreApplication::translate("DependencyVerifier", "%1 download URL does not match the one pinned in the manifest "
                                     "(code: %2, manifest: %3); update resources/dependencies.json "
                                     "together with the URL")
                          .arg(key, url, pinnedUrl);
@@ -75,7 +76,7 @@ bool DependencyVerifier::verifyPinned(const QString& key, const QString& url,
     const QString actual = sha256Hex(data);
     if (actual != pin) {
         if (error) {
-            *error = QStringLiteral("%1 download failed verification: expected sha256 %2, got %3")
+            *error = QCoreApplication::translate("DependencyVerifier", "%1 download failed verification: expected sha256 %2, got %3")
                          .arg(key, pin, actual);
         }
         return false;
@@ -104,7 +105,7 @@ bool DependencyVerifier::verifyAgainstSumsText(const QByteArray& sumsText, const
     const QString expected = publishedHashFor(sumsText, fileName);
     if (expected.isEmpty()) {
         if (error) {
-            *error = QStringLiteral("published checksums do not list %1; refusing to install an unverified binary")
+            *error = QCoreApplication::translate("DependencyVerifier", "published checksums do not list %1; refusing to install an unverified binary")
                          .arg(fileName);
         }
         return false;
@@ -112,7 +113,7 @@ bool DependencyVerifier::verifyAgainstSumsText(const QByteArray& sumsText, const
     const QString actual = sha256Hex(data);
     if (actual != expected) {
         if (error) {
-            *error = QStringLiteral("%1 failed verification against the published checksums: "
+            *error = QCoreApplication::translate("DependencyVerifier", "%1 failed verification against the published checksums: "
                                     "expected %2, got %3")
                          .arg(fileName, expected, actual);
         }

@@ -63,7 +63,7 @@ void UpdateManager::onVersionCheckFinished(QNetworkReply* reply) {
     if (reply->error() != QNetworkReply::NoError) {
         Logger::instance().error("Update check failed: " + reply->errorString());
         if (!silentCheck) {
-            emit errorOccurred("Failed to check for updates: " + reply->errorString());
+            emit errorOccurred(tr("Failed to check for updates: %1").arg(reply->errorString()));
         }
         emit checkFinished();
         return;
@@ -104,7 +104,7 @@ void UpdateManager::onVersionCheckFinished(QNetworkReply* reply) {
     if (downloadUrl.isEmpty()) {
         Logger::instance().error("No downloadable asset found in latest release");
         if (!silentCheck) {
-            emit errorOccurred("No downloadable file found in the latest release.");
+            emit errorOccurred(tr("No downloadable file found in the latest release."));
         }
         emit checkFinished();
         return;
@@ -158,7 +158,7 @@ void UpdateManager::onDownloadFinished(QNetworkReply* reply) {
 
     if (reply->error() != QNetworkReply::NoError) {
         Logger::instance().error("Update download failed: " + reply->errorString());
-        emit downloadFailed("Failed to download update: " + reply->errorString());
+        emit downloadFailed(tr("Failed to download update: %1").arg(reply->errorString()));
         return;
     }
 
@@ -168,7 +168,7 @@ void UpdateManager::onDownloadFinished(QNetworkReply* reply) {
     // verified against the digest GitHub recorded for this exact asset.
     if (!downloadDigest.startsWith("sha256:", Qt::CaseInsensitive)) {
         Logger::instance().error("Update asset has no sha256 digest; refusing to install an unverified update");
-        emit downloadFailed("The release asset has no published checksum; update blocked.");
+        emit downloadFailed(tr("The release asset has no published checksum; update blocked."));
         return;
     }
     const QString expected = downloadDigest.mid(7).toLower();
@@ -176,7 +176,7 @@ void UpdateManager::onDownloadFinished(QNetworkReply* reply) {
         QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex());
     if (actual != expected) {
         Logger::instance().error("Update checksum mismatch: expected " + expected + ", got " + actual);
-        emit downloadFailed("The downloaded update failed checksum verification; update blocked.");
+        emit downloadFailed(tr("The downloaded update failed checksum verification; update blocked."));
         return;
     }
 
@@ -189,12 +189,12 @@ void UpdateManager::onDownloadFinished(QNetworkReply* reply) {
     // under the final name.
     QSaveFile file(installerPath);
     if (!file.open(QIODevice::WriteOnly)) {
-        emit downloadFailed("Failed to write update file");
+        emit downloadFailed(tr("Failed to write update file"));
         return;
     }
     if (file.write(data) != data.size() || !file.commit()) {
         file.cancelWriting();
-        emit downloadFailed("Failed to write update file");
+        emit downloadFailed(tr("Failed to write update file"));
         return;
     }
 

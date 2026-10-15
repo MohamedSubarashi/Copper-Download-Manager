@@ -57,8 +57,23 @@
 #include <QProcess>
 #include <QCoreApplication>
 
+namespace {
+// File-local helper: map a stored (English) status value to its translated
+// display form. Comparisons, coloring and filtering keep using the raw value.
+static QString displayStatus(const QString& status) {
+    if (status == QLatin1String("Downloading")) return QCoreApplication::translate("MainWindow", "Downloading");
+    if (status == QLatin1String("Completed"))   return QCoreApplication::translate("MainWindow", "Completed");
+    if (status == QLatin1String("Failed"))      return QCoreApplication::translate("MainWindow", "Failed");
+    if (status == QLatin1String("Paused"))      return QCoreApplication::translate("MainWindow", "Paused");
+    if (status == QLatin1String("Cancelled"))   return QCoreApplication::translate("MainWindow", "Cancelled");
+    if (status == QLatin1String("Queued"))      return QCoreApplication::translate("MainWindow", "Queued");
+    if (status == QLatin1String("Resuming"))    return QCoreApplication::translate("MainWindow", "Resuming");
+    return status;
+}
+} // namespace
+
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), currentFilter(0) {
-    setWindowTitle("Copper Download Manager");
+    setWindowTitle(tr("Copper Download Manager"));
     setMinimumSize(1000, 600);
     resize(1200, 700);
     setAcceptDrops(true);
@@ -74,13 +89,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), currentFilter(0) 
 
     trayIcon = new QSystemTrayIcon(QIcon(":/icons/app.png"), this);
     trayMenu = new QMenu(this);
-    trayMenu->addAction(QIcon(":/icons/CurrentDownload.png"), "Open", this, [this]() {
+    trayMenu->addAction(QIcon(":/icons/CurrentDownload.png"), tr("Open"), this, [this]() {
         show();
         raise();
         activateWindow();
     });
     trayMenu->addSeparator();
-    trayMenu->addAction(QIcon(":/icons/Delete.png"), "Quit", this, [this]() {
+    trayMenu->addAction(QIcon(":/icons/Delete.png"), tr("Quit"), this, [this]() {
         m_forceExit = true;
         qApp->quit();
     });
@@ -115,32 +130,34 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), currentFilter(0) 
             const QString vendor = browser.compare(QStringLiteral("firefox"), Qt::CaseInsensitive) == 0
                 ? QStringLiteral("Firefox") : QStringLiteral("Chrome/Edge");
             const QMessageBox::StandardButton reply = QMessageBox::question(
-                this, QStringLiteral("Browser extension"),
-                QStringLiteral("A browser extension (%1) wants to send downloads to "
-                               "Copper Download Manager.\n\nExtension ID:\n%2\n\n"
-                               "Only allow this if you installed the Copper browser extension.")
+                this, tr("Browser extension"),
+                tr("A browser extension (%1) wants to send downloads to "
+                   "Copper Download Manager.\n\nExtension ID:\n%2\n\n"
+                   "Only allow this if you installed the Copper browser extension.")
                     .arg(vendor, extensionId),
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
             return reply == QMessageBox::Yes;
         });
 
     connect(&UpdateManager::instance(), &UpdateManager::updateAvailable, this, [this](const QString& version) {
-        QString msg = "A new version of Copper Download Manager is available:\n\n"
-                      "Current version: " + QCoreApplication::applicationVersion() + "\n"
-                      "Latest version: " + version;
-        QMessageBox::StandardButton reply = QMessageBox::question(this, "Update Available", msg + "\n\nDo you want to download and install it now?",
+        QString msg = tr("A new version of Copper Download Manager is available:\n\n"
+                         "Current version: %1\n"
+                         "Latest version: %2")
+                          .arg(QCoreApplication::applicationVersion(), version);
+        QMessageBox::StandardButton reply = QMessageBox::question(this, tr("Update Available"),
+            msg + tr("\n\nDo you want to download and install it now?"),
             QMessageBox::Yes | QMessageBox::No);
         if (reply == QMessageBox::Yes) {
             UpdateManager::instance().downloadAndInstall();
         }
     });
     connect(&UpdateManager::instance(), &UpdateManager::noUpdateAvailable, this, [this]() {
-        QMessageBox::information(this, "No Updates", "You are running the latest version of Copper Download Manager.");
+        QMessageBox::information(this, tr("No Updates"), tr("You are running the latest version of Copper Download Manager."));
     });
     connect(&UpdateManager::instance(), &UpdateManager::downloadFinished, this, [this]() {
         QString installerPath = UpdateManager::instance().installerPathOrEmpty();
-        QMessageBox::StandardButton reply = QMessageBox::question(this, "Update Downloaded",
-            "The update has been downloaded. Restart Copper Download Manager to install the update?",
+        QMessageBox::StandardButton reply = QMessageBox::question(this, tr("Update Downloaded"),
+            tr("The update has been downloaded. Restart Copper Download Manager to install the update?"),
             QMessageBox::Yes | QMessageBox::No);
         if (reply == QMessageBox::Yes) {
             qApp->quit();
@@ -148,10 +165,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), currentFilter(0) 
         }
     });
     connect(&UpdateManager::instance(), &UpdateManager::downloadFailed, this, [this](const QString& error) {
-        QMessageBox::warning(this, "Update Failed", error);
+        QMessageBox::warning(this, tr("Update Failed"), error);
     });
     connect(&UpdateManager::instance(), &UpdateManager::errorOccurred, this, [this](const QString& error) {
-        QMessageBox::warning(this, "Update Error", error);
+        QMessageBox::warning(this, tr("Update Error"), error);
     });
 
     refreshTimer = new QTimer(this);
@@ -194,7 +211,7 @@ void MainWindow::setupUI() {
 
     table = new QTableWidget(this);
     table->setColumnCount(8);
-    table->setHorizontalHeaderLabels({"Name", "Size", "Status", "Progress", "Speed", "ETA", "Peers", "Added"});
+    table->setHorizontalHeaderLabels({tr("Name"), tr("Size"), tr("Status"), tr("Progress"), tr("Speed"), tr("ETA"), tr("Peers"), tr("Added")});
     table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
@@ -231,12 +248,12 @@ void MainWindow::setupUI() {
 }
 
 void MainWindow::setupSidebar() {
-    sidebar->addItem(new QListWidgetItem(QIcon(":/icons/CurrentDownload.png"), "All Downloads"));
-    sidebar->addItem(new QListWidgetItem(QIcon(":/icons/Start.png"), "Active"));
-    sidebar->addItem(new QListWidgetItem(QIcon(":/icons/Pause.png"), "Paused"));
-    sidebar->addItem(new QListWidgetItem(QIcon(":/icons/DownloadComplete.png"), "Completed"));
-    sidebar->addItem(new QListWidgetItem(QIcon(":/icons/Failed.png"), "Failed"));
-    sidebar->addItem(new QListWidgetItem(QIcon(":/icons/Delete.png"), "Cancelled"));
+    sidebar->addItem(new QListWidgetItem(QIcon(":/icons/CurrentDownload.png"), tr("All Downloads")));
+    sidebar->addItem(new QListWidgetItem(QIcon(":/icons/Start.png"), tr("Active")));
+    sidebar->addItem(new QListWidgetItem(QIcon(":/icons/Pause.png"), tr("Paused")));
+    sidebar->addItem(new QListWidgetItem(QIcon(":/icons/DownloadComplete.png"), tr("Completed")));
+    sidebar->addItem(new QListWidgetItem(QIcon(":/icons/Failed.png"), tr("Failed")));
+    sidebar->addItem(new QListWidgetItem(QIcon(":/icons/Delete.png"), tr("Cancelled")));
 
     sidebar->setCurrentRow(0);
 
@@ -246,54 +263,54 @@ void MainWindow::setupSidebar() {
 void MainWindow::setupMenuBar() {
     QMenuBar* menuBar = this->menuBar();
 
-    QMenu* fileMenu = menuBar->addMenu("&File");
-    QAction* addUrlAction = fileMenu->addAction(QIcon(":/icons/AddUrl.png"), "Add &URL...");
+    QMenu* fileMenu = menuBar->addMenu(tr("&File"));
+    QAction* addUrlAction = fileMenu->addAction(QIcon(":/icons/AddUrl.png"), tr("Add &URL..."));
     addUrlAction->setShortcut(QKeySequence("Ctrl+U"));
     connect(addUrlAction, &QAction::triggered, this, &MainWindow::onAddUrl);
 
     fileMenu->addSeparator();
 
-    QAction* startAction = fileMenu->addAction(QIcon(":/icons/Start.png"), "&Start All");
+    QAction* startAction = fileMenu->addAction(QIcon(":/icons/Start.png"), tr("&Start All"));
     connect(startAction, &QAction::triggered, this, &MainWindow::onResumeAll);
 
-    QAction* pauseAction = fileMenu->addAction(QIcon(":/icons/Pause.png"), "&Pause All");
+    QAction* pauseAction = fileMenu->addAction(QIcon(":/icons/Pause.png"), tr("&Pause All"));
     connect(pauseAction, &QAction::triggered, this, &MainWindow::onPauseAll);
 
     fileMenu->addSeparator();
 
-    QAction* infoAction = fileMenu->addAction("Download &Info...");
+    QAction* infoAction = fileMenu->addAction(tr("Download &Info..."));
     infoAction->setShortcut(QKeySequence("Ctrl+I"));
     connect(infoAction, &QAction::triggered, this, &MainWindow::onOpenDownloadInfo);
 
-    QAction* retryAction = fileMenu->addAction("&Retry Failed");
+    QAction* retryAction = fileMenu->addAction(tr("&Retry Failed"));
     connect(retryAction, &QAction::triggered, this, &MainWindow::onRetryAllFailed);
 
     fileMenu->addSeparator();
 
-    QAction* settingsAction = fileMenu->addAction(QIcon(":/icons/Settings.png"), "&Settings...");
+    QAction* settingsAction = fileMenu->addAction(QIcon(":/icons/Settings.png"), tr("&Settings..."));
     settingsAction->setShortcut(QKeySequence("Ctrl+,"));
     connect(settingsAction, &QAction::triggered, this, &MainWindow::onSettings);
 
     fileMenu->addSeparator();
 
-    QAction* exitAction = fileMenu->addAction("E&xit");
+    QAction* exitAction = fileMenu->addAction(tr("E&xit"));
     exitAction->setShortcut(QKeySequence("Alt+F4"));
     connect(exitAction, &QAction::triggered, qApp, &QApplication::quit);
 
-    QMenu* viewMenu = menuBar->addMenu("&View");
-    QAction* clearCompletedAction = viewMenu->addAction("Clear &Completed");
+    QMenu* viewMenu = menuBar->addMenu(tr("&View"));
+    QAction* clearCompletedAction = viewMenu->addAction(tr("Clear &Completed"));
     connect(clearCompletedAction, &QAction::triggered, this, &MainWindow::onClearCompleted);
 
-    QMenu* helpMenu = menuBar->addMenu("&Help");
-    QAction* checkUpdateAction = helpMenu->addAction(QIcon(":/icons/Settings.png"), "&Check for Updates...");
+    QMenu* helpMenu = menuBar->addMenu(tr("&Help"));
+    QAction* checkUpdateAction = helpMenu->addAction(QIcon(":/icons/Settings.png"), tr("&Check for Updates..."));
     connect(checkUpdateAction, &QAction::triggered, this, &MainWindow::onCheckForUpdates);
-    QAction* aboutAction = helpMenu->addAction(QIcon(":/icons/About.png"), "&About");
+    QAction* aboutAction = helpMenu->addAction(QIcon(":/icons/About.png"), tr("&About"));
     aboutAction->setShortcut(QKeySequence("F1"));
     connect(aboutAction, &QAction::triggered, this, &MainWindow::onAbout);
 }
 
 void MainWindow::setupToolBar() {
-    toolBar = new QToolBar("Main Toolbar", this);
+    toolBar = new QToolBar(tr("Main Toolbar"), this);
     toolBar->setObjectName("MainToolbar");
     toolBar->setMovable(false);
     toolBar->setFloatable(false);
@@ -320,19 +337,19 @@ void MainWindow::setupToolBar() {
 
     struct BtnSpec {
         const char* icon;
-        const char* tip;
+        QString tip;
         void (MainWindow::*slot)();
     };
     // Buttons fill the whole bar: equal stretch, large icons, even spacing.
     const BtnSpec specs[] = {
-        {":/icons/AddUrl.png",        "Add URL",               &MainWindow::onAddUrl},
-        {":/icons/Start.png",         "Resume",                &MainWindow::onStartSelected},
-        {":/icons/Pause.png",         "Pause",                 &MainWindow::onPauseSelected},
-        {":/icons/Stop.png",          "Cancel",                &MainWindow::onStopSelected},
-        {":/icons/Delete.png",        "Delete",                &MainWindow::onDeleteSelected},
-        {":/icons/CurrentDownload.png", "Open Downloads Folder", &MainWindow::onOpenDownloadsFolder},
-        {":/icons/Settings.png",      "Settings",              &MainWindow::onSettings},
-        {":/icons/About.png",         "About",                 &MainWindow::onAbout},
+        {":/icons/AddUrl.png",        tr("Add URL"),               &MainWindow::onAddUrl},
+        {":/icons/Start.png",         tr("Resume"),                &MainWindow::onStartSelected},
+        {":/icons/Pause.png",         tr("Pause"),                 &MainWindow::onPauseSelected},
+        {":/icons/Stop.png",          tr("Cancel"),                &MainWindow::onStopSelected},
+        {":/icons/Delete.png",        tr("Delete"),                &MainWindow::onDeleteSelected},
+        {":/icons/CurrentDownload.png", tr("Open Downloads Folder"), &MainWindow::onOpenDownloadsFolder},
+        {":/icons/Settings.png",      tr("Settings"),              &MainWindow::onSettings},
+        {":/icons/About.png",         tr("About"),                 &MainWindow::onAbout},
     };
 
     QWidget* container = new QWidget(toolBar);
@@ -357,7 +374,7 @@ void MainWindow::setupToolBar() {
     QToolButton* storeBtn = new QToolButton(container);
     storeBtn->setObjectName("ExtensionsButton");
     storeBtn->setIcon(QIcon(":/icons/StoreChrome.png"));
-    storeBtn->setToolTip("Browser add-ons\nOpen the store listing for your browser");
+    storeBtn->setToolTip(tr("Browser add-ons\nOpen the store listing for your browser"));
     storeBtn->setPopupMode(QToolButton::InstantPopup);
     storeBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     storeBtn->setMinimumSize(44, 44);
@@ -368,23 +385,23 @@ void MainWindow::setupToolBar() {
     storeMenu->setToolTipsVisible(true);
     struct StoreSpec {
         const char* icon;
-        const char* name;
+        QString name;
         const char* url;
-        const char* tip;
+        QString tip;
     };
     const StoreSpec stores[] = {
-        {":/icons/StoreChrome.png", "Chrome Web Store",
+        {":/icons/StoreChrome.png", tr("Chrome Web Store"),
          "https://chromewebstore.google.com/detail/copper-download-manager/cmokehdedogdpbfhlamopeifgogaihni",
-         "Open this listing in the Chrome Web Store"},
-        {":/icons/StoreFirefox.png", "Firefox Add-ons",
+         tr("Open this listing in the Chrome Web Store")},
+        {":/icons/StoreFirefox.png", tr("Firefox Add-ons"),
          "https://addons.mozilla.org/en-US/firefox/addon/copper-download-manager",
-         "Open this listing on addons.mozilla.org"},
-        {":/icons/StoreEdge.png", "Edge Add-ons",
+         tr("Open this listing on addons.mozilla.org")},
+        {":/icons/StoreEdge.png", tr("Edge Add-ons"),
          "https://microsoftedge.microsoft.com/addons/detail/copper-download-manager/fnganciafgifhelimkoeiiapdcdmnnlb",
-         "Open this listing in Microsoft Edge Add-ons"},
-        {":/icons/StoreOpera.png", "Opera",
+         tr("Open this listing in Microsoft Edge Add-ons")},
+        {":/icons/StoreOpera.png", tr("Opera"),
          "",
-         "Not published for Opera yet - coming soon"}
+         tr("Not published for Opera yet - coming soon")}
     };
     for (const StoreSpec& store : stores) {
         QAction* action = storeMenu->addAction(QIcon(store.icon), QString(store.name));
@@ -429,14 +446,14 @@ void MainWindow::setupStatusBar() {
     statusBarWidget = new QStatusBar(this);
     setStatusBar(statusBarWidget);
 
-    totalSpeedLabel = new QLabel("Speed: 0 B/s");
-    activeCountLabel = new QLabel("Active: 0");
-    queuedCountLabel = new QLabel("Queued: 0");
+    totalSpeedLabel = new QLabel(tr("Speed: %1").arg(formatSpeed(0)));
+    activeCountLabel = new QLabel(tr("Active: %1").arg(0));
+    queuedCountLabel = new QLabel(tr("Queued: %1").arg(0));
 
     statusBarWidget->addPermanentWidget(activeCountLabel);
     statusBarWidget->addPermanentWidget(queuedCountLabel);
     statusBarWidget->addPermanentWidget(totalSpeedLabel);
-    statusBarWidget->showMessage("Ready");
+    statusBarWidget->showMessage(tr("Ready"));
 }
 
 void MainWindow::setupConnections() {
@@ -472,7 +489,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     if (!m_forceExit && trayIcon && trayIcon->isVisible()
         && DatabaseManager::instance().getSetting("minimizeToTray", "true") == "true") {
         hide();
-        trayIcon->showMessage("Copper Download Manager", "Still running in the system tray");
+        trayIcon->showMessage(tr("Copper Download Manager"), tr("Still running in the system tray"));
         event->ignore();
         return;
     }
@@ -485,7 +502,7 @@ void MainWindow::changeEvent(QEvent* event) {
         if (isMinimized() && DatabaseManager::instance().getSetting("minimizeToTray", "true") == "true") {
             hide();
             QTimer::singleShot(0, this, [this]() {
-                if (trayIcon) trayIcon->showMessage("Copper Download Manager", "Minimized to system tray");
+                if (trayIcon) trayIcon->showMessage(tr("Copper Download Manager"), tr("Minimized to system tray"));
             });
             event->accept();
         }
@@ -610,8 +627,8 @@ void MainWindow::onDeleteSelected() {
     QSet<int> rows;
     for (QTableWidgetItem* item : selected) rows.insert(item->row());
 
-    QMessageBox::StandardButton reply = QMessageBox::question(this, "Confirm Delete",
-        "Remove " + QString::number(rows.size()) + " download(s)?",
+    QMessageBox::StandardButton reply = QMessageBox::question(this, tr("Confirm Delete"),
+        tr("Remove %1 download(s)?").arg(rows.size()),
         QMessageBox::Yes | QMessageBox::No);
 
     if (reply != QMessageBox::Yes) return;
@@ -682,24 +699,24 @@ void MainWindow::onProperties() {
     int id = idItem->data(Qt::UserRole).toInt();
     DownloadItem item = DownloadManager::instance().getDownload(id);
 
-    QString info = "ID: " + QString::number(item.id) + "\n"
-                   "URL: " + item.url + "\n"
-                   "File: " + item.filePath + "\n"
-                   "Type: " + item.type + "\n"
-                   "Status: " + item.status + "\n"
-                   "Progress: " + QString::number(item.progress, 'f', 1) + "%\n"
-                   "Downloaded: " + formatSize(item.downloadedSize) + " / " + formatSize(item.totalSize) + "\n"
-                   "Speed: " + formatSpeed(item.speed) + "\n"
-                   "Added: " + item.addedAt.toString("yyyy-MM-dd hh:mm:ss");
+    QString info = tr("ID: %1").arg(item.id) + "\n"
+                   + tr("URL: %1").arg(item.url) + "\n"
+                   + tr("File: %1").arg(item.filePath) + "\n"
+                   + tr("Type: %1").arg(item.type) + "\n"
+                   + tr("Status: %1").arg(displayStatus(item.status)) + "\n"
+                   + tr("Progress: %1%").arg(QString::number(item.progress, 'f', 1)) + "\n"
+                   + tr("Downloaded: %1 / %2").arg(formatSize(item.downloadedSize), formatSize(item.totalSize)) + "\n"
+                   + tr("Speed: %1").arg(formatSpeed(item.speed)) + "\n"
+                   + tr("Added: %1").arg(item.addedAt.toString("yyyy-MM-dd hh:mm:ss"));
 
     if (!item.completedAt.isNull()) {
-        info += "\nCompleted: " + item.completedAt.toString("yyyy-MM-dd hh:mm:ss");
+        info += tr("\nCompleted: %1").arg(item.completedAt.toString("yyyy-MM-dd hh:mm:ss"));
     }
     if (!item.error.isEmpty()) {
-        info += "\nError: " + item.error;
+        info += tr("\nError: %1").arg(item.error);
     }
 
-    QMessageBox::information(this, "Download Properties", info);
+    QMessageBox::information(this, tr("Download Properties"), info);
 }
 
 void MainWindow::onTorrentDetails() {
@@ -710,7 +727,7 @@ void MainWindow::onTorrentDetails() {
 
     int torrentId = item.aria2cId;
     if (torrentId <= 0) {
-        QMessageBox::information(this, "Torrent Details", "No live torrent data available for this download.");
+        QMessageBox::information(this, tr("Torrent Details"), tr("No live torrent data available for this download."));
         return;
     }
 
@@ -782,7 +799,7 @@ void MainWindow::onDownloadProgress(int id, qint64 downloaded, qint64 total) {
         for (int row = 0; row < table->rowCount(); row++) {
             QTableWidgetItem* nameItem = table->item(row, 0);
             if (nameItem && nameItem->data(Qt::UserRole).toInt() == id) {
-                QString peersText = QString::number(item.connectedPeers) + "P / " + QString::number(item.leechers) + "L / " + QString::number(item.seeds) + "S";
+                QString peersText = tr("%1P / %2L / %3S").arg(QString::number(item.connectedPeers), QString::number(item.leechers), QString::number(item.seeds));
                 QTableWidgetItem* peersItem = table->item(row, 6);
                 if (peersItem) {
                     peersItem->setText(peersText);
@@ -799,10 +816,10 @@ void MainWindow::onDownloadFinished(int id) {
 }
 
 void MainWindow::onDownloadFailed(int id, const QString& error) {
-    QString msg = error.trimmed().isEmpty() ? "Download failed" : "Download failed: " + error.trimmed();
+    QString msg = error.trimmed().isEmpty() ? tr("Download failed") : tr("Download failed: %1").arg(error.trimmed());
     statusBarWidget->showMessage(msg, 8000);
     if (trayIcon && trayIcon->isVisible()) {
-        trayIcon->showMessage("Copper Download Manager", msg.left(120), QSystemTrayIcon::Warning, 8000);
+        trayIcon->showMessage(tr("Copper Download Manager"), msg.left(120), QSystemTrayIcon::Warning, 8000);
     }
     refreshTable();
 }
@@ -825,7 +842,7 @@ void MainWindow::onStatusChanged(int id, const QString& status) {
 }
 
 void MainWindow::onTotalSpeedUpdated(qint64 speed) {
-    totalSpeedLabel->setText("Speed: " + formatSpeed(speed));
+    totalSpeedLabel->setText(tr("Speed: %1").arg(formatSpeed(speed)));
 }
 
 void MainWindow::onDownloadSpeed(int id, qint64 speed) {
@@ -833,7 +850,7 @@ void MainWindow::onDownloadSpeed(int id, qint64 speed) {
 
     qint64 totalSpeed = 0;
     for (qint64 s : downloadSpeeds.values()) totalSpeed += s;
-    totalSpeedLabel->setText("Speed: " + formatSpeed(totalSpeed));
+    totalSpeedLabel->setText(tr("Speed: %1").arg(formatSpeed(totalSpeed)));
 }
 
 void MainWindow::onSidebarFilterChanged() {
@@ -920,9 +937,9 @@ void MainWindow::refreshTable() {
             for (int cid : item.childIds) {
                 if (downloadMap.contains(cid) && downloadMap[cid].status == "Completed") completedChildren++;
             }
-            QString groupStatus = item.status;
+            QString groupStatus = displayStatus(item.status);
             if (!item.childIds.isEmpty()) {
-                groupStatus = QString::number(completedChildren) + "/" + QString::number(totalChildren) + " " + item.status;
+                groupStatus = QString::number(completedChildren) + "/" + QString::number(totalChildren) + " " + displayStatus(item.status);
             }
 
             QTableWidgetItem* statusItem = new QTableWidgetItem(groupStatus);
@@ -996,7 +1013,7 @@ void MainWindow::refreshTable() {
                     cSize->setFlags(nonEditable);
                     table->setItem(crow, 1, cSize);
 
-                    QTableWidgetItem* cStatus = new QTableWidgetItem(child.status);
+                    QTableWidgetItem* cStatus = new QTableWidgetItem(displayStatus(child.status));
                     cStatus->setForeground(statusColor(child.status));
                     cStatus->setFlags(nonEditable);
                     table->setItem(crow, 2, cStatus);
@@ -1021,7 +1038,7 @@ void MainWindow::refreshTable() {
 
                     QString cPeers;
                     if (child.type == "Torrent" && (child.connectedPeers > 0 || child.seeds > 0)) {
-                        cPeers = QString::number(child.connectedPeers) + "P / " + QString::number(child.leechers) + "L / " + QString::number(child.seeds) + "S";
+                        cPeers = tr("%1P / %2L / %3S").arg(QString::number(child.connectedPeers), QString::number(child.leechers), QString::number(child.seeds));
                     }
                     QTableWidgetItem* cPeersItem = new QTableWidgetItem(cPeers);
                     cPeersItem->setFlags(nonEditable);
@@ -1051,7 +1068,7 @@ void MainWindow::refreshTable() {
             sizeItem->setFlags(nonEditable);
             table->setItem(row, 1, sizeItem);
 
-            QTableWidgetItem* statusItem = new QTableWidgetItem(item.status);
+            QTableWidgetItem* statusItem = new QTableWidgetItem(displayStatus(item.status));
             statusItem->setForeground(statusColor(item.status));
             statusItem->setFlags(nonEditable);
             table->setItem(row, 2, statusItem);
@@ -1076,7 +1093,7 @@ void MainWindow::refreshTable() {
 
             QString peersText;
             if (item.type == "Torrent" && (item.connectedPeers > 0 || item.seeds > 0)) {
-                peersText = QString::number(item.connectedPeers) + "P / " + QString::number(item.leechers) + "L / " + QString::number(item.seeds) + "S";
+                peersText = tr("%1P / %2L / %3S").arg(QString::number(item.connectedPeers), QString::number(item.leechers), QString::number(item.seeds));
             }
             QTableWidgetItem* peersItem = new QTableWidgetItem(peersText);
             peersItem->setFlags(nonEditable);
@@ -1111,14 +1128,14 @@ void MainWindow::refreshTable() {
         }
     }
 
-    activeCountLabel->setText("Active: " + QString::number(activeCount));
-    queuedCountLabel->setText("Queued: " + QString::number(queuedCount));
+    activeCountLabel->setText(tr("Active: %1").arg(activeCount));
+    queuedCountLabel->setText(tr("Queued: %1").arg(queuedCount));
 }
 
 void MainWindow::updateStatusBar() {
     qint64 totalSpeed = 0;
     for (qint64 s : downloadSpeeds.values()) totalSpeed += s;
-    totalSpeedLabel->setText("Speed: " + formatSpeed(totalSpeed));
+    totalSpeedLabel->setText(tr("Speed: %1").arg(formatSpeed(totalSpeed)));
 }
 
 void MainWindow::showContextMenu(const QPoint& pos) {
@@ -1137,52 +1154,52 @@ void MainWindow::showContextMenu(const QPoint& pos) {
 
     if (isGroup) {
         if (expandedGroups.contains(id)) {
-            menu.addAction("Collapse", this, &MainWindow::onTableCollapse);
+            menu.addAction(tr("Collapse"), this, &MainWindow::onTableCollapse);
         } else {
-            menu.addAction("Expand", this, &MainWindow::onTableCollapse);
+            menu.addAction(tr("Expand"), this, &MainWindow::onTableCollapse);
         }
         menu.addSeparator();
         if (dlItem.status == "Downloading") {
-            menu.addAction(QIcon(":/icons/Pause.png"), "Pause All", this, &MainWindow::onPauseSelected);
+            menu.addAction(QIcon(":/icons/Pause.png"), tr("Pause All"), this, &MainWindow::onPauseSelected);
         } else if (dlItem.status == "Paused" || dlItem.status == "Failed") {
-            menu.addAction(QIcon(":/icons/Start.png"), "Resume All", this, &MainWindow::onStartSelected);
+            menu.addAction(QIcon(":/icons/Start.png"), tr("Resume All"), this, &MainWindow::onStartSelected);
         }
         if (dlItem.status == "Failed" || dlItem.status == "Cancelled") {
-            menu.addAction(QIcon(":/icons/Start.png"), "Retry", this, &MainWindow::onRetrySelected);
+            menu.addAction(QIcon(":/icons/Start.png"), tr("Retry"), this, &MainWindow::onRetrySelected);
         }
-        menu.addAction("Download Info...", this, [this, id]() { openDownloadInfo(id); });
+        menu.addAction(tr("Download Info..."), this, [this, id]() { openDownloadInfo(id); });
         menu.addSeparator();
-        menu.addAction(QIcon(":/icons/Delete.png"), "Remove All", this, &MainWindow::onDeleteSelected);
+        menu.addAction(QIcon(":/icons/Delete.png"), tr("Remove All"), this, &MainWindow::onDeleteSelected);
     } else {
         // A playlist file is downloaded by its job's single yt-dlp process, so
         // these actions act on the whole job. The handlers route through
         // DownloadManager, which does that; the labels have to agree with it.
         const bool viaJob = DownloadManager::instance().controllingJobId(id) != -1;
-        const QString scope = viaJob ? " Playlist" : "";
+        const QString scope = viaJob ? tr(" Playlist") : QString();
         if (dlItem.status == "Downloading") {
-            menu.addAction(QIcon(":/icons/Pause.png"), "Pause" + scope, this, &MainWindow::onPauseSelected);
-            menu.addAction(QIcon(":/icons/Stop.png"), "Cancel" + scope, this, &MainWindow::onStopSelected);
+            menu.addAction(QIcon(":/icons/Pause.png"), tr("Pause%1").arg(scope), this, &MainWindow::onPauseSelected);
+            menu.addAction(QIcon(":/icons/Stop.png"), tr("Cancel%1").arg(scope), this, &MainWindow::onStopSelected);
         } else if (dlItem.status == "Paused" || dlItem.status == "Failed" || dlItem.status == "Cancelled") {
-            menu.addAction(QIcon(":/icons/Start.png"), "Resume" + scope, this, &MainWindow::onStartSelected);
-            menu.addAction(QIcon(":/icons/Stop.png"), "Cancel" + scope, this, &MainWindow::onStopSelected);
+            menu.addAction(QIcon(":/icons/Start.png"), tr("Resume%1").arg(scope), this, &MainWindow::onStartSelected);
+            menu.addAction(QIcon(":/icons/Stop.png"), tr("Cancel%1").arg(scope), this, &MainWindow::onStopSelected);
         } else if (dlItem.status == "Completed") {
-            menu.addAction("Open File", this, &MainWindow::onOpenFile);
-            menu.addAction("Open Folder", this, &MainWindow::onOpenFolder);
+            menu.addAction(tr("Open File"), this, &MainWindow::onOpenFile);
+            menu.addAction(tr("Open Folder"), this, &MainWindow::onOpenFolder);
         }
         if (dlItem.status == "Failed" || dlItem.status == "Cancelled") {
-            menu.addAction(QIcon(":/icons/Start.png"), "Retry", this, [this, id]() {
+            menu.addAction(QIcon(":/icons/Start.png"), tr("Retry"), this, [this, id]() {
                 DownloadManager::instance().retryDownload(id);
             });
         }
         menu.addSeparator();
-        menu.addAction("Download Info...", this, [this, id]() { openDownloadInfo(id); });
-        menu.addAction("Copy URL", this, &MainWindow::onCopyUrl);
+        menu.addAction(tr("Download Info..."), this, [this, id]() { openDownloadInfo(id); });
+        menu.addAction(tr("Copy URL"), this, &MainWindow::onCopyUrl);
         if (dlItem.type == "Torrent" && dlItem.aria2cId > 0) {
-            menu.addAction("Torrent Details...", this, &MainWindow::onTorrentDetails);
+            menu.addAction(tr("Torrent Details..."), this, &MainWindow::onTorrentDetails);
         }
-        menu.addAction("Properties", this, &MainWindow::onProperties);
+        menu.addAction(tr("Properties"), this, &MainWindow::onProperties);
         menu.addSeparator();
-        menu.addAction(QIcon(":/icons/Delete.png"), "Remove", this, &MainWindow::onDeleteSelected);
+        menu.addAction(QIcon(":/icons/Delete.png"), tr("Remove"), this, &MainWindow::onDeleteSelected);
     }
 
     menu.exec(table->viewport()->mapToGlobal(pos));
@@ -1257,7 +1274,7 @@ void MainWindow::onRetrySelected() {
 void MainWindow::onRetryAllFailed() {
     DownloadManager::instance().retryAllFailed();
     refreshTable();
-    statusBarWidget->showMessage("Retrying all failed downloads", 4000);
+    statusBarWidget->showMessage(tr("Retrying all failed downloads"), 4000);
 }
 
 void MainWindow::onTableCollapse() {
@@ -1476,7 +1493,7 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
                     int addId = DownloadManager::instance().addDownload(source, outputPath, "Torrent");
                     if (addId < 0) {
                         Logger::instance().info("torrent blocked by file-format filter: " + source);
-                        statusBarWidget->showMessage("Blocked by file-format filter: " + source.left(60), 8000);
+                        statusBarWidget->showMessage(tr("Blocked by file-format filter: %1").arg(source.left(60)), 8000);
                     }
                 }
             }
@@ -1510,7 +1527,7 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
         }
         if (addId < 0) {
             Logger::instance().info("forwarded download blocked by file-format filter: " + arg);
-            statusBarWidget->showMessage("Blocked by file-format filter: " + arg.left(60), 8000);
+            statusBarWidget->showMessage(tr("Blocked by file-format filter: %1").arg(arg.left(60)), 8000);
         }
     } else if (arg.startsWith("copper://")) {
         QString path = arg.mid(QString("copper://").size());
@@ -1541,7 +1558,7 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
                             int addId = DownloadManager::instance().addDownload(source, outputPath, "Torrent");
                             if (addId < 0) {
                                 Logger::instance().info("copper:// torrent blocked by file-format filter: " + source);
-                                statusBarWidget->showMessage("Blocked by file-format filter: " + source.left(60), 8000);
+                                statusBarWidget->showMessage(tr("Blocked by file-format filter: %1").arg(source.left(60)), 8000);
                             }
                         }
                     }
@@ -1584,13 +1601,13 @@ void MainWindow::onArgumentForwarded(const QString& arg) {
                         int addId = DownloadManager::instance().addDownload(cl.url, fullSavePath, "YtDlp", 16, "mp3");
                         if (addId < 0) {
                             Logger::instance().info("copper:// download blocked by file-format filter: " + cl.url);
-                            statusBarWidget->showMessage("Blocked by file-format filter: " + cl.url.left(60), 8000);
+                            statusBarWidget->showMessage(tr("Blocked by file-format filter: %1").arg(cl.url.left(60)), 8000);
                         }
                     } else {
                         int addId = DownloadManager::instance().addDownload(cl.url, fullSavePath, "HTTP");
                         if (addId < 0) {
                             Logger::instance().info("copper:// download blocked by file-format filter: " + cl.url);
-                            statusBarWidget->showMessage("Blocked by file-format filter: " + cl.url.left(60), 8000);
+                            statusBarWidget->showMessage(tr("Blocked by file-format filter: %1").arg(cl.url.left(60)), 8000);
                         }
                     }
                 }

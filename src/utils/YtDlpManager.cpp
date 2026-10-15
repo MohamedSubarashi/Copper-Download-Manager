@@ -102,7 +102,7 @@ void YtDlpManager::installOrUpdate() {
 
     isDownloading = true;
     Logger::instance().info("Installing/updating yt-dlp...");
-    emit installationProgress("Checking latest version...");
+    emit installationProgress(tr("Checking latest version..."));
 
     QNetworkRequest request(QUrl("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"));
     request.setRawHeader("Accept", "application/vnd.github.v3+json");
@@ -114,7 +114,7 @@ void YtDlpManager::installOrUpdate() {
 
         if (reply->error() != QNetworkReply::NoError) {
             Logger::instance().error("yt-dlp version check failed: " + reply->errorString());
-            emit installationProgress("Version check failed: " + reply->errorString());
+            emit installationProgress(tr("Version check failed: %1").arg(reply->errorString()));
             emit errorOccurred(reply->errorString());
             isDownloading = false;
             return;
@@ -130,7 +130,7 @@ void YtDlpManager::installOrUpdate() {
             QString installed = getVersion().trimmed();
             if (installed == tagName || (installed.compare(tagName) >= 0)) {
                 Logger::instance().info("yt-dlp is up to date: " + installed + " == latest " + tagName + " (skipping download)");
-                emit installationProgress("Already up to date: " + installed);
+                emit installationProgress(tr("Already up to date: %1").arg(installed));
                 isDownloading = false;
                 return;
             }
@@ -160,13 +160,13 @@ void YtDlpManager::installOrUpdate() {
 
         if (assetUrl.isEmpty()) {
             Logger::instance().error("yt-dlp asset not found in release " + tagName);
-            emit installationProgress("Asset not found in release");
+            emit installationProgress(tr("Asset not found in release"));
             isDownloading = false;
             return;
         }
 
         Logger::instance().info("yt-dlp latest version: " + tagName + ", downloading from: " + assetUrl);
-        emit installationProgress("Downloading yt-dlp " + tagName + "...");
+        emit installationProgress(tr("Downloading yt-dlp %1...").arg(tagName));
         startBinaryDownload(assetUrl, fileName, sumsUrl);
     });
 }
@@ -182,7 +182,7 @@ void YtDlpManager::startBinaryDownload(const QString& url, const QString& fileNa
     connect(activeReply, &QNetworkReply::downloadProgress, [this](qint64 received, qint64 total) {
         if (total > 0) {
             int pct = (int)((received * 100) / total);
-            emit installationProgress("Downloading: " + QString::number(pct) + "%");
+            emit installationProgress(tr("Downloading: %1%").arg(pct));
         }
     });
 
@@ -194,7 +194,7 @@ void YtDlpManager::startBinaryDownload(const QString& url, const QString& fileNa
 
         if (reply->error() != QNetworkReply::NoError) {
             Logger::instance().error("yt-dlp download failed: " + reply->errorString());
-            emit installationProgress("Download failed: " + reply->errorString());
+            emit installationProgress(tr("Download failed: %1").arg(reply->errorString()));
             emit errorOccurred(reply->errorString());
             isDownloading = false;
             reply->deleteLater();
@@ -209,8 +209,8 @@ void YtDlpManager::startBinaryDownload(const QString& url, const QString& fileNa
         // Fail closed: no published checksums, no install.
         if (sumsUrl.isEmpty()) {
             Logger::instance().error("yt-dlp release ships no SHA2-256SUMS; refusing to install an unverified binary");
-            emit installationProgress("Verification unavailable - install blocked");
-            emit errorOccurred("The yt-dlp release has no published checksums; install blocked.");
+            emit installationProgress(tr("Verification unavailable - install blocked"));
+            emit errorOccurred(tr("The yt-dlp release has no published checksums; install blocked."));
             isDownloading = false;
             return;
         }
@@ -223,15 +223,15 @@ void YtDlpManager::startBinaryDownload(const QString& url, const QString& fileNa
             sumsReply->deleteLater();
             if (sumsReply->error() != QNetworkReply::NoError) {
                 Logger::instance().error("yt-dlp checksum download failed: " + sumsReply->errorString());
-                emit installationProgress("Checksum download failed - install blocked");
-                emit errorOccurred("Could not download yt-dlp checksums; install blocked.");
+                emit installationProgress(tr("Checksum download failed - install blocked"));
+                emit errorOccurred(tr("Could not download yt-dlp checksums; install blocked."));
                 isDownloading = false;
                 return;
             }
             QString verifyError;
             if (!DependencyVerifier::verifyAgainstSumsText(sumsReply->readAll(), fileName, data, &verifyError)) {
                 Logger::instance().error("yt-dlp install blocked: " + verifyError);
-                emit installationProgress("Verification failed - install blocked");
+                emit installationProgress(tr("Verification failed - install blocked"));
                 emit errorOccurred(verifyError);
                 isDownloading = false;
                 return;
@@ -243,7 +243,7 @@ void YtDlpManager::startBinaryDownload(const QString& url, const QString& fileNa
 
             QFile file(filePath);
             if (!file.open(QIODevice::WriteOnly)) {
-                emit installationProgress("Write error");
+                emit installationProgress(tr("Write error"));
                 isDownloading = false;
                 return;
             }
@@ -255,10 +255,10 @@ void YtDlpManager::startBinaryDownload(const QString& url, const QString& fileNa
 #endif
 
             if (isInstalled()) {
-                emit installationProgress("Installed: " + getVersion());
+                emit installationProgress(tr("Installed: %1").arg(getVersion()));
                 Logger::instance().info("yt-dlp installed successfully");
             } else {
-                emit installationProgress("Installation failed");
+                emit installationProgress(tr("Installation failed"));
             }
 
             isDownloading = false;
@@ -291,14 +291,14 @@ QString YtDlpManager::getOutputTemplate(const QString& outputPath) const {
 
 void YtDlpManager::startDownload(const QString& url, const QString& outputPath, int downloadId, const QString& format) {
     if (!isInstalled()) {
-        emit downloadFailed(downloadId, "yt-dlp not installed");
+        emit downloadFailed(downloadId, tr("yt-dlp not installed"));
         return;
     }
 
     if (!hasFfmpegFor(format)) {
         emit downloadFailed(downloadId,
-            "FFmpeg is required for \"" + format + "\" output but is not installed. "
-            "Install it from Settings > Tools, then retry the download.");
+            tr("FFmpeg is required for \"%1\" output but is not installed. "
+            "Install it from Settings > Tools, then retry the download.").arg(format));
         return;
     }
 
@@ -318,14 +318,14 @@ void YtDlpManager::startPlaylistJob(int jobId, const QString& playlistUrl, const
     // through playlistFinished), so emitting it here would leave the job sitting
     // in "Downloading" forever with no reason shown.
     if (!isInstalled()) {
-        emit playlistFinished(jobId, false, "yt-dlp not installed");
+        emit playlistFinished(jobId, false, tr("yt-dlp not installed"));
         return;
     }
 
     if (!hasFfmpegFor(format)) {
         emit playlistFinished(jobId, false,
-            "FFmpeg is required for \"" + format + "\" output but is not installed. "
-            "Install it from Settings > Tools, then retry the download.");
+            tr("FFmpeg is required for \"%1\" output but is not installed. "
+            "Install it from Settings > Tools, then retry the download.").arg(format));
         return;
     }
 

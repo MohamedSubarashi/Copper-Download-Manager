@@ -2,6 +2,7 @@
 #include "ui/DownloadManagerDialog.h"
 #include "ui/SettingsDialog.h"
 #include "utils/ThemeManager.h"
+#include "utils/TranslationManager.h"
 #include "utils/Logger.h"
 #include "utils/DefaultHandler.h"
 #include "utils/CopperLink.h"
@@ -257,6 +258,11 @@ int main(int argc, char* argv[]) {
 #endif
 
     DatabaseManager::instance().init();
+
+    // Install the UI language before any window is created. "system" follows
+    // the OS locale; the picker lives in Settings > General.
+    TranslationManager::instance().install(
+        DatabaseManager::instance().getSetting("language", "system"));
 
     DefaultHandler::instance().autoUpdateRegistryPath();
 

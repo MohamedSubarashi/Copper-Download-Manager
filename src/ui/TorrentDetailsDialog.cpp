@@ -27,57 +27,57 @@ static QString fmtSpeed(qint64 b) { return fmtSize(b) + "/s"; }
 
 TorrentDetailsDialog::TorrentDetailsDialog(int torrentId, const QString& title, QWidget* parent)
     : QDialog(parent), torrentId(torrentId) {
-    setWindowTitle("Torrent Details - " + title);
+    setWindowTitle(tr("Torrent Details - %1").arg(title));
     resize(720, 640);
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
 
     // Info / stats group
-    QGroupBox* statsGroup = new QGroupBox("Statistics");
+    QGroupBox* statsGroup = new QGroupBox(tr("Statistics"));
     QGridLayout* grid = new QGridLayout(statsGroup);
     infoHashLabel = new QLabel("-");
     infoHashLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    infoHashLabel->setAccessibleName("Info hash");
+    infoHashLabel->setAccessibleName(tr("Info hash"));
     statusLabel = new QLabel("-");
-    statusLabel->setAccessibleName("Status");
+    statusLabel->setAccessibleName(tr("Status"));
     peersLabel = new QLabel("0");
-    peersLabel->setAccessibleName("Peers");
+    peersLabel->setAccessibleName(tr("Peers"));
     leechersLabel = new QLabel("0");
-    leechersLabel->setAccessibleName("Leechers");
+    leechersLabel->setAccessibleName(tr("Leechers"));
     seedsLabel = new QLabel("0");
-    seedsLabel->setAccessibleName("Seeds");
+    seedsLabel->setAccessibleName(tr("Seeds"));
     downloadLabel = new QLabel("0 B/s");
-    downloadLabel->setAccessibleName("Download rate");
+    downloadLabel->setAccessibleName(tr("Download rate"));
     uploadLabel = new QLabel("0 B/s");
-    uploadLabel->setAccessibleName("Upload rate");
+    uploadLabel->setAccessibleName(tr("Upload rate"));
     totalUpLabel = new QLabel("0 B");
-    totalUpLabel->setAccessibleName("Total uploaded");
+    totalUpLabel->setAccessibleName(tr("Total uploaded"));
     ratioLabel = new QLabel("0.00");
-    ratioLabel->setAccessibleName("Ratio");
-    grid->addWidget(new QLabel("Status:"), 0, 0);
+    ratioLabel->setAccessibleName(tr("Ratio"));
+    grid->addWidget(new QLabel(tr("Status:")), 0, 0);
     grid->addWidget(statusLabel, 0, 1);
-    grid->addWidget(new QLabel("Peers (leech):"), 0, 2);
+    grid->addWidget(new QLabel(tr("Peers (leech):")), 0, 2);
     grid->addWidget(peersLabel, 0, 3);
-    grid->addWidget(new QLabel("Seeds:"), 1, 0);
+    grid->addWidget(new QLabel(tr("Seeds:")), 1, 0);
     grid->addWidget(seedsLabel, 1, 1);
-    grid->addWidget(new QLabel("Download:"), 1, 2);
+    grid->addWidget(new QLabel(tr("Download:")), 1, 2);
     grid->addWidget(downloadLabel, 1, 3);
-    grid->addWidget(new QLabel("Upload:"), 2, 0);
+    grid->addWidget(new QLabel(tr("Upload:")), 2, 0);
     grid->addWidget(uploadLabel, 2, 1);
-    grid->addWidget(new QLabel("Total Uploaded:"), 2, 2);
+    grid->addWidget(new QLabel(tr("Total Uploaded:")), 2, 2);
     grid->addWidget(totalUpLabel, 2, 3);
     mainLayout->addWidget(statsGroup);
 
-    QLabel* hashCaption = new QLabel("Info Hash: " + Aria2cManager::instance().getInfoHash(torrentId));
+    QLabel* hashCaption = new QLabel(tr("Info Hash: %1").arg(Aria2cManager::instance().getInfoHash(torrentId)));
     hashCaption->setTextInteractionFlags(Qt::TextSelectableByMouse);
     mainLayout->addWidget(hashCaption);
 
     // Peers table
-    QGroupBox* peersGroup = new QGroupBox("Peers");
+    QGroupBox* peersGroup = new QGroupBox(tr("Peers"));
     QVBoxLayout* peersLayout = new QVBoxLayout(peersGroup);
     peerTable = new QTableWidget(0, 6);
-    peerTable->setAccessibleName("Peer list");
-    peerTable->setHorizontalHeaderLabels({"IP", "Port", "Seeder", "Download", "Upload", "Client"});
+    peerTable->setAccessibleName(tr("Peer list"));
+    peerTable->setHorizontalHeaderLabels({tr("IP"), tr("Port"), tr("Seeder"), tr("Download"), tr("Upload"), tr("Client")});
     peerTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     peerTable->verticalHeader()->setVisible(false);
     peerTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -86,7 +86,7 @@ TorrentDetailsDialog::TorrentDetailsDialog(int torrentId, const QString& title, 
     mainLayout->addWidget(peersGroup);
 
     // Trackers
-    QGroupBox* trackersGroup = new QGroupBox("Trackers");
+    QGroupBox* trackersGroup = new QGroupBox(tr("Trackers"));
     QVBoxLayout* trackersLayout = new QVBoxLayout(trackersGroup);
     trackerList = new QListWidget();
     trackerList->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -94,8 +94,8 @@ TorrentDetailsDialog::TorrentDetailsDialog(int torrentId, const QString& title, 
     QHBoxLayout* trackerAddLayout = new QHBoxLayout();
     trackerEdit = new QLineEdit();
     trackerEdit->setPlaceholderText("udp://tracker.example.com:80/announce");
-    addTrackerBtn = new QPushButton("Add Tracker");
-    removeTrackerBtn = new QPushButton("Remove Selected");
+    addTrackerBtn = new QPushButton(tr("Add Tracker"));
+    removeTrackerBtn = new QPushButton(tr("Remove Selected"));
     trackerAddLayout->addWidget(trackerEdit, 1);
     trackerAddLayout->addWidget(addTrackerBtn);
     trackerAddLayout->addWidget(removeTrackerBtn);
@@ -103,16 +103,16 @@ TorrentDetailsDialog::TorrentDetailsDialog(int torrentId, const QString& title, 
     mainLayout->addWidget(trackersGroup);
 
     // Seed control
-    QGroupBox* seedGroup = new QGroupBox("Seeding");
+    QGroupBox* seedGroup = new QGroupBox(tr("Seeding"));
     QHBoxLayout* seedLayout = new QHBoxLayout(seedGroup);
-    seedLayout->addWidget(new QLabel("Seed time:"));
+    seedLayout->addWidget(new QLabel(tr("Seed time:")));
     seedCombo = new QComboBox();
-    seedCombo->addItem("No seeding", -1);
-    seedCombo->addItem("30 minutes", 30);
-    seedCombo->addItem("1 hour", 60);
-    seedCombo->addItem("2 hours", 120);
-    seedCombo->addItem("Seed forever", 0);
-    QPushButton* applySeedBtn = new QPushButton("Apply");
+    seedCombo->addItem(tr("No seeding"), -1);
+    seedCombo->addItem(tr("30 minutes"), 30);
+    seedCombo->addItem(tr("1 hour"), 60);
+    seedCombo->addItem(tr("2 hours"), 120);
+    seedCombo->addItem(tr("Seed forever"), 0);
+    QPushButton* applySeedBtn = new QPushButton(tr("Apply"));
     seedLayout->addWidget(seedCombo);
     seedLayout->addWidget(applySeedBtn);
     seedLayout->addStretch();
@@ -120,7 +120,7 @@ TorrentDetailsDialog::TorrentDetailsDialog(int torrentId, const QString& title, 
 
     QHBoxLayout* closeLayout = new QHBoxLayout();
     closeLayout->addStretch();
-    QPushButton* closeBtn = new QPushButton("Close");
+    QPushButton* closeBtn = new QPushButton(tr("Close"));
     closeBtn->setDefault(true);
     closeLayout->addWidget(closeBtn);
     mainLayout->addLayout(closeLayout);
@@ -153,7 +153,7 @@ void TorrentDetailsDialog::refresh() {
 
 void TorrentDetailsDialog::loadStats() {
     bool running = Aria2cManager::instance().isRunning(torrentId);
-    statusLabel->setText(running ? "Active" : "Idle/Complete");
+    statusLabel->setText(running ? tr("Active") : tr("Idle/Complete"));
 
     qint64 total = Aria2cManager::instance().getTotalBytes(torrentId);
     qint64 down = Aria2cManager::instance().getDownloadedBytes(torrentId);
@@ -185,7 +185,7 @@ void TorrentDetailsDialog::loadPeers() {
         const PeerInfo& p = peers[i];
         peerTable->setItem(i, 0, new QTableWidgetItem(p.ip));
         peerTable->setItem(i, 1, new QTableWidgetItem(QString::number(p.port)));
-        peerTable->setItem(i, 2, new QTableWidgetItem(p.seeder ? "Yes" : "No"));
+        peerTable->setItem(i, 2, new QTableWidgetItem(p.seeder ? tr("Yes") : tr("No")));
         peerTable->setItem(i, 3, new QTableWidgetItem(fmtSpeed(p.downloadSpeed)));
         peerTable->setItem(i, 4, new QTableWidgetItem(fmtSpeed(p.uploadSpeed)));
         peerTable->setItem(i, 5, new QTableWidgetItem(p.peerId.left(24)));

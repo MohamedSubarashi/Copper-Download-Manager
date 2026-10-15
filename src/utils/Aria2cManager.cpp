@@ -151,7 +151,7 @@ void Aria2cManager::installOrUpdate() {
 
     isDownloading = true;
     Logger::instance().info("Installing/updating aria2c...");
-    emit installationProgress("Checking latest version...");
+    emit installationProgress(tr("Checking latest version..."));
 
     // Mirror the yt-dlp flow: query the GitHub API for the latest aria2 release,
     // compare with the installed binary, and only skip the download when the
@@ -178,7 +178,7 @@ void Aria2cManager::installOrUpdate() {
         if (!fromApi) {
 #ifndef PLATFORM_WINDOWS
             Logger::instance().error("aria2c auto-install is only supported on Windows; install it manually");
-            emit installationProgress("aria2c install is Windows-only - install manually");
+            emit installationProgress(tr("aria2c install is Windows-only - install manually"));
             isDownloading = false;
             return;
 #else
@@ -198,14 +198,14 @@ void Aria2cManager::installOrUpdate() {
             Logger::instance().info("aria2c installed=" + (installed.isEmpty() ? QString("unknown") : installed) +
                                     " latest=" + version + (upToDate ? " (skipping download)" : " (update available)"));
             if (upToDate) {
-                emit installationProgress("Already up to date: " + installed);
+                emit installationProgress(tr("Already up to date: %1").arg(installed));
                 isDownloading = false;
                 return;
             }
         }
 
         Logger::instance().info("Downloading aria2c " + version + " from: " + url);
-        emit installationProgress("Downloading aria2c " + version + "...");
+        emit installationProgress(tr("Downloading aria2c %1...").arg(version));
         startDownload(url, fileName);
     });
 }
@@ -403,7 +403,7 @@ void Aria2cManager::startDownload(const QString& url, const QString& fileName) {
     connect(activeReply, &QNetworkReply::downloadProgress, [this](qint64 received, qint64 total) {
         if (total > 0) {
             int pct = (int)((received * 100) / total);
-            emit installationProgress("Downloading: " + QString::number(pct) + "%");
+            emit installationProgress(tr("Downloading: %1%").arg(pct));
         }
     });
 
@@ -415,7 +415,7 @@ void Aria2cManager::startDownload(const QString& url, const QString& fileName) {
 
         if (reply->error() != QNetworkReply::NoError) {
             Logger::instance().error("aria2c download failed: " + reply->errorString());
-            emit installationProgress("Download failed: " + reply->errorString());
+            emit installationProgress(tr("Download failed: %1").arg(reply->errorString()));
             emit errorOccurred(reply->errorString());
             isDownloading = false;
             reply->deleteLater();
@@ -437,7 +437,7 @@ void Aria2cManager::startDownload(const QString& url, const QString& fileName) {
         QString verifyError;
         if (!DependencyVerifier::verifyPinned(QStringLiteral("aria2"), url, data, &verifyError)) {
             Logger::instance().error("aria2c install blocked: " + verifyError);
-            emit installationProgress("Verification failed - install blocked");
+            emit installationProgress(tr("Verification failed - install blocked"));
             emit errorOccurred(verifyError);
             isDownloading = false;
             return;
@@ -449,23 +449,23 @@ void Aria2cManager::startDownload(const QString& url, const QString& fileName) {
 
         QFile zipFile(zipPath);
         if (!zipFile.open(QIODevice::WriteOnly)) {
-            emit installationProgress("Write error");
+            emit installationProgress(tr("Write error"));
             isDownloading = false;
             return;
         }
         zipFile.write(data);
         zipFile.close();
 
-        emit installationProgress("Extracting...");
+        emit installationProgress(tr("Extracting..."));
         bool ok = extractAria2c(zipPath);
         QFile::remove(zipPath);
 
         if (ok && isInstalled()) {
-            emit installationProgress("Installed: " + getVersion());
+            emit installationProgress(tr("Installed: %1").arg(getVersion()));
             Logger::instance().info("aria2c installed successfully");
         } else {
-            emit installationProgress("Installation failed");
-            emit errorOccurred("Installation failed");
+            emit installationProgress(tr("Installation failed"));
+            emit errorOccurred(tr("Installation failed"));
         }
 
         isDownloading = false;
@@ -619,7 +619,7 @@ void Aria2cManager::cleanupStaleDaemon() {
 bool Aria2cManager::startDaemonProcess() {
     if (!isInstalled()) {
         if (!ensureInstalled()) {
-            emit errorOccurred("aria2c could not be installed");
+            emit errorOccurred(tr("aria2c could not be installed"));
             return false;
         }
     }
@@ -708,7 +708,7 @@ bool Aria2cManager::ensureDaemon() {
     m_daemonStarting = true;
     if (!startDaemonProcess()) {
         m_daemonStarting = false;
-        emit errorOccurred("Failed to start aria2c daemon");
+        emit errorOccurred(tr("Failed to start aria2c daemon"));
         return false;
     }
 
@@ -721,7 +721,7 @@ bool Aria2cManager::ensureDaemon() {
             Logger::instance().warning("aria2c daemon exited during startup; restarting");
             if (!startDaemonProcess()) {
                 m_daemonStarting = false;
-                emit errorOccurred("Failed to restart aria2c daemon");
+                emit errorOccurred(tr("Failed to restart aria2c daemon"));
                 return false;
             }
         }
@@ -752,7 +752,7 @@ bool Aria2cManager::ensureDaemon() {
             m_daemonRunning = false;
             if (!startDaemonProcess()) {
                 m_daemonStarting = false;
-                emit errorOccurred("Failed to restart aria2c daemon after Unauthorized");
+                emit errorOccurred(tr("Failed to restart aria2c daemon after Unauthorized"));
                 return false;
             }
             continue;
@@ -775,7 +775,7 @@ bool Aria2cManager::ensureDaemon() {
         m_daemonProcess->deleteLater();
         m_daemonProcess = nullptr;
     }
-    emit errorOccurred("aria2c daemon did not respond");
+    emit errorOccurred(tr("aria2c daemon did not respond"));
     return false;
 }
 
@@ -1453,7 +1453,7 @@ void Aria2cManager::fetchTorrentFiles(const QString& magnetOrFile, std::function
 void Aria2cManager::fetchRemoteTorrentFile(const QString& url, std::function<void(const QVector<PlaylistEntry>&, const TorrentInfo&)> callback) {
     downloadTorrentFile(url, [this, callback, url](const QString& localPath, const QString& err) {
         if (localPath.isEmpty()) {
-            emit errorOccurred(err.isEmpty() ? ("Failed to download .torrent from " + url) : err);
+            emit errorOccurred(err.isEmpty() ? tr("Failed to download .torrent from %1").arg(url) : err);
             callback(QVector<PlaylistEntry>(), TorrentInfo());
             return;
         }
@@ -1627,7 +1627,7 @@ void Aria2cManager::fetchTorrentFileList(const QString& torrentPath, std::functi
             }
             if (errLine.isEmpty()) errLine = "aria2c --show-files exited with code " + QString::number(exitCode);
             Logger::instance().error("Torrent file list parse failed: " + errLine);
-            emit errorOccurred("Failed to parse torrent: " + errLine);
+            emit errorOccurred(tr("Failed to parse torrent: %1").arg(errLine));
             callback(QVector<PlaylistEntry>(), TorrentInfo());
             return;
         }
