@@ -1,0 +1,257 @@
+{
+  "appName": {
+    "message": "Copper Download Manager"
+  },
+  "appDesc": {
+    "message": "Potente interceptor y lanzador de descargas para Copper Download Manager."
+  },
+  "appDescFirefox": {
+    "message": "Potente asistente de descargas para Copper Download Manager: menús contextuales, detección de multimedia, captura de listas de reproducción y un centro de control en vivo."
+  },
+  "tagline": {
+    "message": "Centro de control del navegador"
+  },
+  "checkingInstallation": {
+    "message": "Comprobando la instalación…"
+  },
+  "contactingApp": {
+    "message": "Contactando con Copper Download Manager…"
+  },
+  "downloadsHeading": {
+    "message": "Descargas"
+  },
+  "openCopper": {
+    "message": "Abrir Copper"
+  },
+  "refresh": {
+    "message": "Actualizar"
+  },
+  "recheckTitle": {
+    "message": "Volver a comprobar la aplicación de escritorio"
+  },
+  "appReachable": {
+    "message": "Aplicación accesible"
+  },
+  "noActiveDownloads": {
+    "message": "Aún no hay descargas activas."
+  },
+  "notInstalledHeading": {
+    "message": "Copper no está instalado"
+  },
+  "notInstalledBody": {
+    "message": "Para capturar las descargas de tu navegador, instala la aplicación de escritorio Copper Download Manager y reinicia el navegador."
+  },
+  "downloadCopper": {
+    "message": "Descargar Copper"
+  },
+  "installHint": {
+    "message": "Después de instalarla, abre la aplicación una vez para que registre el protocolo copper:// y, a continuación, recarga esta página."
+  },
+  "checkAgain": {
+    "message": "Comprobar de nuevo"
+  },
+  "settingsHeading": {
+    "message": "Ajustes"
+  },
+  "captureDownloadsLabel": {
+    "message": "Capturar descargas"
+  },
+  "captureDownloadsDesc": {
+    "message": "Enviar automáticamente a Copper las descargas del propio navegador."
+  },
+  "mediaBarLabel": {
+    "message": "Barra de detección de multimedia"
+  },
+  "mediaBarDesc": {
+    "message": "Mostrar la barra flotante de descargas en las páginas con multimedia."
+  },
+  "contextMenusLabel": {
+    "message": "Menús contextuales"
+  },
+  "contextMenusDesc": {
+    "message": "Entradas del menú contextual para enlaces, multimedia, selecciones y listas de reproducción."
+  },
+  "notifyOnFailLabel": {
+    "message": "Notificar si hay errores"
+  },
+  "notifyOnFailDesc": {
+    "message": "Mostrar una notificación del sistema cuando no se pueda enviar una descarga."
+  },
+  "defaultFormatLabel": {
+    "message": "Formato predeterminado"
+  },
+  "defaultFormatDesc": {
+    "message": "Formato que se usa cuando no se elige ninguno concreto."
+  },
+  "formatMp4": {
+    "message": "MP4 (vídeo)"
+  },
+  "formatMp3": {
+    "message": "MP3 (audio)"
+  },
+  "formatOriginal": {
+    "message": "Original"
+  },
+  "saveSettings": {
+    "message": "Guardar ajustes"
+  },
+  "toggleTitle": {
+    "message": "Activar o desactivar la captura del navegador"
+  },
+  "appNotReachable": {
+    "message": "no se puede acceder a la aplicación"
+  },
+  "notResponding": {
+    "message": "Copper está en ejecución, pero no responde."
+  },
+  "downloadFallback": {
+    "message": "descarga"
+  },
+  "noDownloadsYet": {
+    "message": "Aún no hay descargas. Usa el menú contextual o la barra de multimedia para enviar archivos a Copper."
+  },
+  "downloadsCount": {
+    "message": "$1 descarga(s)"
+  },
+  "noDownloadsCount": {
+    "message": "aún no hay descargas"
+  },
+  "viaFormat": {
+    "message": "vía $1"
+  },
+  "saved": {
+    "message": "Guardado"
+  },
+  "turnOffCapture": {
+    "message": "Desactivar captura"
+  },
+  "turnOnCapture": {
+    "message": "Activar captura"
+  },
+  "captureOn": {
+    "message": "Captura del navegador: activada"
+  },
+  "captureOff": {
+    "message": "Captura del navegador: desactivada"
+  },
+  "downloadWithCopper": {
+    "message": "Descargar con Copper"
+  },
+  "rescanPage": {
+    "message": "Volver a analizar esta página"
+  },
+  "hide": {
+    "message": "Ocultar"
+  },
+  "sending": {
+    "message": "Enviando…"
+  },
+  "sent": {
+    "message": "Enviado ✓"
+  },
+  "copperOffFailed": {
+    "message": "Copper desactivado / error"
+  },
+  "copy": {
+    "message": "Copiar"
+  },
+  "copyMediaLink": {
+    "message": "Copiar enlace del archivo multimedia"
+  },
+  "copied": {
+    "message": "Copiado ✓"
+  },
+  "downloadAsMp4": {
+    "message": "Descargar como MP4"
+  },
+  "downloadAudioFile": {
+    "message": "Descargar el archivo de audio"
+  },
+  "extractMp3": {
+    "message": "Extraer audio MP3 (requiere FFmpeg)"
+  },
+  "playlistDetected": {
+    "message": "Lista de reproducción detectada"
+  },
+  "playlistMp4Title": {
+    "message": "Descargar toda la lista de reproducción como vídeo (MP4)"
+  },
+  "playlistMp3Title": {
+    "message": "Descargar toda la lista de reproducción como audio (MP3)"
+  },
+  "moreMediaOne": {
+    "message": "+$1 archivo multimedia más"
+  },
+  "moreMediaMany": {
+    "message": "+$1 archivos multimedia más"
+  },
+  "downloadAllMedia": {
+    "message": "Descargar todos los archivos multimedia de la página ($1)"
+  },
+  "sendAllMediaTitle": {
+    "message": "Enviar todos los archivos multimedia detectados a Copper Download Manager"
+  },
+  "sentToCopper": {
+    "message": "Enviado a Copper ✓"
+  },
+  "fallbackYoutubePlaylist": {
+    "message": "Lista de reproducción de YouTube"
+  },
+  "fallbackSoundcloudSet": {
+    "message": "Set de SoundCloud"
+  },
+  "fallbackSpotifyPlaylist": {
+    "message": "Lista de reproducción de Spotify"
+  },
+  "fallbackAppleMusicPlaylist": {
+    "message": "Lista de reproducción de Apple Music"
+  },
+  "fallbackPageVideo": {
+    "message": "vídeo de la página"
+  },
+  "notifyTitle": {
+    "message": "No se ha podido añadir la descarga de Copper"
+  },
+  "notifyUnreachable": {
+    "message": "No se ha podido contactar con Copper Download Manager. Abre Copper e inténtalo de nuevo."
+  },
+  "notifyRejected": {
+    "message": "Copper ha rechazado la descarga: $1"
+  },
+  "menuLink": {
+    "message": "Descargar enlace con Copper"
+  },
+  "menuImage": {
+    "message": "Descargar imagen con Copper"
+  },
+  "menuVideo": {
+    "message": "Descargar vídeo con Copper"
+  },
+  "menuAudio": {
+    "message": "Descargar audio con Copper"
+  },
+  "menuSelectionMp4": {
+    "message": "Descargar selección como MP4 con Copper"
+  },
+  "menuSelectionMp3": {
+    "message": "Descargar selección como MP3 con Copper"
+  },
+  "menuPageMedia": {
+    "message": "Descargar todos los archivos multimedia de esta página con Copper"
+  },
+  "menuMagnet": {
+    "message": "Enviar enlace magnet a Copper"
+  },
+  "menuPlaylistMp4": {
+    "message": "Descargar la lista de reproducción completa como MP4"
+  },
+  "menuPlaylistMp3": {
+    "message": "Descargar la lista de reproducción completa como MP3"
+  },
+  "detailNoMedia": {
+    "message": "no se encontraron medios en esta página"
+  },
+  "fallbackFullPlaylist": {
+    "message": "Lista de reproducción completa"
+  }
+}

@@ -25,6 +25,15 @@ const HTTP_TIMEOUT = 3000;
 const REGISTER_TIMEOUT = 60000;
 const LAUNCH_RETRY_MS = 1500;
 
+// Localised string lookup for context menus and notifications.
+function msg(key, subs) {
+  try {
+    return chrome.i18n.getMessage(key, subs) || key;
+  } catch (e) {
+    return key;
+  }
+}
+
 const DEFAULT_SETTINGS = {
   autoCapture: true,    // intercept the browser's own downloads and hand to Copper
   showBar: true,        // float the media detection bar on http(s) pages
@@ -317,11 +326,10 @@ function dispatchBatch(urls, filenamePrefix = "", format = settings.defaultForma
 }
 
 function notifyDispatchFailed(result) {
-  const title = "Copper download could not be added";
-  let message =
-    "Copper Download Manager could not be reached. Please open Copper and try again.";
+  const title = msg("notifyTitle");
+  let message = msg("notifyUnreachable");
   if (result && result.detail) {
-    message = "Copper rejected the download: " + result.detail;
+    message = msg("notifyRejected", [result.detail]);
   }
   try {
     chrome.notifications.create({
@@ -422,16 +430,16 @@ chrome.downloads.onCreated.addListener((item) => {
 // chain so removeAll always completes before the next create, and read lastError
 // in each create callback so a failure is never an unchecked runtime.lastError.
 const MENU_DEFS = [
-  { id: "copper-link", title: "Download link with Copper", contexts: ["link"] },
-  { id: "copper-image", title: "Download image with Copper", contexts: ["image"] },
-  { id: "copper-video", title: "Download video with Copper", contexts: ["video"] },
-  { id: "copper-audio", title: "Download audio with Copper", contexts: ["audio"] },
-  { id: "copper-selection-video", title: "Download selection as MP4 with Copper", contexts: ["selection"] },
-  { id: "copper-selection-mp3", title: "Download selection as MP3 with Copper", contexts: ["selection"] },
-  { id: "copper-page-media", title: "Download all media on this page with Copper", contexts: ["page"] },
-  { id: "copper-magnet", title: "Send magnet link to Copper", contexts: ["link"] },
-  { id: "copper-playlist-mp4", title: "Download full playlist as MP4", contexts: ["page", "link"] },
-  { id: "copper-playlist-mp3", title: "Download full playlist as MP3", contexts: ["page", "link"] },
+  { id: "copper-link", title: msg("menuLink"), contexts: ["link"] },
+  { id: "copper-image", title: msg("menuImage"), contexts: ["image"] },
+  { id: "copper-video", title: msg("menuVideo"), contexts: ["video"] },
+  { id: "copper-audio", title: msg("menuAudio"), contexts: ["audio"] },
+  { id: "copper-selection-video", title: msg("menuSelectionMp4"), contexts: ["selection"] },
+  { id: "copper-selection-mp3", title: msg("menuSelectionMp3"), contexts: ["selection"] },
+  { id: "copper-page-media", title: msg("menuPageMedia"), contexts: ["page"] },
+  { id: "copper-magnet", title: msg("menuMagnet"), contexts: ["link"] },
+  { id: "copper-playlist-mp4", title: msg("menuPlaylistMp4"), contexts: ["page", "link"] },
+  { id: "copper-playlist-mp3", title: msg("menuPlaylistMp3"), contexts: ["page", "link"] },
 ];
 
 let menusBuildChain = Promise.resolve();
@@ -503,7 +511,7 @@ chrome.contextMenus.onClicked.addListener((info) => {
         if (list && list.length > 0) {
           dispatchBatch(list, "page-media", settings.defaultFormat);
         } else {
-          notifyDispatchFailed({ detail: "no media found on this page" });
+          notifyDispatchFailed({ detail: msg("detailNoMedia") });
         }
       });
       return;
@@ -511,7 +519,7 @@ chrome.contextMenus.onClicked.addListener((info) => {
     if (info.menuItemId === "copper-playlist-mp4" || info.menuItemId === "copper-playlist-mp3") {
       const url = info.linkUrl || info.pageUrl;
       if (url) {
-        dispatch(url, "Full Playlist", "", info.menuItemId === "copper-playlist-mp3" ? "playlist-mp3" : "playlist-mp4");
+        dispatch(url, msg("fallbackFullPlaylist"), "", info.menuItemId === "copper-playlist-mp3" ? "playlist-mp3" : "playlist-mp4");
       }
       return;
     }

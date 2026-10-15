@@ -6,6 +6,42 @@
 
 const $ = (id) => document.getElementById(id);
 
+// Localisation: strings live in _locales/<lang>/messages.json and are read
+// through the extension i18n API.
+function t(key, subs) {
+  try {
+    return chrome.i18n.getMessage(key, subs) || "";
+  } catch (e) {
+    return "";
+  }
+}
+
+// Like t(), but falls back to the key so a value is always returned.
+function msg(key, subs) {
+  return t(key, subs) || key;
+}
+
+// Replace every [data-i18n] / [data-i18n-title] element with its localized
+// text (leaving the built-in English when a message is missing) and switch the
+// document to RTL for right-to-left languages.
+function localize() {
+  let uiLang = "en";
+  try {
+    uiLang = chrome.i18n.getUILanguage() || "en";
+  } catch (e) { /* keep en */ }
+  const base = uiLang.split("-")[0].toLowerCase();
+  document.documentElement.lang = base;
+  if (base === "ar") document.documentElement.dir = "rtl";
+  for (const el of document.querySelectorAll("[data-i18n]")) {
+    const text = t(el.getAttribute("data-i18n"));
+    if (text) el.textContent = text;
+  }
+  for (const el of document.querySelectorAll("[data-i18n-title]")) {
+    const text = t(el.getAttribute("data-i18n-title"));
+    if (text) el.title = text;
+  }
+}
+
 const HTTP_API = "http://127.0.0.1:24680";
 const POLL_MS = 2000;
 let pollTimer = null;
@@ -98,22 +134,24 @@ async function refreshDownloads() {
   const data = await httpApi("/api/downloads");
   const list = $("dl-list");
   if (!data || !Array.isArray(data.downloads)) {
-    $("dl-count").textContent = "app is not reachable";
+    $("dl-count").textContent = msg("appNotReachable");
     list.textContent = "";
     const li = document.createElement("li");
     li.className = "dl-empty";
-    li.textContent = "Copper is running but not responding.";
+    li.textContent = msg("notResponding");
     list.appendChild(li);
     return;
   }
   const items = data.downloads || [];
-  $("dl-count").textContent = items.length ? `${items.length} download(s)` : "no downloads yet";
+  $("dl-count").textContent = items.length
+    ? msg("downloadsCount", [String(items.length)])
+    : msg("noDownloadsCount");
   list.textContent = "";
 
   if (items.length === 0) {
     const li = document.createElement("li");
     li.className = "dl-empty";
-    li.textContent = "No downloads yet. Use the right-click menu or the media bar to send files to Copper.";
+    li.textContent = msg("noDownloadsYet");
     list.appendChild(li);
     return;
   }
@@ -126,7 +164,7 @@ async function refreshDownloads() {
     head.className = "dl-head";
     const name = document.createElement("span");
     name.className = "dl-name";
-    name.textContent = d.fileName || d.url || "download";
+    name.textContent = d.fileName || d.url || msg("downloadFallback");
     name.title = d.url || "";
     const badge = document.createElement("span");
     badge.className = "dl-badge " + statusBadgeClass(d.status);
@@ -148,7 +186,7 @@ async function refreshDownloads() {
       pct.toFixed(1) + "%",
       fmtSpeed(d.speed),
       fmtSize(d.downloadedSize) + " / " + fmtSize(d.totalSize),
-      d.type ? "via " + d.type : "",
+      d.type ? msg("viaFormat", [d.type]) : "",
     ].filter(Boolean).join(" · ");
 
     li.appendChild(head);
@@ -200,7 +238,7 @@ $("btn-save").addEventListener("click", async () => {
   };
   await sendMessage({ action: "setSettings", settings: next });
   const saved = $("save-state");
-  saved.textContent = "Saved";
+  saved.textContent = msg("saved");
   setTimeout(() => { saved.textContent = ""; }, 1500);
 });
 
@@ -209,8 +247,8 @@ $("btn-save").addEventListener("click", async () => {
 // ---------------------------------------------------------------------------
 
 function renderToggle(enabled) {
-  $("btn-toggle").textContent = enabled ? "Turn Off Capture" : "Turn On Capture";
-  $("toggle-label").textContent = enabled ? "Browser capture: on" : "Browser capture: off";
+  $("btn-toggle").textContent = enabled ? msg("turnOffCapture") : msg("turnOnCapture");
+  $("toggle-label").textContent = enabled ? msg("captureOn") : msg("captureOff");
 }
 
 $("btn-toggle").addEventListener("click", async () => {
@@ -255,4 +293,5 @@ async function refresh() {
   }
 }
 
+localize();
 refresh();

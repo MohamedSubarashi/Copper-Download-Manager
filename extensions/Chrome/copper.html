@@ -11,104 +11,104 @@
     <header class="brand">
       <img src="icons/icon128.png" alt="" class="logo">
       <h1>Copper Download Manager</h1>
-      <p class="tagline">Browser command center</p>
+      <p class="tagline" data-i18n="tagline">Browser command center</p>
     </header>
 
     <!-- Unknown / probing -->
     <section id="status-unknown" class="panel" hidden>
-      <h2>Checking installation&hellip;</h2>
-      <p>Contacting Copper Download Manager&hellip;</p>
+      <h2 data-i18n="checkingInstallation">Checking installation&hellip;</h2>
+      <p data-i18n="contactingApp">Contacting Copper Download Manager&hellip;</p>
     </section>
 
     <!-- App reachable: live manager -->
     <section id="status-ready" class="panel" hidden>
       <div class="row-between">
-        <h2>Downloads</h2>
+        <h2 data-i18n="downloadsHeading">Downloads</h2>
         <div class="actions">
-          <button id="btn-open" class="primary">Open Copper</button>
-          <button id="btn-recheck" title="Re-check the desktop app">Refresh</button>
+          <button id="btn-open" class="primary" data-i18n="openCopper">Open Copper</button>
+          <button id="btn-recheck" data-i18n="refresh" data-i18n-title="recheckTitle" title="Re-check the desktop app">Refresh</button>
         </div>
       </div>
       <div id="dl-header" class="dl-meta">
-        <span>App reachable</span> <span id="dl-count"></span>
+        <span data-i18n="appReachable">App reachable</span> <span id="dl-count"></span>
       </div>
       <ul id="dl-list" class="dl-list">
-        <li class="dl-empty">No active downloads yet.</li>
+        <li class="dl-empty" data-i18n="noActiveDownloads">No active downloads yet.</li>
       </ul>
     </section>
 
     <!-- Not installed -->
     <section id="status-not-installed" class="panel" hidden>
-      <h2><span class="warn">&#9888;</span> Copper isn&rsquo;t installed</h2>
-      <p>
+      <h2><span class="warn">&#9888;</span> <span data-i18n="notInstalledHeading">Copper isn&rsquo;t installed</span></h2>
+      <p data-i18n="notInstalledBody">
         To capture downloads from your browser, install the Copper Download Manager desktop app,
         then restart your browser.
       </p>
       <div class="actions">
-        <a id="btn-download" class="primary" href="https://github.com/MohamedSubarashi/Copper-Download-Manager/releases" target="_blank" rel="noopener">Download Copper</a>
+        <a id="btn-download" class="primary" href="https://github.com/MohamedSubarashi/Copper-Download-Manager/releases" target="_blank" rel="noopener" data-i18n="downloadCopper">Download Copper</a>
       </div>
-      <p class="hint">After installing, open the app once so it can register the copper:// protocol, then reload this page.</p>
+      <p class="hint" data-i18n="installHint">After installing, open the app once so it can register the copper:// protocol, then reload this page.</p>
       <div class="actions">
-        <button id="btn-recheck2">Check again</button>
+        <button id="btn-recheck2" data-i18n="checkAgain">Check again</button>
       </div>
     </section>
 
     <!-- Settings -->
     <section id="settings-panel" class="panel" hidden>
-      <h2>Settings</h2>
+      <h2 data-i18n="settingsHeading">Settings</h2>
 
       <div class="setting">
         <div class="setting-text">
-          <strong>Capture downloads</strong>
-          <p>Hand the browser's own downloads to Copper automatically.</p>
+          <strong data-i18n="captureDownloadsLabel">Capture downloads</strong>
+          <p data-i18n="captureDownloadsDesc">Hand the browser's own downloads to Copper automatically.</p>
         </div>
         <input type="checkbox" id="set-autoCapture" class="switch">
       </div>
 
       <div class="setting">
         <div class="setting-text">
-          <strong>Media detection bar</strong>
-          <p>Show the floating download bar on pages with media.</p>
+          <strong data-i18n="mediaBarLabel">Media detection bar</strong>
+          <p data-i18n="mediaBarDesc">Show the floating download bar on pages with media.</p>
         </div>
         <input type="checkbox" id="set-showBar" class="switch">
       </div>
 
       <div class="setting">
         <div class="setting-text">
-          <strong>Context menus</strong>
-          <p>Right-click entries for links, media, selections and playlists.</p>
+          <strong data-i18n="contextMenusLabel">Context menus</strong>
+          <p data-i18n="contextMenusDesc">Right-click entries for links, media, selections and playlists.</p>
         </div>
         <input type="checkbox" id="set-contextMenus" class="switch">
       </div>
 
       <div class="setting">
         <div class="setting-text">
-          <strong>Notify on failure</strong>
-          <p>Show a system notification when a download can't be handed off.</p>
+          <strong data-i18n="notifyOnFailLabel">Notify on failure</strong>
+          <p data-i18n="notifyOnFailDesc">Show a system notification when a download can't be handed off.</p>
         </div>
         <input type="checkbox" id="set-notifyOnFail" class="switch">
       </div>
 
       <div class="setting">
         <div class="setting-text">
-          <strong>Default format</strong>
-          <p>Format used when no specific one is chosen.</p>
+          <strong data-i18n="defaultFormatLabel">Default format</strong>
+          <p data-i18n="defaultFormatDesc">Format used when no specific one is chosen.</p>
         </div>
         <select id="set-defaultFormat">
-          <option value="mp4">MP4 (video)</option>
-          <option value="mp3">MP3 (audio)</option>
-          <option value="">Original</option>
+          <option value="mp4" data-i18n="formatMp4">MP4 (video)</option>
+          <option value="mp3" data-i18n="formatMp3">MP3 (audio)</option>
+          <option value="" data-i18n="formatOriginal">Original</option>
         </select>
       </div>
 
       <div class="actions">
-        <button id="btn-save" class="primary">Save Settings</button>
+        <button id="btn-save" class="primary" data-i18n="saveSettings">Save Settings</button>
         <span id="save-state" class="muted"></span>
       </div>
     </section>
 
     <footer class="foot">
-      <button id="btn-toggle" title="Enable or disable browser capture"></button>
+      <button id="btn-toggle" data-i18n-title="toggleTitle" title="Enable or disable browser capture"></button>
       <span id="toggle-label"></span>
     </footer>
   </main>

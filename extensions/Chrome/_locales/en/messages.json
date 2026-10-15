@@ -1,0 +1,257 @@
+{
+  "appName": {
+    "message": "Copper Download Manager"
+  },
+  "appDesc": {
+    "message": "Powerful download interceptor and launcher for Copper Download Manager."
+  },
+  "appDescFirefox": {
+    "message": "Powerful download assistant for Copper Download Manager: context menus, media detection, playlist capture and a live command center."
+  },
+  "tagline": {
+    "message": "Browser command center"
+  },
+  "checkingInstallation": {
+    "message": "Checking installation…"
+  },
+  "contactingApp": {
+    "message": "Contacting Copper Download Manager…"
+  },
+  "downloadsHeading": {
+    "message": "Downloads"
+  },
+  "openCopper": {
+    "message": "Open Copper"
+  },
+  "refresh": {
+    "message": "Refresh"
+  },
+  "recheckTitle": {
+    "message": "Re-check the desktop app"
+  },
+  "appReachable": {
+    "message": "App reachable"
+  },
+  "noActiveDownloads": {
+    "message": "No active downloads yet."
+  },
+  "notInstalledHeading": {
+    "message": "Copper isn’t installed"
+  },
+  "notInstalledBody": {
+    "message": "To capture downloads from your browser, install the Copper Download Manager desktop app, then restart your browser."
+  },
+  "downloadCopper": {
+    "message": "Download Copper"
+  },
+  "installHint": {
+    "message": "After installing, open the app once so it can register the copper:// protocol, then reload this page."
+  },
+  "checkAgain": {
+    "message": "Check again"
+  },
+  "settingsHeading": {
+    "message": "Settings"
+  },
+  "captureDownloadsLabel": {
+    "message": "Capture downloads"
+  },
+  "captureDownloadsDesc": {
+    "message": "Hand the browser’s own downloads to Copper automatically."
+  },
+  "mediaBarLabel": {
+    "message": "Media detection bar"
+  },
+  "mediaBarDesc": {
+    "message": "Show the floating download bar on pages with media."
+  },
+  "contextMenusLabel": {
+    "message": "Context menus"
+  },
+  "contextMenusDesc": {
+    "message": "Right-click entries for links, media, selections and playlists."
+  },
+  "notifyOnFailLabel": {
+    "message": "Notify on failure"
+  },
+  "notifyOnFailDesc": {
+    "message": "Show a system notification when a download can’t be handed off."
+  },
+  "defaultFormatLabel": {
+    "message": "Default format"
+  },
+  "defaultFormatDesc": {
+    "message": "Format used when no specific one is chosen."
+  },
+  "formatMp4": {
+    "message": "MP4 (video)"
+  },
+  "formatMp3": {
+    "message": "MP3 (audio)"
+  },
+  "formatOriginal": {
+    "message": "Original"
+  },
+  "saveSettings": {
+    "message": "Save Settings"
+  },
+  "toggleTitle": {
+    "message": "Enable or disable browser capture"
+  },
+  "appNotReachable": {
+    "message": "app is not reachable"
+  },
+  "notResponding": {
+    "message": "Copper is running but not responding."
+  },
+  "downloadFallback": {
+    "message": "download"
+  },
+  "noDownloadsYet": {
+    "message": "No downloads yet. Use the right-click menu or the media bar to send files to Copper."
+  },
+  "downloadsCount": {
+    "message": "$1 download(s)"
+  },
+  "noDownloadsCount": {
+    "message": "no downloads yet"
+  },
+  "viaFormat": {
+    "message": "via $1"
+  },
+  "saved": {
+    "message": "Saved"
+  },
+  "turnOffCapture": {
+    "message": "Turn Off Capture"
+  },
+  "turnOnCapture": {
+    "message": "Turn On Capture"
+  },
+  "captureOn": {
+    "message": "Browser capture: on"
+  },
+  "captureOff": {
+    "message": "Browser capture: off"
+  },
+  "downloadWithCopper": {
+    "message": "Download with Copper"
+  },
+  "rescanPage": {
+    "message": "Re-scan this page"
+  },
+  "hide": {
+    "message": "Hide"
+  },
+  "sending": {
+    "message": "Sending…"
+  },
+  "sent": {
+    "message": "Sent ✓"
+  },
+  "copperOffFailed": {
+    "message": "Copper off / failed"
+  },
+  "copy": {
+    "message": "Copy"
+  },
+  "copyMediaLink": {
+    "message": "Copy media link"
+  },
+  "copied": {
+    "message": "Copied ✓"
+  },
+  "downloadAsMp4": {
+    "message": "Download as MP4"
+  },
+  "downloadAudioFile": {
+    "message": "Download the audio file"
+  },
+  "extractMp3": {
+    "message": "Extract MP3 audio (requires FFmpeg)"
+  },
+  "playlistDetected": {
+    "message": "Playlist Detected"
+  },
+  "playlistMp4Title": {
+    "message": "Download entire playlist as video (MP4)"
+  },
+  "playlistMp3Title": {
+    "message": "Download entire playlist as audio (MP3)"
+  },
+  "moreMediaOne": {
+    "message": "+$1 more media file"
+  },
+  "moreMediaMany": {
+    "message": "+$1 more media files"
+  },
+  "downloadAllMedia": {
+    "message": "Download all page media ($1)"
+  },
+  "sendAllMediaTitle": {
+    "message": "Send every detected media file to Copper Download Manager"
+  },
+  "sentToCopper": {
+    "message": "Sent to Copper ✓"
+  },
+  "fallbackYoutubePlaylist": {
+    "message": "YouTube Playlist"
+  },
+  "fallbackSoundcloudSet": {
+    "message": "SoundCloud Set"
+  },
+  "fallbackSpotifyPlaylist": {
+    "message": "Spotify Playlist"
+  },
+  "fallbackAppleMusicPlaylist": {
+    "message": "Apple Music Playlist"
+  },
+  "fallbackPageVideo": {
+    "message": "page video"
+  },
+  "notifyTitle": {
+    "message": "Copper download could not be added"
+  },
+  "notifyUnreachable": {
+    "message": "Copper Download Manager could not be reached. Please open Copper and try again."
+  },
+  "notifyRejected": {
+    "message": "Copper rejected the download: $1"
+  },
+  "menuLink": {
+    "message": "Download link with Copper"
+  },
+  "menuImage": {
+    "message": "Download image with Copper"
+  },
+  "menuVideo": {
+    "message": "Download video with Copper"
+  },
+  "menuAudio": {
+    "message": "Download audio with Copper"
+  },
+  "menuSelectionMp4": {
+    "message": "Download selection as MP4 with Copper"
+  },
+  "menuSelectionMp3": {
+    "message": "Download selection as MP3 with Copper"
+  },
+  "menuPageMedia": {
+    "message": "Download all media on this page with Copper"
+  },
+  "menuMagnet": {
+    "message": "Send magnet link to Copper"
+  },
+  "menuPlaylistMp4": {
+    "message": "Download full playlist as MP4"
+  },
+  "menuPlaylistMp3": {
+    "message": "Download full playlist as MP3"
+  },
+  "detailNoMedia": {
+    "message": "no media found on this page"
+  },
+  "fallbackFullPlaylist": {
+    "message": "Full Playlist"
+  }
+}

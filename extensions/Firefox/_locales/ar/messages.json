@@ -1,0 +1,257 @@
+{
+  "appName": {
+    "message": "Copper Download Manager"
+  },
+  "appDesc": {
+    "message": "أداة اعتراض وتشغيل تنزيلات قوية لـ Copper Download Manager."
+  },
+  "appDescFirefox": {
+    "message": "مساعد تنزيل قوي لـ Copper Download Manager: قوائم السياق، وكشف الوسائط، والتقاط قوائم التشغيل، ومركز قيادة مباشر."
+  },
+  "tagline": {
+    "message": "مركز قيادة المتصفح"
+  },
+  "checkingInstallation": {
+    "message": "جارٍ التحقق من التثبيت…"
+  },
+  "contactingApp": {
+    "message": "جارٍ الاتصال بـ Copper Download Manager…"
+  },
+  "downloadsHeading": {
+    "message": "التنزيلات"
+  },
+  "openCopper": {
+    "message": "فتح Copper"
+  },
+  "refresh": {
+    "message": "تحديث"
+  },
+  "recheckTitle": {
+    "message": "إعادة التحقق من تطبيق سطح المكتب"
+  },
+  "appReachable": {
+    "message": "التطبيق متاح"
+  },
+  "noActiveDownloads": {
+    "message": "لا توجد تنزيلات نشطة بعد."
+  },
+  "notInstalledHeading": {
+    "message": "لم يتم تثبيت Copper"
+  },
+  "notInstalledBody": {
+    "message": "لالتقاط التنزيلات من متصفحك، ثبِّت تطبيق Copper Download Manager لسطح المكتب، ثم أعد تشغيل المتصفح."
+  },
+  "downloadCopper": {
+    "message": "تنزيل Copper"
+  },
+  "installHint": {
+    "message": "بعد التثبيت، افتح التطبيق مرة واحدة كي يسجِّل بروتوكول copper://، ثم أعد تحميل هذه الصفحة."
+  },
+  "checkAgain": {
+    "message": "التحقق مرة أخرى"
+  },
+  "settingsHeading": {
+    "message": "الإعدادات"
+  },
+  "captureDownloadsLabel": {
+    "message": "التقاط التنزيلات"
+  },
+  "captureDownloadsDesc": {
+    "message": "تسليم تنزيلات المتصفح نفسه إلى Copper تلقائيًا."
+  },
+  "mediaBarLabel": {
+    "message": "شريط كشف الوسائط"
+  },
+  "mediaBarDesc": {
+    "message": "إظهار شريط التنزيل العائم في الصفحات التي تحتوي على وسائط."
+  },
+  "contextMenusLabel": {
+    "message": "قوائم السياق"
+  },
+  "contextMenusDesc": {
+    "message": "خيارات النقر بزر الفأرة الأيمن للروابط والوسائط والتحديدات وقوائم التشغيل."
+  },
+  "notifyOnFailLabel": {
+    "message": "الإشعار عند الفشل"
+  },
+  "notifyOnFailDesc": {
+    "message": "إظهار إشعار من النظام عندما يتعذَّر تسليم التنزيل."
+  },
+  "defaultFormatLabel": {
+    "message": "التنسيق الافتراضي"
+  },
+  "defaultFormatDesc": {
+    "message": "التنسيق المستخدَم عند عدم اختيار تنسيق محدَّد."
+  },
+  "formatMp4": {
+    "message": "MP4 (فيديو)"
+  },
+  "formatMp3": {
+    "message": "MP3 (صوت)"
+  },
+  "formatOriginal": {
+    "message": "الأصلي"
+  },
+  "saveSettings": {
+    "message": "حفظ الإعدادات"
+  },
+  "toggleTitle": {
+    "message": "تمكين التقاط المتصفح أو تعطيله"
+  },
+  "appNotReachable": {
+    "message": "التطبيق غير متاح"
+  },
+  "notResponding": {
+    "message": "Copper قيد التشغيل لكنه لا يستجيب."
+  },
+  "downloadFallback": {
+    "message": "تنزيل"
+  },
+  "noDownloadsYet": {
+    "message": "لا توجد تنزيلات بعد. استخدم قائمة النقر بزر الفأرة الأيمن أو شريط الوسائط لإرسال الملفات إلى Copper."
+  },
+  "downloadsCount": {
+    "message": "$1 من التنزيلات"
+  },
+  "noDownloadsCount": {
+    "message": "لا توجد تنزيلات بعد"
+  },
+  "viaFormat": {
+    "message": "عبر $1"
+  },
+  "saved": {
+    "message": "تم الحفظ"
+  },
+  "turnOffCapture": {
+    "message": "إيقاف الالتقاط"
+  },
+  "turnOnCapture": {
+    "message": "تشغيل الالتقاط"
+  },
+  "captureOn": {
+    "message": "التقاط المتصفح: مفعَّل"
+  },
+  "captureOff": {
+    "message": "التقاط المتصفح: معطَّل"
+  },
+  "downloadWithCopper": {
+    "message": "التنزيل بواسطة Copper"
+  },
+  "rescanPage": {
+    "message": "إعادة فحص هذه الصفحة"
+  },
+  "hide": {
+    "message": "إخفاء"
+  },
+  "sending": {
+    "message": "جارٍ الإرسال…"
+  },
+  "sent": {
+    "message": "تم الإرسال ✓"
+  },
+  "copperOffFailed": {
+    "message": "Copper مغلق / فشل"
+  },
+  "copy": {
+    "message": "نسخ"
+  },
+  "copyMediaLink": {
+    "message": "نسخ رابط الوسائط"
+  },
+  "copied": {
+    "message": "تم النسخ ✓"
+  },
+  "downloadAsMp4": {
+    "message": "التنزيل بصيغة MP4"
+  },
+  "downloadAudioFile": {
+    "message": "تنزيل الملف الصوتي"
+  },
+  "extractMp3": {
+    "message": "استخراج صوت MP3 (يتطلب FFmpeg)"
+  },
+  "playlistDetected": {
+    "message": "تم كشف قائمة تشغيل"
+  },
+  "playlistMp4Title": {
+    "message": "تنزيل قائمة التشغيل كاملة كفيديو (MP4)"
+  },
+  "playlistMp3Title": {
+    "message": "تنزيل قائمة التشغيل كاملة كصوت (MP3)"
+  },
+  "moreMediaOne": {
+    "message": "+$1 ملف وسائط إضافي"
+  },
+  "moreMediaMany": {
+    "message": "+$1 ملفات وسائط إضافية"
+  },
+  "downloadAllMedia": {
+    "message": "تنزيل كل وسائط الصفحة ($1)"
+  },
+  "sendAllMediaTitle": {
+    "message": "إرسال كل ملف وسائط مكتشَف إلى Copper Download Manager"
+  },
+  "sentToCopper": {
+    "message": "تم الإرسال إلى Copper ✓"
+  },
+  "fallbackYoutubePlaylist": {
+    "message": "قائمة تشغيل YouTube"
+  },
+  "fallbackSoundcloudSet": {
+    "message": "مجموعة SoundCloud"
+  },
+  "fallbackSpotifyPlaylist": {
+    "message": "قائمة تشغيل Spotify"
+  },
+  "fallbackAppleMusicPlaylist": {
+    "message": "قائمة تشغيل Apple Music"
+  },
+  "fallbackPageVideo": {
+    "message": "فيديو الصفحة"
+  },
+  "notifyTitle": {
+    "message": "تعذَّر إضافة تنزيل Copper"
+  },
+  "notifyUnreachable": {
+    "message": "تعذَّر الوصول إلى Copper Download Manager. يرجى فتح Copper والمحاولة مرة أخرى."
+  },
+  "notifyRejected": {
+    "message": "رفض Copper التنزيل: $1"
+  },
+  "menuLink": {
+    "message": "تنزيل الرابط بواسطة Copper"
+  },
+  "menuImage": {
+    "message": "تنزيل الصورة بواسطة Copper"
+  },
+  "menuVideo": {
+    "message": "تنزيل الفيديو بواسطة Copper"
+  },
+  "menuAudio": {
+    "message": "تنزيل الصوت بواسطة Copper"
+  },
+  "menuSelectionMp4": {
+    "message": "تنزيل التحديد بصيغة MP4 بواسطة Copper"
+  },
+  "menuSelectionMp3": {
+    "message": "تنزيل التحديد بصيغة MP3 بواسطة Copper"
+  },
+  "menuPageMedia": {
+    "message": "تنزيل كل الوسائط في هذه الصفحة بواسطة Copper"
+  },
+  "menuMagnet": {
+    "message": "إرسال رابط magnet إلى Copper"
+  },
+  "menuPlaylistMp4": {
+    "message": "تنزيل قائمة التشغيل كاملة بصيغة MP4"
+  },
+  "menuPlaylistMp3": {
+    "message": "تنزيل قائمة التشغيل كاملة بصيغة MP3"
+  },
+  "detailNoMedia": {
+    "message": "لم يتم العثور على وسائط في هذه الصفحة"
+  },
+  "fallbackFullPlaylist": {
+    "message": "قائمة التشغيل كاملة"
+  }
+}

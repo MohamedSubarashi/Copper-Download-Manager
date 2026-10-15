@@ -28,6 +28,7 @@ Usage:
 
 import json
 import os
+import re
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -44,6 +45,97 @@ def check(cond, msg):
         return True
     print(f"  FAIL  {msg}")
     return False
+
+
+# Locales shipped by the extension. Keep in sync with the app's catalogs and
+# with the _locales directories.
+LOCALES = ["en", "fr", "ar", "es", "pt_BR"]
+MSG_REF = re.compile(r"__MSG_([A-Za-z0-9_@]+)__")
+PLACEHOLDER = re.compile(r"\$\d")
+
+
+def _collect_msg_refs(node, out):
+    if isinstance(node, dict):
+        for v in node.values():
+            _collect_msg_refs(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            _collect_msg_refs(v, out)
+    elif isinstance(node, str):
+        out.update(MSG_REF.findall(node))
+
+
+def validate_i18n(label, path, manifest):
+    """Check the WebExtension _locales catalogs and their wiring.
+
+    Guards the easy-to-get-wrong pieces: a manifest __MSG_*__ token with no
+    catalog entry (the browser then refuses to load the extension), a locale
+    missing keys the source has (silent English fallback), and dropped $1
+    placeholders (a message that renders with a literal "$1").
+    """
+    print(f"Validating {label} extension i18n: {path}")
+    ok = True
+
+    default_locale = manifest.get("default_locale")
+    ok &= check(default_locale == "en", "default_locale is 'en'")
+
+    locales_dir = os.path.join(path, "_locales")
+    ok &= check(os.path.isdir(locales_dir), "_locales directory exists")
+
+    catalogs = {}
+    for loc in LOCALES:
+        loc_path = os.path.join(locales_dir, loc, "messages.json")
+        if not os.path.isfile(loc_path):
+            ok &= check(False, f"catalog exists: _locales/{loc}/messages.json")
+            continue
+        try:
+            with open(loc_path, encoding="utf-8") as f:
+                catalogs[loc] = json.load(f)
+            ok &= check(True, f"catalog parses: {loc}")
+        except (OSError, json.JSONDecodeError) as e:
+            ok &= check(False, f"catalog parses: {loc} ({e})")
+
+    base = catalogs.get("en") or {}
+    ok &= check(bool(base), "source catalog (en) is non-empty")
+
+    if base:
+        for loc, cat in catalogs.items():
+            if loc == "en":
+                continue
+            missing = sorted(set(base) - set(cat))
+            extra = sorted(set(cat) - set(base))
+            ok &= check(not missing and not extra,
+                        f"{loc}: key parity with en "
+                        f"(missing={missing}, extra={extra})")
+            bad = [k for k in base if k in cat
+                   and sorted(PLACEHOLDER.findall(base[k].get("message", "")))
+                   != sorted(PLACEHOLDER.findall(cat[k].get("message", "")))]
+            ok &= check(not bad, f"{loc}: $1 placeholder parity (drift in {sorted(bad)})")
+            empty = sorted(k for k, v in cat.items() if not v.get("message"))
+            ok &= check(not empty, f"{loc}: no empty messages ({empty})")
+
+    refs = set()
+    _collect_msg_refs(manifest, refs)
+    ok &= check(bool(refs), "manifest references catalog messages (__MSG_*__)")
+    unresolved = sorted(r for r in refs if r not in base)
+    ok &= check(not unresolved,
+                f"every __MSG_*__ reference resolves in en ({unresolved})")
+
+    # The status page and background must actually consult the i18n API, and the
+    # page must carry the data-i18n hooks the localizer rewrites.
+    for rel in ("copper.js", "background.js"):
+        src_path = os.path.join(path, rel)
+        if os.path.isfile(src_path):
+            with open(src_path, encoding="utf-8") as f:
+                src = f.read()
+            ok &= check("i18n.getMessage" in src, f"{rel} reads localized messages")
+    html_path = os.path.join(path, "copper.html")
+    if os.path.isfile(html_path):
+        with open(html_path, encoding="utf-8") as f:
+            html = f.read()
+        ok &= check("data-i18n" in html, "copper.html carries data-i18n hooks")
+
+    return ok
 
 
 def validate_dir(label, path, is_firefox):
@@ -188,6 +280,8 @@ def validate_dir(label, path, is_firefox):
             copper_src = f.read()
         ok &= check("X-Copper-Token" in copper_src,
                     "status page sends the API token (X-Copper-Token)")
+
+    ok &= validate_i18n(label, path, manifest)
 
     return ok
 

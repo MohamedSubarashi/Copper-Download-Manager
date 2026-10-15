@@ -16,6 +16,29 @@
   const api =
     typeof browser !== "undefined" && browser.runtime ? browser : chrome;
 
+  // Localised string lookup; the bar is built in JS, so every label goes
+  // through here. Falls back to the key if a message is missing.
+  function msg(key, subs) {
+    try {
+      return (api.i18n && api.i18n.getMessage(key, subs)) || key;
+    } catch (e) {
+      return key;
+    }
+  }
+
+  function uiLang() {
+    try {
+      return (api.i18n && api.i18n.getUILanguage && api.i18n.getUILanguage()) || "en";
+    } catch (e) {
+      return "en";
+    }
+  }
+
+  function isRtl() {
+    const base = uiLang().split("-")[0].toLowerCase();
+    return base === "ar" || base === "he" || base === "fa" || base === "ur";
+  }
+
   const VIDEO_EXTS = ["mp4", "webm", "mkv", "mov", "m4v", "m3u8", "mpd"];
   const AUDIO_EXTS = ["mp3", "m4a", "wav", "flac", "aac", "ogg", "opus"];
   const YTDLP_HOSTS = [
@@ -81,20 +104,20 @@
 
     if (host.includes("youtube.com") || host.includes("youtu.be")) {
       if (params.has("list")) {
-        const title = (document.title || "").replace(/ - YouTube$/, "").trim() || "YouTube Playlist";
+        const title = (document.title || "").replace(/ - YouTube$/, "").trim() || msg("fallbackYoutubePlaylist");
         return { url: href, title };
       }
     }
     if (host.includes("soundcloud.com") && href.includes("/sets/")) {
-      const title = (document.title || "").replace(/ \| SoundCloud$/, "").trim() || "SoundCloud Set";
+      const title = (document.title || "").replace(/ \| SoundCloud$/, "").trim() || msg("fallbackSoundcloudSet");
       return { url: href, title };
     }
     if (host.includes("spotify.com") && href.includes("/playlist")) {
-      const title = (document.title || "").replace(/ - Spotify$/, "").trim() || "Spotify Playlist";
+      const title = (document.title || "").replace(/ - Spotify$/, "").trim() || msg("fallbackSpotifyPlaylist");
       return { url: href, title };
     }
     if (host.includes("music.apple.com") && href.includes("/playlist")) {
-      const title = (document.title || "").replace(/ - Apple Music$/, "").trim() || "Apple Music Playlist";
+      const title = (document.title || "").replace(/ - Apple Music$/, "").trim() || msg("fallbackAppleMusicPlaylist");
       return { url: href, title };
     }
     return null;
@@ -154,7 +177,7 @@
         url: location.href,
         kind: "video",
         ext: "ytdlp",
-        title: (document.title || "page video").slice(0, 60),
+        title: (document.title || msg("fallbackPageVideo")).slice(0, 60),
       });
     }
   }
@@ -242,11 +265,12 @@
     injectStyles();
     barRoot = document.createElement("div");
     barRoot.id = "copperDmBar";
+    if (isRtl()) barRoot.setAttribute("dir", "rtl");
 
     const head = document.createElement("div");
     head.className = "cdm-head";
     const title = document.createElement("span");
-    title.textContent = "Download with Copper";
+    title.textContent = msg("downloadWithCopper");
 
     const headActions = document.createElement("span");
     headActions.className = "cdm-head-actions";
@@ -254,13 +278,13 @@
     const refresh = document.createElement("button");
     refresh.className = "cdm-iconbtn";
     refresh.textContent = "\u21bb";
-    refresh.title = "Re-scan this page";
+    refresh.title = msg("rescanPage");
     refresh.addEventListener("click", () => { lastKey = ""; init(); });
 
     const close = document.createElement("button");
     close.className = "cdm-iconbtn";
     close.textContent = "\u00d7";
-    close.title = "Hide";
+    close.title = msg("hide");
     close.addEventListener("click", () => { closed = true; hideBar(); });
 
     headActions.appendChild(refresh);
@@ -289,19 +313,19 @@
   }
 
   function send(btn, url, filename, format, doneText) {
-    setBtnState(btn, "Sending\u2026", true);
+    setBtnState(btn, msg("sending"), true);
     try {
       api.runtime.sendMessage(
         { action: "sendUrl", url, filename, format },
         (resp) => {
           void api.runtime.lastError;
           const ok = resp && resp.success;
-          setBtnState(btn, ok ? (doneText || "Sent \u2713") : "Copper off / failed", false);
-          if (ok) setTimeout(() => setBtnState(btn, doneText || "Sent \u2713", false), 1500);
+          setBtnState(btn, ok ? (doneText || msg("sent")) : msg("copperOffFailed"), false);
+          if (ok) setTimeout(() => setBtnState(btn, doneText || msg("sent"), false), 1500);
         }
       );
     } catch (e) {
-      setBtnState(btn, "Copper off / failed", false);
+      setBtnState(btn, msg("copperOffFailed"), false);
     }
   }
 
@@ -320,11 +344,11 @@
 
     const copy = document.createElement("button");
     copy.className = "cdm-btn cdm-copy";
-    copy.textContent = "Copy";
-    copy.title = "Copy media link";
+    copy.textContent = msg("copy");
+    copy.title = msg("copyMediaLink");
     copy.addEventListener("click", () => {
       try { navigator.clipboard.writeText(item.url); } catch (e) { /* noop */ }
-      setBtnState(copy, "Copied \u2713", false);
+      setBtnState(copy, msg("copied"), false);
     });
     actions.appendChild(copy);
 
@@ -332,8 +356,8 @@
       const mp4 = document.createElement("button");
       mp4.className = "cdm-btn";
       mp4.textContent = "MP4";
-      mp4.title = "Download as MP4";
-      mp4.addEventListener("click", () => send(mp4, item.url, item.title, "mp4", "Sent \u2713"));
+      mp4.title = msg("downloadAsMp4");
+      mp4.addEventListener("click", () => send(mp4, item.url, item.title, "mp4", msg("sent")));
       actions.appendChild(mp4);
     }
 
@@ -341,9 +365,9 @@
     mp3.className = "cdm-btn cdm-audio";
     mp3.textContent = "MP3";
     mp3.title = item.kind === "audio"
-      ? "Download the audio file"
-      : "Extract MP3 audio (requires FFmpeg)";
-    mp3.addEventListener("click", () => send(mp3, item.url, item.title, "mp3", "Sent \u2713"));
+      ? msg("downloadAudioFile")
+      : msg("extractMp3");
+    mp3.addEventListener("click", () => send(mp3, item.url, item.title, "mp3", msg("sent")));
     actions.appendChild(mp3);
 
     row.appendChild(actions);
@@ -365,7 +389,7 @@
     if (playlistInfo) {
       const label = document.createElement("div");
       label.className = "cdm-playlist-label";
-      label.textContent = "Playlist Detected";
+      label.textContent = msg("playlistDetected");
       itemsEl.appendChild(label);
 
       const row = document.createElement("div");
@@ -382,15 +406,15 @@
       const mp4 = document.createElement("button");
       mp4.className = "cdm-btn cdm-playlist";
       mp4.textContent = "MP4";
-      mp4.title = "Download entire playlist as video (MP4)";
-      mp4.addEventListener("click", () => send(mp4, playlistInfo.url, playlistInfo.title, "playlist-mp4", "Sent \u2713"));
+      mp4.title = msg("playlistMp4Title");
+      mp4.addEventListener("click", () => send(mp4, playlistInfo.url, playlistInfo.title, "playlist-mp4", msg("sent")));
       actions.appendChild(mp4);
 
       const mp3 = document.createElement("button");
       mp3.className = "cdm-btn cdm-playlist-audio";
       mp3.textContent = "MP3";
-      mp3.title = "Download entire playlist as audio (MP3)";
-      mp3.addEventListener("click", () => send(mp3, playlistInfo.url, playlistInfo.title, "playlist-mp3", "Sent \u2713"));
+      mp3.title = msg("playlistMp3Title");
+      mp3.addEventListener("click", () => send(mp3, playlistInfo.url, playlistInfo.title, "playlist-mp3", msg("sent")));
       actions.appendChild(mp3);
 
       row.appendChild(actions);
@@ -410,17 +434,19 @@
     if (extra > 0) {
       const more = document.createElement("div");
       more.className = "cdm-more";
-      more.textContent = "+" + extra + " more media file" + (extra === 1 ? "" : "s");
+      more.textContent = extra === 1
+        ? msg("moreMediaOne", [String(extra)])
+        : msg("moreMediaMany", [String(extra)]);
       itemsEl.appendChild(more);
     }
 
     if (media.size > 1) {
       const all = document.createElement("button");
       all.className = "cdm-btn cdm-all";
-      all.textContent = "Download all page media (" + media.size + ")";
-      all.title = "Send every detected media file to Copper Download Manager";
+      all.textContent = msg("downloadAllMedia", [String(media.size)]);
+      all.title = msg("sendAllMediaTitle");
       all.addEventListener("click", () => {
-        setBtnState(all, "Sending\u2026", true);
+        setBtnState(all, msg("sending"), true);
         const urls = Array.from(media.values()).map((m) => m.url);
         try {
           api.runtime.sendMessage(
@@ -428,11 +454,11 @@
             (resp) => {
               void api.runtime.lastError;
               const ok = resp && resp.success;
-              setBtnState(all, ok ? "Sent to Copper \u2713" : "Copper off / failed", false);
+              setBtnState(all, ok ? msg("sentToCopper") : msg("copperOffFailed"), false);
             }
           );
         } catch (e) {
-          setBtnState(all, "Copper off / failed", false);
+          setBtnState(all, msg("copperOffFailed"), false);
         }
       });
       const wrap = document.createElement("div");
