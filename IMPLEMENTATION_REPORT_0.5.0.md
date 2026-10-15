@@ -120,17 +120,23 @@ Statuses use the required vocabulary: **PASS / FAIL / NOT RUN / BLOCKED**.
 | Extension zips fresh | **PASS** | `tools/build_extension_zips.py --check` → both match their sources; negative test (touched `copper.js`) → exit 1 |
 | Version consistency | **PASS** | `tools/check_version_consistency.py` → "VERSION CHECK PASSED (version 0.5.0 consistent everywhere)" |
 
-### 3.3 Packaging (local pre-tag build)
+### 3.3 Packaging
+
+The pre-tag local build (ISCC 6.7.3, Qt 6.12.0) produced the installer and the
+portable zip (58 entries incl. 33 `.qm`) so the release could be opened with
+Windows assets. The **published** assets are the ones CI built from the tag
+(Qt 6.6.3, the same flow as 0.4.3), because a zip carries file mtimes and the
+Qt / Inno Setup versions differ; `releases/0.5.0/` was therefore reconciled to
+the published artifacts.
 
 | Check | Status | Evidence |
 | --- | --- | --- |
-| Windows installer built | **PASS** | ISCC 6.7.3 → `installer/CopperDownloadManager-0.5.0-setup.exe`, copies `release\0.5.0\*` incl. the `translations/` folder |
-| Windows portable zip built | **PASS** | `installer/release/CopperDownloadManager-portable-0.5.0.zip` (58 entries, 33 `.qm`) |
-| `releases/0.5.0/` staged | **PASS** | both artifacts + `RELEASE-NOTES.md` + `SHA256SUMS` (`sha256 33915e16…`, `72e0a029…`) |
-
-The published assets are the ones CI builds from the tag (same flow as 0.4.3);
-the local pre-tag build is not byte-reproducible, so `releases/0.5.0/` is
-reconciled to the published artifacts afterwards.
+| Windows installer built (local, pre-tag) | **PASS** | ISCC 6.7.3 → `installer/CopperDownloadManager-0.5.0-setup.exe`, copies `release\0.5.0\*` incl. the `translations/` folder |
+| Windows portable zip built (local, pre-tag) | **PASS** | `installer/release/CopperDownloadManager-portable-0.5.0.zip` (58 entries, 33 `.qm`) |
+| CI artifacts rebuilt from the tag | **PASS** | run `38765343802`: Windows Release + Debug, Linux .deb, Arch .pkg.tar.zst ×2, macOS .dmg — all success |
+| Release assets reconciled | **PASS** | 6 assets published; the 2 Windows ones replaced with the CI build (`40b0f02d…`, `0b93599d…`) |
+| `releases/0.5.0/` committed | **PASS** | both Windows artifacts + `RELEASE-NOTES.md` + `SHA256SUMS`, byte-identical to the published assets |
+| Extension zips rebuilt | **PASS** | both tracked zips at 0.1.4 including `_locales`; `--check` green in CI |
 
 ### 3.4 Not executed (reported honestly)
 
@@ -164,10 +170,22 @@ reconciled to the published artifacts afterwards.
 
 | Item | Status | Evidence |
 | --- | --- | --- |
-| Release commit + tag | *pending* | to be filled once pushed |
-| CI green on the tag | *pending* | |
-| GitHub release published | *pending* | https://github.com/MohamedSubarashi/Copper-Download-Manager/releases/tag/v0.5.0 |
-| Curated release notes applied | *pending* | `gh release edit v0.5.0 --notes-file releases/0.5.0/RELEASE-NOTES.md` |
+| Release commit + tag | **PASS** | `7ea5055` on `main`, annotated tag `v0.5.0` |
+| CI green on `main` | **PASS** | run `38765345577` → all jobs success |
+| CI green on `v0.5.0` (incl. Publish) | **PASS** | run `38765343802` → all 7 jobs success; the extension-lint job now also runs `check_translations.py` and `build_extension_zips.py --check` |
+| GitHub release published | **PASS** | https://github.com/MohamedSubarashi/Copper-Download-Manager/releases/tag/v0.5.0 (6 assets) |
+| Curated release notes applied | **PASS** | `gh release create v0.5.0 --notes-file releases/0.5.0/RELEASE-NOTES.md` |
+
+Published assets:
+
+```
+copper-download-manager-0.5.0-1-x86_64.pkg.tar.zst             fbaa164f…   (Arch)
+copper-download-manager-0.5.0-Linux.deb                        401f8cf1…   (Debian/Ubuntu)
+copper-download-manager-debug-0.5.0-1-x86_64.pkg.tar.zst       2665a174…   (Arch debug)
+CopperDownloadManager-0.5.0-setup.exe                          40b0f02d…   (Windows)
+CopperDownloadManager-portable-0.5.0.zip                       0b93599d…   (Windows)
+CopperDownloadManager.dmg                                      ac37a145…   (macOS)
+```
 
 ## 6. Decisions / deviations
 

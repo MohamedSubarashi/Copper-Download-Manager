@@ -72,12 +72,13 @@ themselves carry a caveat (see *Known limitations*).
 ### SHA-256 of the published assets
 
 ```
-33915e16da654a21dcbbedfa08fe0b525e2b0a42a112dfa5df66cf0553976c98  CopperDownloadManager-0.5.0-setup.exe
-72e0a02957d0ef542d249ebc6db67fa5532b2b5286dc8abbe47dd7d045b20b73  CopperDownloadManager-portable-0.5.0.zip
+fbaa164f2c13f6d1c240ae525ef0fea1448e2f999539c1875f49e0cf2f5f5235  copper-download-manager-0.5.0-1-x86_64.pkg.tar.zst
+401f8cf122378716bef185825062fc49d369e43ca7c63c3bedbb8836ee6f59d1  copper-download-manager-0.5.0-Linux.deb
+2665a17458c707b92b207e251826828d1feb82fa7b2004e3b4b0467114e9afc6  copper-download-manager-debug-0.5.0-1-x86_64.pkg.tar.zst
+40b0f02d5a8f6cd3e36eab421b46940d2b70329d238c189dd77cdefad4863473  CopperDownloadManager-0.5.0-setup.exe
+0b93599d2c7a60584f8d88c0c5fb1c448dc0fe972f7378dba0dde6b42176fa77  CopperDownloadManager-portable-0.5.0.zip
+ac37a1459d7533387cb25980fec16b3c6d59924716c0e6605a1fe25b14b50355  CopperDownloadManager.dmg
 ```
-
-The Linux and macOS artifacts are built by CI from the tag; their hashes are
-appended to `SHA256SUMS` once they are published.
 
 ## Known limitations
 
