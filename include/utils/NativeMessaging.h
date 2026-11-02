@@ -20,21 +20,26 @@ public:
     // Name of the companion executable (sibling of the app exe).
     static QString hostExecutableName();
 
-    // Write/refresh the host manifest for the given browser. For Chrome/Edge the
-    // allowed_origins must contain the exact chrome-extension ID; for Firefox
-    // allowed_extensions contains the gecko.id. Returns the path written or empty.
+    // Write/refresh the host manifest for the given browser. For Chrome/Edge and
+    // every other Chromium-family browser the allowed_origins must contain the
+    // exact chrome-extension ID; for Firefox allowed_extensions contains the
+    // gecko.id. Returns the manifest path for the requested browser, or empty.
+    //
+    // Chromium-family requests fan out: because a chrome-extension:// Origin
+    // cannot reveal which Chromium fork sent it, the id is written to Chrome,
+    // Edge, Brave, Vivaldi, Opera, Opera GX and Chromium manifests in one call.
     //
     // The manifest is *merged*: any still-valid ID already listed in the file is
     // preserved and the given ids are added, so registering the stable store IDs
     // at startup never clobbers a sideloaded dev ID added through the "register"
     // handshake (or --register-native-extension), and vice versa.
     //
-    // On Windows writing the JSON file is not enough: Chrome, Edge and Firefox
-    // locate the host through the HKCU\Software\<vendor>\NativeMessagingHosts
-    // registry value, so this also (re)writes that key's default value to the
-    // manifest path. Without it the browser reports "Specified native messaging
-    // host not found", the extension never gets the API token, and every
-    // browser-injected download fails 401 Unauthorized.
+    // On Windows writing the JSON file is not enough: each browser locates the
+    // host through its HKCU\Software\<vendor>\NativeMessagingHosts registry
+    // value, so this also (re)writes that key's default value to the manifest
+    // path. Without it the browser reports "Specified native messaging host not
+    // found", the extension never gets the API token, and every browser-injected
+    // download fails 401 Unauthorized.
     static QString installManifest(const QString& browser, const QStringList& extensionIds);
 
     // Whether the given extension id is already listed as allowed for the

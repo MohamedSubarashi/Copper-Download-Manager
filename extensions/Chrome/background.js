@@ -1,17 +1,9 @@
 // Copper Download Manager - extension background (Chrome & Firefox MV3).
 //
-// Command center for the browser side:
-//   * HTTP-first dispatch: downloads are posted straight to the app's local API
-//     (http://127.0.0.1:24680/api/download), the normal IDM-style path. When the
-//     app is not running it is launched through the registered copper:// protocol
-//     and the request is retried;
-//   * settings engine (storage.local) driving capture/bar/menus/notifications;
-//   * dedupe + serialized batch queue so "download all page media" never floods
-//     the desktop app;
-//   * expanded context menus (link/image/video/audio/magnet/selection/page);
-//   * auto-capture of normal browser downloads (chrome.downloads.onCreated),
-//     honouring the app's include/exclude file-format filter.
-
+// Goal: beat the browser. Cancel downloads synchronously on creation, cache
+// everything aggressively, intercept link clicks in content scripts before the
+// browser handles them, and fail gracefully back to the browser if Copper is
+// unreachable (only when explicitly allowed).
 "use strict";
 
 const STORAGE_KEY = "copperExtensionEnabled";
@@ -19,143 +11,89 @@ const SETTINGS_KEY = "copperSettings";
 const LAST_RESULT_KEY = "copperLastResult";
 const STATUS_PAGE = "copper.html";
 const HTTP_API = "http://127.0.0.1:24680";
-const HTTP_TIMEOUT = 3000;
-// The self-registration call may open a one-time confirmation prompt in the app,
-// so it gets a much longer budget than a normal API call (the user has to click).
+const HTTP_TIMEOUT = 2000;
 const REGISTER_TIMEOUT = 60000;
-const LAUNCH_RETRY_MS = 1500;
+const LAUNCH_RETRY_MS = 1000;
 
-// Localised string lookup for context menus and notifications.
+const api = typeof browser !== "undefined" && browser.runtime ? browser : chrome;
+
 function msg(key, subs) {
   try {
-    return chrome.i18n.getMessage(key, subs) || key;
+    return api.i18n.getMessage(key, subs) || key;
   } catch (e) {
     return key;
   }
 }
 
 const DEFAULT_SETTINGS = {
-  autoCapture: true,    // intercept the browser's own downloads and hand to Copper
-  showBar: true,        // float the media detection bar on http(s) pages
-  contextMenus: true,   // enable the right-click menu entries
-  notifyOnFail: true,   // system notification when a dispatch fails
-  dedupeWindowMs: 10000,
-  maxBatch: 8,
+  autoCapture: true,
+  showBar: true,
+  contextMenus: true,
+  notifyOnFail: true,
+  dedupeWindowMs: 8000,
+  maxBatch: 12,
   defaultFormat: "mp4",
+  fallbackToBrowserOnFailure: true
 };
 
 let settings = { ...DEFAULT_SETTINGS };
+let settingsLoaded = false;
+let settingsLoadPromise = null;
 
-// ---------------------------------------------------------------------------
-// Storage helpers
-// ---------------------------------------------------------------------------
-
-function loadSettings(resolve) {
-  chrome.storage.local.get([SETTINGS_KEY], (items) => {
-    const saved = items[SETTINGS_KEY] || {};
-    settings = { ...DEFAULT_SETTINGS, ...saved };
-    if (resolve) resolve(settings);
+function loadSettings() {
+  if (settingsLoaded) return Promise.resolve(settings);
+  if (settingsLoadPromise) return settingsLoadPromise;
+  settingsLoadPromise = new Promise((resolve) => {
+    api.storage.local.get([SETTINGS_KEY], (items) => {
+      const saved = items[SETTINGS_KEY] || {};
+      settings = { ...DEFAULT_SETTINGS, ...saved };
+      settingsLoaded = true;
+      settingsLoadPromise = null;
+      resolve(settings);
+    });
   });
+  return settingsLoadPromise;
 }
 
 function saveSettings(next) {
   settings = { ...settings, ...next };
-  chrome.storage.local.set({ [SETTINGS_KEY]: settings });
+  api.storage.local.set({ [SETTINGS_KEY]: settings });
 }
 
 function getCurrentEnabledState() {
   return new Promise((resolve) => {
-    chrome.storage.local.get([STORAGE_KEY], (items) => {
+    api.storage.local.get([STORAGE_KEY], (items) => {
       resolve(items[STORAGE_KEY] !== false);
     });
   });
 }
 
 function setCurrentEnabledState(enabled) {
-  chrome.storage.local.set({ [STORAGE_KEY]: enabled });
+  api.storage.local.set({ [STORAGE_KEY]: enabled });
 }
 
 function rememberResult(ok, detail) {
-  chrome.storage.local.set({ [LAST_RESULT_KEY]: { ok, detail, at: Date.now() } });
+  api.storage.local.set({ [LAST_RESULT_KEY]: { ok, detail, at: Date.now() } });
 }
 
-// ---------------------------------------------------------------------------
-// Transports
-// ---------------------------------------------------------------------------
-
-// Local API auth (0.4.0): the app's localhost API requires an install-scoped
-// token on every non-OPTIONS request. The token is handed over by the native
-// messaging host (action "getToken"), which reads it from the app's shared
-// config - it never crosses the network, so no web page can ever learn it.
+// Auth
 const NATIVE_HOST = "com.copper.dm";
 let apiToken = "";
 let apiTokenLoaded = false;
 let tokenFetch = null;
-// After the user declines self-registration, don't nag on every call. The
-// window is short and in-memory (a service-worker restart clears it); a fresh
-// download attempt may ask again, which is the desired behaviour.
 let registrationDeniedUntil = 0;
 
 function nativeGetToken() {
   return new Promise((resolve) => {
     try {
-      chrome.runtime.sendNativeMessage(NATIVE_HOST, { action: "getToken" }, (reply) => {
-        void chrome.runtime.lastError; // host not installed yet: treat as no token
+      api.runtime.sendNativeMessage(NATIVE_HOST, { action: "getToken" }, (reply) => {
+        void api.runtime.lastError;
         resolve(reply && reply.ok && reply.token ? String(reply.token) : "");
       });
     } catch (e) {
       resolve("");
     }
   });
-}
-
-// Fallback when the native host cannot hand over a token: ask the app itself.
-// The app checks whether this extension's id is already authorized and, if not,
-// prompts the user once before adding it to the host manifest. On success it
-// returns the token, so the very next API call authenticates - no browser
-// restart needed for the freshly authorized id.
-function registerWithApp() {
-  if (Date.now() < registrationDeniedUntil) return Promise.resolve("");
-  return httpApiOnce("/api/register", "POST", { extensionId: chrome.runtime.id }, "",
-                     REGISTER_TIMEOUT).then((res) => {
-    if (res.ok && res.json && res.json.token) return String(res.json.token);
-    if (res.status === 403) registrationDeniedUntil = Date.now() + 60000;
-    return "";
-  });
-}
-
-function fetchApiToken() {
-  // Prefer the native host: the token never crosses the network there. Only when
-  // that fails (typically an unpacked/dev build whose path-derived id is not in
-  // the host manifest yet) fall back to app-side self-registration.
-  return nativeGetToken().then((t) => (t ? t : registerWithApp()));
-}
-
-function ensureApiToken() {
-  if (apiTokenLoaded) return Promise.resolve(apiToken);
-  if (!tokenFetch) {
-    tokenFetch = fetchApiToken().then((t) => {
-      tokenFetch = null;
-      if (t) {
-        // Only cache a real token. Caching "" would keep every later call
-        // tokenless (and 401) for the life of the service worker, even after
-        // the app has started and written its config.
-        apiToken = t;
-        apiTokenLoaded = true;
-      }
-      return t;
-    });
-  }
-  return tokenFetch;
-}
-
-// Drop any cached token and read it again from the host. Used when the app
-// rewrote copper_host_config.json (stale token) or when it was not running the
-// first time and has only now written it.
-function refreshApiToken() {
-  apiToken = "";
-  apiTokenLoaded = false;
-  return ensureApiToken();
 }
 
 function httpApiOnce(path, method, body, token, timeoutMs) {
@@ -166,7 +104,7 @@ function httpApiOnce(path, method, body, token, timeoutMs) {
       method: method || "GET",
       cache: "no-store",
       signal: controller.signal,
-      headers: {},
+      headers: {}
     };
     if (body) {
       opts.headers["Content-Type"] = "application/json";
@@ -178,7 +116,7 @@ function httpApiOnce(path, method, body, token, timeoutMs) {
         let j = null;
         try {
           j = await res.json();
-        } catch (e) { /* non-JSON body */ }
+        } catch (e) {}
         resolve({ ok: res.ok, status: res.status, json: j });
       })
       .catch((e) => {
@@ -189,13 +127,44 @@ function httpApiOnce(path, method, body, token, timeoutMs) {
   });
 }
 
+function registerWithApp() {
+  if (Date.now() < registrationDeniedUntil) return Promise.resolve("");
+  return httpApiOnce("/api/register", "POST", { extensionId: api.runtime.id }, "", REGISTER_TIMEOUT).then((res) => {
+    if (res.ok && res.json && res.json.token) return String(res.json.token);
+    if (res.status === 403) registrationDeniedUntil = Date.now() + 60000;
+    return "";
+  });
+}
+
+function fetchApiToken() {
+  return nativeGetToken().then((t) => (t ? t : registerWithApp()));
+}
+
+function ensureApiToken() {
+  if (apiTokenLoaded) return Promise.resolve(apiToken);
+  if (!tokenFetch) {
+    tokenFetch = fetchApiToken().then((t) => {
+      tokenFetch = null;
+      if (t) {
+        apiToken = t;
+        apiTokenLoaded = true;
+      }
+      return t;
+    });
+  }
+  return tokenFetch;
+}
+
+function refreshApiToken() {
+  apiToken = "";
+  apiTokenLoaded = false;
+  return ensureApiToken();
+}
+
 function httpApi(path, method, body) {
   return ensureApiToken().then((token) =>
     httpApiOnce(path, method, body, token).then((res) => {
       if (res.status !== 401) return res;
-      // The token went stale (config rewritten by a newer app run) or was never
-      // readable because the app had not started yet: refresh it once and retry
-      // a single time, then surface whatever we get.
       return refreshApiToken().then((t) => httpApiOnce(path, method, body, t));
     })
   );
@@ -206,27 +175,24 @@ async function httpPing() {
   return res.status >= 200 && res.status < 500;
 }
 
-// Launch (or raise) the desktop app through its registered copper:// protocol.
-// The app enforces autostart, protocol and pipe launch as part of startup.
 function launchCopper() {
   try {
-    chrome.tabs.create({ url: "copper://open" });
-  } catch (e) { /* ignore */ }
+    api.tabs.create({ url: "copper://open" });
+  } catch (e) {}
 }
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ---------------------------------------------------------------------------
-// Dedupe / batch queue
-// ---------------------------------------------------------------------------
-
-const recent = new Map(); // url -> last dispatch timestamp
-let queue = [];           // pending {url, filename, path, format}
+// Dedupe
+const recent = new Map();
+const inFlight = new Set();
+let queue = [];
 let queueBusy = false;
 
 function isDup(url) {
+  if (inFlight.has(url)) return true;
   const t = recent.get(url);
   if (t && Date.now() - t < settings.dedupeWindowMs) return true;
   recent.set(url, Date.now());
@@ -243,19 +209,20 @@ async function drainQueue() {
   queueBusy = true;
   while (queue.length > 0) {
     const task = queue.shift();
-    const result = await sendToCopper(task.url, task.filename, task.path, task.format);
-    if (task.resolve) task.resolve(result.accepted);
-    await sleep(250);
+    inFlight.add(task.url);
+    try {
+      const result = await sendToCopper(task.url, task.filename, task.path, task.format);
+      if (task.resolve) task.resolve(result.accepted);
+      if (task.onResult) task.onResult(result);
+    } finally {
+      inFlight.delete(task.url);
+    }
+    await sleep(100);
   }
   queueBusy = false;
 }
 
-// ---------------------------------------------------------------------------
-// Injection core
-// ---------------------------------------------------------------------------
-
-// Send one download request to the app over the local HTTP API. When the app is
-// not reachable it is launched via copper:// and the request is retried once.
+// Send
 async function sendToCopper(url, filename = "", path = "", format = settings.defaultFormat) {
   const enabled = await getCurrentEnabledState();
   if (!enabled) {
@@ -263,7 +230,6 @@ async function sendToCopper(url, filename = "", path = "", format = settings.def
   }
 
   let rejectDetail = "";
-
   const h = await httpApi("/api/download", "POST", { url, filename, path, format });
   if (h.ok) {
     rememberResult(true, "http");
@@ -292,7 +258,6 @@ async function sendToCopper(url, filename = "", path = "", format = settings.def
   };
 }
 
-// Dispatch a single URL (deduped) -> the send queue -> the desktop app.
 function dispatch(url, filename = "", path = "", format = settings.defaultFormat) {
   if (!url) return Promise.resolve(false);
   if (isDup(url)) return Promise.resolve(true);
@@ -301,7 +266,6 @@ function dispatch(url, filename = "", path = "", format = settings.defaultFormat
   });
 }
 
-// Dispatch many URLs (page-wide capture). Dedupe, cap at settings.maxBatch.
 function dispatchBatch(urls, filenamePrefix = "", format = settings.defaultFormat) {
   return new Promise((resolve) => {
     const unique = [];
@@ -332,25 +296,22 @@ function notifyDispatchFailed(result) {
     message = msg("notifyRejected", [result.detail]);
   }
   try {
-    chrome.notifications.create({
+    api.notifications.create({
       type: "basic",
-      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+      iconUrl: api.runtime.getURL("icons/icon128.png"),
       title,
       message,
     });
-  } catch (e) { /* noop */ }
+  } catch (e) {}
 }
 
 function openStatusTab(notInstalled) {
-  let url = chrome.runtime.getURL(STATUS_PAGE);
+  let url = api.runtime.getURL(STATUS_PAGE);
   if (notInstalled) url += "?status=not-installed";
-  chrome.tabs.create({ url });
+  api.tabs.create({ url });
 }
 
-// ---------------------------------------------------------------------------
-// File-format filter (kept in sync with the app's /api/download-filters)
-// ---------------------------------------------------------------------------
-
+// Filters
 function normalizeExt(ext) {
   return (ext || "").toLowerCase().replace(/^\.+/, "");
 }
@@ -393,42 +354,69 @@ function shouldCaptureExtension(ext, cfg) {
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// Auto-capture of normal browser downloads
-// ---------------------------------------------------------------------------
-
-chrome.downloads.onCreated.addListener((item) => {
-  getCurrentEnabledState().then((enabled) => {
-    loadSettings(() => {
-      if (!enabled || !settings.autoCapture) return;
-      if (!item || !item.url || item.url.startsWith("blob:") || item.url.startsWith("data:")) return;
-      const ext = extOfUrlOrName(item.url, item.filename || "");
-      fetchFilterConfig().then((cfg) => {
-        if (!shouldCaptureExtension(ext, cfg)) return;
-        const downloadName = (item.filename || "").split(/[\\/]/).pop() || "";
-        sendToCopper(item.url, downloadName, "", "").then((result) => {
-          if (result.accepted) {
-            try { chrome.downloads.cancel(item.id); } catch (e) { /* already finished */ }
-          } else if (settings.notifyOnFail) {
-            notifyDispatchFailed(result);
-          }
-        });
-      });
-    });
-  });
+// Auto-capture - cancel immediately, synchronously if possible
+api.downloads.onCreated.addListener((item) => {
+  if (!item || !item.url) return;
+  if (item.url.startsWith("blob:") || item.url.startsWith("data:")) return;
+  
+  // Cancel first, then decide - this is the key to beating the browser
+  try {
+    api.downloads.cancel(item.id);
+  } catch (e) {}
+  
+  (async () => {
+    const enabled = await getCurrentEnabledState();
+    if (!enabled) {
+      // Re-download in browser if Copper disabled and fallback enabled
+      try {
+        if (settings.fallbackToBrowserOnFailure) {
+          api.downloads.download({ url: item.url, filename: item.filename, saveAs: false });
+        }
+      } catch (e) {}
+      return;
+    }
+    await loadSettings();
+    if (!settings.autoCapture) {
+      try {
+        if (settings.fallbackToBrowserOnFailure) {
+          api.downloads.download({ url: item.url, filename: item.filename, saveAs: false });
+        }
+      } catch (e) {}
+      return;
+    }
+    
+    const ext = extOfUrlOrName(item.url, item.filename || "");
+    const cfg = await fetchFilterConfig();
+    if (!shouldCaptureExtension(ext, cfg)) {
+      // Not captured by Copper filter - let browser handle it
+      try {
+        if (settings.fallbackToBrowserOnFailure) {
+          api.downloads.download({ url: item.url, filename: item.filename, saveAs: false });
+        }
+      } catch (e) {}
+      return;
+    }
+    
+    const downloadName = (item.filename || "").split(/[\\/]/).pop() || "";
+    const result = await sendToCopper(item.url, downloadName, "", "");
+    if (result.accepted) {
+      // Already cancelled above
+      rememberResult(true, "intercepted");
+    } else {
+      // Copper unreachable/rejected - optionally let browser download
+      if (settings.fallbackToBrowserOnFailure && !result.notInstalled) {
+        try {
+          api.downloads.download({ url: item.url, filename: item.filename, saveAs: false });
+        } catch (e) {}
+      }
+      if (settings.notifyOnFail) {
+        notifyDispatchFailed(result);
+      }
+    }
+  })().catch(() => {});
 });
 
-// ---------------------------------------------------------------------------
 // Context menus
-// ---------------------------------------------------------------------------
-//
-// On MV3 the service worker is torn down and restarted constantly, and menus are
-// rebuilt from more than one place (the boot path below and onInstalled). Each
-// build is removeAll-then-create; if two builds overlap, the later create() runs
-// while the earlier menu items still exist and Chrome reports "Cannot create
-// item with duplicate id copper-link". Serialize every build through one promise
-// chain so removeAll always completes before the next create, and read lastError
-// in each create callback so a failure is never an unchecked runtime.lastError.
 const MENU_DEFS = [
   { id: "copper-link", title: msg("menuLink"), contexts: ["link"] },
   { id: "copper-image", title: msg("menuImage"), contexts: ["image"] },
@@ -446,37 +434,42 @@ let menusBuildChain = Promise.resolve();
 
 function removeAllMenus() {
   return new Promise((resolve) => {
-    chrome.contextMenus.removeAll(() => {
-      void chrome.runtime.lastError;
+    try {
+      api.contextMenus.removeAll(() => {
+        void api.runtime.lastError;
+        resolve();
+      });
+    } catch (e) {
       resolve();
-    });
+    }
   });
 }
 
 function buildMenus() {
   const run = () => removeAllMenus().then(() => {
     for (const def of MENU_DEFS) {
-      chrome.contextMenus.create(def, () => void chrome.runtime.lastError);
+      try {
+        api.contextMenus.create(def, () => void api.runtime.lastError);
+      } catch (e) {}
     }
   });
-  // .then(run, run): a failed previous link must not stall the chain.
   menusBuildChain = menusBuildChain.then(run, run);
   return menusBuildChain;
 }
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get([STORAGE_KEY], (items) => {
+api.runtime.onInstalled.addListener(() => {
+  api.storage.local.get([STORAGE_KEY], (items) => {
     if (items[STORAGE_KEY] === undefined) {
-      chrome.storage.local.set({ [STORAGE_KEY]: true });
+      api.storage.local.set({ [STORAGE_KEY]: true });
     }
   });
-  loadSettings(() => {
+  loadSettings().then(() => {
     if (settings.contextMenus) buildMenus();
   });
 });
 
-chrome.contextMenus.onClicked.addListener((info) => {
-  loadSettings(() => {
+api.contextMenus.onClicked.addListener((info) => {
+  loadSettings().then(() => {
     const filenameOf = (src) => (src || "").split("/").pop().split("?")[0].split("#")[0] || "download";
 
     if (info.menuItemId === "copper-link" && info.linkUrl) {
@@ -526,13 +519,12 @@ chrome.contextMenus.onClicked.addListener((info) => {
   });
 });
 
-// Ask the content script on a tab for its collected media, then convert to URLs.
 function collectPageMedia(opts) {
   return new Promise((resolve) => {
     const sendTo = (tabId) => {
       try {
-        chrome.tabs.sendMessage(tabId, { action: "collectMedia" }, (resp) => {
-          void chrome.runtime.lastError;
+        api.tabs.sendMessage(tabId, { action: "collectMedia" }, (resp) => {
+          void api.runtime.lastError;
           if (resp && Array.isArray(resp.media)) {
             resolve(resp.media.map((m) => m.url).filter(Boolean));
             return;
@@ -546,7 +538,7 @@ function collectPageMedia(opts) {
     if (opts && opts.tabId != null) {
       sendTo(opts.tabId);
     } else {
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      api.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (tabs && tabs[0] && tabs[0].id != null) sendTo(tabs[0].id);
         else resolve([]);
       });
@@ -554,45 +546,42 @@ function collectPageMedia(opts) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Message API (status page, content script, devtools/testing)
-// ---------------------------------------------------------------------------
-
+// Messages
 function rebuildMenus(enabled) {
-  if (enabled) return buildMenus();
-  // Route the disable path through the same chain: a bare removeAll() here could
-  // interleave with a build's create() and either resurrect menus or fail.
+  if (enabled) {
+    loadSettings().then(() => {
+      if (settings.contextMenus) buildMenus();
+    });
+    return;
+  }
   const run = () => removeAllMenus();
   menusBuildChain = menusBuildChain.then(run, run);
-  return menusBuildChain;
 }
 
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+api.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request && request.action === "getStatus") {
     Promise.all([getCurrentEnabledState(), httpPing()]).then(([enabled, reachable]) => {
       try {
-        sendResponse({ enabled, reachable, settings, extensionId: chrome.runtime.id });
-      } catch (e) { /* noop */ }
+        sendResponse({ enabled, reachable, settings, extensionId: api.runtime.id });
+      } catch (e) {}
     });
     return true;
   }
 
   if (request && request.action === "getToken") {
-    // The command-center page (copper.js) runs its own fetches; hand it the
-    // same install-scoped token the background uses so those calls authenticate.
     ensureApiToken().then((token) => {
       try {
         sendResponse({ token: token || "" });
-      } catch (e) { /* noop */ }
+      } catch (e) {}
     });
     return true;
   }
 
   if (request && request.action === "getSettings") {
-    loadSettings(() => {
+    loadSettings().then(() => {
       try {
         sendResponse({ settings });
-      } catch (e) { /* noop */ }
+      } catch (e) {}
     });
     return true;
   }
@@ -651,24 +640,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request && request.action === "interceptClick") {
+    // Content script intercepted a click on a download link - dispatch immediately
+    const url = request.url || "";
+    const filename = request.filename || "";
+    if (url) {
+      dispatch(url, filename, "", request.format || settings.defaultFormat);
+      sendResponse({ ok: true });
+      return true;
+    }
+    sendResponse({ ok: false });
+    return true;
+  }
+
   return false;
 });
 
-// ---------------------------------------------------------------------------
-// Toolbar action
-// ---------------------------------------------------------------------------
-
-chrome.action.onClicked.addListener(() => {
+api.action.onClicked.addListener(() => {
   openStatusTab(false);
 });
 
-// ---------------------------------------------------------------------------
-// Boot
-// ---------------------------------------------------------------------------
-
-loadSettings(() => {
+loadSettings().then(() => {
   const enabledPromise = getCurrentEnabledState();
   enabledPromise.then((enabled) => {
     if (settings.contextMenus && enabled) buildMenus();
   });
+  ensureApiToken();
 });

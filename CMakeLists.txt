@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(CopperDownloadManager VERSION 0.5.0 LANGUAGES CXX)
+project(CopperDownloadManager VERSION 1.0.0 LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
 # Single-source version. tools/check_version_consistency.py verifies that

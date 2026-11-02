@@ -55,7 +55,7 @@ Run the full integration suite against the deployed exe:
 python tests\integration_test.py "installer\release\<version>\CopperDownloadManager.exe"
 ```
 
-Expected result: `117 passed, 0 failed` (as of v0.5.0). The suite covers
+Expected result: `117 passed, 0 failed` (as of v1.0.0). The suite covers
 launch/intake, single-instance, protocol forwarding, chunked/truncated/
 unknown-length downloads, the copper:// flow, .torrent injection, the
 native-messaging host -> named-pipe injection (ping + byte-exact download),
@@ -85,7 +85,7 @@ Unit tests (QtTest) — run before the suite:
 Get-Content unit_tests.log
 ```
 
-Expected result: `26 passed, 0 failed` (as of v0.5.0). The binary is
+Expected result: `26 passed, 0 failed` (as of v1.0.0). The binary is
 isolated from the real profile (QStandardPaths test mode plus
 `APPDATA`/`LOCALAPPDATA` overrides), so it can run beside the app.
 
@@ -139,7 +139,7 @@ data-collection declaration, the required `downloads` permission, the
 API token (including the `X-Copper-Token` header both the background and the
 copper.js command-center page send), and that both extensions dispatch over
 `http://127.0.0.1:24680/api/download` (with the `copper://` launch path).
-From 0.5.0 it also validates i18n: `default_locale`,
+The validator also validates i18n: `default_locale`,
 `_locales/{en,fr,ar,es,pt_BR}` key parity, `$1` placeholder parity, no empty
 messages, and that every `__MSG_*__` reference in the manifests resolves in the
 `en` catalog.
@@ -159,16 +159,10 @@ catalog carrying its own copy of the English instead of the source text, a
 language on disk that `CMakeLists.txt` never compiles, or a locale set that no
 longer matches the browser extensions.
 
-Extension zips (offline, run in CI and locally):
-
-```powershell
-python tools\build_extension_zips.py --check   # verify the tracked zips
-python tools\build_extension_zips.py           # rebuild them, then commit
-```
-The zips are tracked release artifacts (contents at the zip root, `_locales`
-included). `--check` fails when a source file changed without a rebuild; it
-compares with line endings normalized, so a Windows-built zip passes a Linux
-CI checkout.
+Extension sources ship directly under `extensions/Chrome` and
+`extensions/Firefox`; there are no tracked zips. 1.0.0 removed the zip
+packaging step from both the repo and CI (the release asset is the setup exe).
+Load the source directory as an unpacked extension for testing.
 
 ## 4. Manual QA checklist
 
@@ -282,26 +276,25 @@ Run through these before publishing.
       catalogs ship embedded in the exe and need no file there.
 - [ ] MinGW runtime DLLs (`libgcc_s_seh-1.dll`, `libstdc++-6.dll`,
       `libwinpthread-1.dll`) are present and covered by the notices file.
-- [ ] Create the portable zip and confirm CI packaging smoke check passes.
+- [ ] Create the Windows setup exe and confirm the CI packaging smoke check
+      passes. Do not create a portable zip: 1.0.0 ships exactly one exe.
 - [ ] `THIRD-PARTY-NOTICES.txt` lists every bundled third-party component with
       license, copyright, and source.
-- [ ] Stage `releases/<version>/`: the portable zip (CI-identical layout),
-      the setup exe, `SHA256SUMS` (coreutils format, covering both artifacts)
-      and the release notes; verify with `sha256sum -c SHA256SUMS`.
+- [ ] Stage `installer/CopperDownloadManager-<version>-setup.exe` plus the
+      release notes; the exe is the only asset uploaded to GitHub.
 - [ ] Smoke the install/uninstall path on a clean machine or VM — a
       successful ISCC compile alone does not prove it.
 
 ## 6. Code signing (preparation)
 
-No signing certificate was available for 0.5.0, so the artifacts are
-unsigned and Windows SmartScreen may warn on first run. When a
-certificate exists:
+No signing certificate was available for 1.0.0, so the exe is unsigned and
+Windows SmartScreen may warn on first run. When a certificate exists:
 
 1. Register a sign tool with ISCC, e.g.
    `ISCC /S"CopperSign=sign tool /f cert.pfx /p <password> $f" installer\CopperDownloadManager.iss`,
    and uncomment `SignTool=` / `SignedUninstaller=yes` in the `.iss`
    `[Setup]` section.
-2. Sign the portable exe separately:
+2. Sign the app and host exe separately:
    `signtool sign /f cert.pfx /td sha256 /fd sha256 /tr <timestamp-url> CopperDownloadManager.exe`
    (and `copper_native_host.exe`).
 3. Regenerate `SHA256SUMS` after any (re-)signing.
@@ -311,8 +304,9 @@ certificate exists:
 1. Commit all changes, tag the release (`git tag vX.Y.Z`), and push.
 2. Let CI run the matrix (Qt 6.6.3 Release/Debug) and the `extension-lint` job;
    confirm all green.
-3. Attach the portable artifact from CI (or the locally built zip) to the
-   release.
+3. Attach the Windows setup exe from CI (or the locally built
+   `CopperDownloadManager-<version>-setup.exe`) to the release. It is the only
+   asset.
 4. Update the in-app changelog/version and the README if the feature set
    changed. For a localization release, state plainly that the French,
    Arabic, Spanish and Brazilian Portuguese strings are machine-assisted

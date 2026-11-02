@@ -29,6 +29,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QTimer>
 #include <QSet>
@@ -69,6 +70,24 @@ static QString displayStatus(const QString& status) {
     if (status == QLatin1String("Queued"))      return QCoreApplication::translate("MainWindow", "Queued");
     if (status == QLatin1String("Resuming"))    return QCoreApplication::translate("MainWindow", "Resuming");
     return status;
+}
+
+// Browser-extension authorization decisions. The extension asks the app once;
+// the answer is persisted here so an unknown/dev extension cannot trigger the
+// same modal prompt on every download. Values are "allow" or "deny".
+static QJsonObject loadExtensionPermissions() {
+    const QString raw = DatabaseManager::instance().getSetting("extensionPermissions", "{}");
+    return QJsonDocument::fromJson(raw.toUtf8()).object();
+}
+
+static void saveExtensionPermissions(const QJsonObject& permissions) {
+    DatabaseManager::instance().saveSetting(
+        "extensionPermissions",
+        QString::fromUtf8(QJsonDocument(permissions).toJson(QJsonDocument::Compact)));
+}
+
+static QString extensionPermissionKey(const QString& browser, const QString& id) {
+    return browser.toLower() + ":" + id;
 }
 } // namespace
 
@@ -127,16 +146,26 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), currentFilter(0) 
     // local API token without a manual --register-native-extension step.
     LocalServer::instance().setRegistrationConfirm(
         [this](const QString& browser, const QString& extensionId) {
+            const QString key = extensionPermissionKey(browser, extensionId);
+            QJsonObject permissions = loadExtensionPermissions();
+            const QString previous = permissions.value(key).toString();
+            if (previous == "allow") return true;
+            if (previous == "deny") return false;
+
             const QString vendor = browser.compare(QStringLiteral("firefox"), Qt::CaseInsensitive) == 0
                 ? QStringLiteral("Firefox") : QStringLiteral("Chrome/Edge");
             const QMessageBox::StandardButton reply = QMessageBox::question(
                 this, tr("Browser extension"),
                 tr("A browser extension (%1) wants to send downloads to "
                    "Copper Download Manager.\n\nExtension ID:\n%2\n\n"
-                   "Only allow this if you installed the Copper browser extension.")
+                   "Only allow this if you installed the Copper browser extension.\n"
+                   "This decision is remembered; reset it in Settings > System.")
                     .arg(vendor, extensionId),
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-            return reply == QMessageBox::Yes;
+            const bool allowed = (reply == QMessageBox::Yes);
+            permissions[key] = allowed ? QStringLiteral("allow") : QStringLiteral("deny");
+            saveExtensionPermissions(permissions);
+            return allowed;
         });
 
     connect(&UpdateManager::instance(), &UpdateManager::updateAvailable, this, [this](const QString& version) {
@@ -175,6 +204,52 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), currentFilter(0) 
     connect(refreshTimer, &QTimer::timeout, this, &MainWindow::refreshTable);
     connect(refreshTimer, &QTimer::timeout, this, &MainWindow::updateStatusBar);
     refreshTimer->start(1000);
+
+    // Clipboard monitor (opt-in). Watching a URL the user just copied is the
+    // fastest way to add a download without switching windows; the current
+    // clipboard is primed here so an old URL is not re-added at startup.
+    lastClipboardText = QApplication::clipboard()->text().trimmed();
+    clipboardTimer = new QTimer(this);
+    clipboardTimer->setInterval(900);
+    connect(clipboardTimer, &QTimer::timeout, this, [this]() {
+        if (DatabaseManager::instance().getSetting("clipboardMonitor", "false") != "true") {
+            // Keep the baseline fresh while disabled so enabling it later does
+            // not immediately ingest whatever happened to be on the clipboard.
+            lastClipboardText = QApplication::clipboard()->text().trimmed();
+            return;
+        }
+        const QString text = QApplication::clipboard()->text().trimmed();
+        if (text.isEmpty() || text == lastClipboardText) return;
+        lastClipboardText = text;
+        if (text.size() > 4096 || text.contains('\n') || text.contains('\r')) return;
+        if (!(text.startsWith("http://") || text.startsWith("https://") ||
+              text.startsWith("ftp://") || text.startsWith("magnet:?"))) {
+            return;
+        }
+        // Never add a URL that is already in the list (a copy from Copper itself
+        // is the common case).
+        const QVector<DownloadItem> existing = DownloadManager::instance().getDownloads();
+        for (const DownloadItem& item : existing) {
+            if (item.url.compare(text, Qt::CaseInsensitive) == 0) return;
+        }
+        int id = -1;
+        if (text.startsWith("magnet:?")) {
+            id = DownloadManager::instance().addDownload(text, "", "Torrent");
+        } else if (UrlDetector::isYtDlpUrl(text) || UrlDetector::isPlaylistUrl(text)) {
+            id = DownloadManager::instance().addDownload(text, "", "YtDlp");
+        } else {
+            id = DownloadManager::instance().addDownload(text, "", "HTTP");
+        }
+        if (id >= 0) {
+            statusBarWidget->showMessage(tr("Clipboard download added"), 5000);
+            if (trayIcon && trayIcon->isVisible() && !isVisible()) {
+                trayIcon->showMessage(tr("Copper Download Manager"),
+                                      tr("Added from clipboard: %1").arg(text.left(80)),
+                                      QSystemTrayIcon::Information, 4000);
+            }
+        }
+    });
+    clipboardTimer->start();
 
     refreshTable();
 
@@ -234,6 +309,24 @@ void MainWindow::setupUI() {
 
     // Draw a live progress bar in the Progress column (IDM-style) for every row.
     table->setItemDelegateForColumn(3, new DownloadItemDelegate(table));
+
+    // Search / filter bar. Typing narrows the table by file name, URL or type;
+    // Del clears it. It sits above the table so the existing sidebar status
+    // filters keep working independently.
+    QWidget* searchBar = new QWidget(rightWidget);
+    QHBoxLayout* searchLayout = new QHBoxLayout(searchBar);
+    searchLayout->setContentsMargins(10, 8, 10, 4);
+    searchLayout->setSpacing(8);
+    QLabel* searchIcon = new QLabel(searchBar);
+    searchIcon->setPixmap(QIcon(":/icons/CurrentDownload.png").pixmap(16, 16));
+    searchLayout->addWidget(searchIcon);
+    searchEdit = new QLineEdit(searchBar);
+    searchEdit->setClearButtonEnabled(true);
+    searchEdit->setPlaceholderText(tr("Search downloads by name, URL or type..."));
+    searchEdit->setAccessibleName(tr("Search downloads"));
+    connect(searchEdit, &QLineEdit::textChanged, this, [this]() { refreshTable(); });
+    searchLayout->addWidget(searchEdit, 1);
+    rightLayout->addWidget(searchBar);
 
     rightLayout->addWidget(table);
     splitter->addWidget(rightWidget);
@@ -812,6 +905,16 @@ void MainWindow::onDownloadProgress(int id, qint64 downloaded, qint64 total) {
 
 void MainWindow::onDownloadFinished(int id) {
     downloadSpeeds.remove(id);
+    DownloadItem item = DownloadManager::instance().getDownload(id);
+    // Notify once per top-level download/folder, never for every child of a
+    // playlist (that would produce dozens of balloons for one job).
+    if (item.parentId < 0 &&
+        DatabaseManager::instance().getSetting("notifyDownloadComplete", "true") == "true" &&
+        trayIcon && trayIcon->isVisible()) {
+        const QString name = item.fileName.isEmpty() ? item.url : item.fileName;
+        trayIcon->showMessage(tr("Download complete"), name.left(120),
+                              QSystemTrayIcon::Information, 5000);
+    }
     refreshTable();
 }
 
@@ -880,6 +983,17 @@ void MainWindow::refreshTable() {
 
     QVector<DownloadItem> allDownloads = DownloadManager::instance().getDownloads();
 
+    // Case-insensitive free-text filter across the fields a user actually
+    // recognises: file name, URL and download type. An empty query matches all.
+    const QString needle = searchEdit ? searchEdit->text().trimmed() : QString();
+    const auto matchesSearch = [&needle](const DownloadItem& item) {
+        if (needle.isEmpty()) return true;
+        return item.fileName.contains(needle, Qt::CaseInsensitive) ||
+               item.url.contains(needle, Qt::CaseInsensitive) ||
+               item.type.contains(needle, Qt::CaseInsensitive) ||
+               item.status.contains(needle, Qt::CaseInsensitive);
+    };
+
     QMap<int, DownloadItem> downloadMap;
     for (const DownloadItem& item : allDownloads) {
         downloadMap[item.id] = item;
@@ -902,6 +1016,7 @@ void MainWindow::refreshTable() {
 
         if (!show) continue;
         if (item.parentId != -1) continue;
+        if (!matchesSearch(item)) continue;
 
         bool isGroup = item.isFolder && !item.childIds.isEmpty();
 
@@ -1331,11 +1446,28 @@ bool splitPlaylistHook(const QString& rest, QString& url, QSet<int>& wanted) {
 } // namespace
 
 void MainWindow::onArgumentForwarded(const QString& arg) {
-    show();
-    raise();
-    activateWindow();
+    // Only an explicit "show" (second-instance launch / tray) or a
+    // copper://open handshake may steal focus. Download injections - whether
+    // they arrive over HTTP, the native-messaging pipe or copper:// - must stay
+    // in the background: the browser extension can add dozens of them and a
+    // focus-stealing window makes the app unusable. Users who want a reveal can
+    // opt in with Settings > Downloads > Show window when a download starts.
+    const bool explicitShow = (arg == "show");
+    const bool protocolOpen = (arg == "copper://open");
+    const bool revealOnDownload =
+        DatabaseManager::instance().getSetting("showWindowOnDownload", "false") == "true";
+    if (explicitShow || protocolOpen || revealOnDownload) {
+        show();
+        raise();
+        activateWindow();
+    }
 
-    if (arg == "show") {
+    if (explicitShow) {
+        refreshTable();
+        return;
+    }
+    if (protocolOpen) {
+        Logger::instance().info("copper://open received, showing main window");
         refreshTable();
         return;
     }

@@ -218,6 +218,25 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     windowLayout->addWidget(windowHint);
     downloadsLayout->addWidget(windowGroup);
 
+    QGroupBox* behaviourGroup = new QGroupBox(tr("Browser & System Integration"));
+    QVBoxLayout* behaviourLayout = new QVBoxLayout(behaviourGroup);
+    showWindowOnDownloadCheck = new QCheckBox(tr("Show the main window when a download starts"));
+    showWindowOnDownloadCheck->setChecked(DatabaseManager::instance().getSetting("showWindowOnDownload", "false") == "true");
+    behaviourLayout->addWidget(showWindowOnDownloadCheck);
+    notifyDownloadCompleteCheck = new QCheckBox(tr("Show a tray notification when a download completes"));
+    notifyDownloadCompleteCheck->setChecked(DatabaseManager::instance().getSetting("notifyDownloadComplete", "true") != "false");
+    behaviourLayout->addWidget(notifyDownloadCompleteCheck);
+    clipboardMonitorCheck = new QCheckBox(tr("Watch the clipboard for download links"));
+    clipboardMonitorCheck->setChecked(DatabaseManager::instance().getSetting("clipboardMonitor", "false") == "true");
+    behaviourLayout->addWidget(clipboardMonitorCheck);
+    QLabel* behaviourHint = new QLabel(
+        tr("Browser-injected downloads stay in the background by default. "
+        "The clipboard monitor adds a copied http(s), ftp or magnet link automatically."));
+    behaviourHint->setWordWrap(true);
+    behaviourHint->setStyleSheet("color: gray; font-size: 11px;");
+    behaviourLayout->addWidget(behaviourHint);
+    downloadsLayout->addWidget(behaviourGroup);
+
     QGroupBox* uaGroup = new QGroupBox(tr("User-Agent"));
     QVBoxLayout* uaLayout = new QVBoxLayout(uaGroup);
     QHBoxLayout* uaRow = new QHBoxLayout();
@@ -484,6 +503,22 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     handlerBoxLayout->addLayout(handlerBtnLayout);
     systemLayout->addWidget(handlerGroup);
 
+    QGroupBox* extensionGroup = new QGroupBox(tr("Browser Extensions"));
+    QVBoxLayout* extensionBoxLayout = new QVBoxLayout(extensionGroup);
+    QLabel* extensionHint = new QLabel(
+        tr("The app remembers whether you allowed each browser extension. "
+        "Reset that here if you want to be asked again."));
+    extensionHint->setWordWrap(true);
+    extensionBoxLayout->addWidget(extensionHint);
+    QPushButton* resetExtensionsBtn = new QPushButton(tr("Reset remembered browser permissions"));
+    connect(resetExtensionsBtn, &QPushButton::clicked, this, [this]() {
+        DatabaseManager::instance().saveSetting("extensionPermissions", "{}");
+        QMessageBox::information(this, tr("Browser Extensions"),
+            tr("The next download from a non-store extension will ask for permission again."));
+    });
+    extensionBoxLayout->addWidget(resetExtensionsBtn);
+    systemLayout->addWidget(extensionGroup);
+
     QGroupBox* startupGroup = new QGroupBox(tr("Startup"));
     QVBoxLayout* startupBoxLayout = new QVBoxLayout(startupGroup);
     QCheckBox* startupCheck = new QCheckBox(tr("Start with system"));
@@ -629,6 +664,9 @@ void SettingsDialog::onSave() {
     DatabaseManager::instance().saveSetting("ytDlpFragments", QString::number(ytDlpFragmentsSpin->value()));
     DatabaseManager::instance().saveSetting("maxRetries", QString::number(maxRetriesSpin->value()));
     DatabaseManager::instance().saveSetting("autoOpenDownloadInfo", autoOpenInfoCheck->isChecked() ? "true" : "false");
+    DatabaseManager::instance().saveSetting("showWindowOnDownload", showWindowOnDownloadCheck->isChecked() ? "true" : "false");
+    DatabaseManager::instance().saveSetting("notifyDownloadComplete", notifyDownloadCompleteCheck->isChecked() ? "true" : "false");
+    DatabaseManager::instance().saveSetting("clipboardMonitor", clipboardMonitorCheck->isChecked() ? "true" : "false");
 
     DownloadManager::instance().updateMaxConcurrent(maxConcurrentSpin->value());
     DatabaseManager::instance().saveSetting("seedTime", QString::number(seedTimeCombo->currentData().toInt()));

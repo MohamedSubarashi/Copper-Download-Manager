@@ -35,11 +35,28 @@ static QString windowsManifestDir() {
 }
 #endif
 
+// Every Chromium-family browser uses the same native-messaging manifest shape
+// (allowed_origins + a chrome-extension:// id), but each has its own manifest
+// directory and registry key. Registering all of them is what stops Brave,
+// Vivaldi and Opera from falling back to the self-registration prompt on every
+// fresh browser session.
+static const QStringList& chromiumFamilyBrowsers() {
+    static const QStringList browsers = {
+        QStringLiteral("chrome"),  QStringLiteral("edge"),   QStringLiteral("brave"),
+        QStringLiteral("vivaldi"), QStringLiteral("opera"),  QStringLiteral("opera-gx"),
+        QStringLiteral("chromium")};
+    return browsers;
+}
+
+static bool isChromiumFamily(const QString& browser) {
+    return chromiumFamilyBrowsers().contains(browser);
+}
+
 // The file installManifest() writes (and the registry points at) for a browser.
 // Empty means the browser is not supported on this platform.
 static QString manifestTargetPath(const QString& browser) {
 #if defined(PLATFORM_WINDOWS)
-    if (browser == "chrome" || browser == "edge" || browser == "firefox")
+    if (isChromiumFamily(browser) || browser == "firefox")
         return QDir(windowsManifestDir()).filePath(browser + "/" +
                                                    NativeMessaging::hostName() + ".json");
     return QString();
@@ -49,6 +66,16 @@ static QString manifestTargetPath(const QString& browser) {
         return QDir::homePath() + "/Library/Application Support/Google/Chrome/NativeMessagingHosts/" + name;
     if (browser == "edge")
         return QDir::homePath() + "/Library/Application Support/Microsoft Edge/NativeMessagingHosts/" + name;
+    if (browser == "brave")
+        return QDir::homePath() + "/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/" + name;
+    if (browser == "vivaldi")
+        return QDir::homePath() + "/Library/Application Support/Vivaldi/NativeMessagingHosts/" + name;
+    if (browser == "opera")
+        return QDir::homePath() + "/Library/Application Support/com.operasoftware.Opera/NativeMessagingHosts/" + name;
+    if (browser == "opera-gx")
+        return QDir::homePath() + "/Library/Application Support/com.operasoftware.OperaGX/NativeMessagingHosts/" + name;
+    if (browser == "chromium")
+        return QDir::homePath() + "/Library/Application Support/Chromium/NativeMessagingHosts/" + name;
     if (browser == "firefox")
         return QDir::homePath() + "/Library/Application Support/Mozilla/NativeMessagingHosts/" + name;
     return QString();
@@ -59,6 +86,16 @@ static QString manifestTargetPath(const QString& browser) {
         return dataDir + "/google-chrome/NativeMessagingHosts/" + name;
     if (browser == "edge")
         return dataDir + "/microsoft-edge/NativeMessagingHosts/" + name;
+    if (browser == "brave")
+        return dataDir + "/BraveSoftware/Brave-Browser/NativeMessagingHosts/" + name;
+    if (browser == "vivaldi")
+        return dataDir + "/vivaldi/NativeMessagingHosts/" + name;
+    if (browser == "opera")
+        return dataDir + "/opera/NativeMessagingHosts/" + name;
+    if (browser == "opera-gx")
+        return dataDir + "/opera-gx/NativeMessagingHosts/" + name;
+    if (browser == "chromium")
+        return dataDir + "/chromium/NativeMessagingHosts/" + name;
     if (browser == "firefox")
         return dataDir + "/mozilla/native-messaging-hosts/" + name;
     return QString();
@@ -100,6 +137,16 @@ QStringList registryHostKeys(const QString& browser) {
         keys << prefix + "Google\\Chrome\\NativeMessagingHosts\\" + name;
     } else if (browser == "edge") {
         keys << prefix + "Microsoft\\Edge\\NativeMessagingHosts\\" + name;
+    } else if (browser == "brave") {
+        keys << prefix + "BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\" + name;
+    } else if (browser == "vivaldi") {
+        keys << prefix + "Vivaldi\\NativeMessagingHosts\\" + name;
+    } else if (browser == "opera") {
+        keys << prefix + "Opera Software\\Opera Stable\\NativeMessagingHosts\\" + name;
+    } else if (browser == "opera-gx") {
+        keys << prefix + "Opera Software\\Opera GX Stable\\NativeMessagingHosts\\" + name;
+    } else if (browser == "chromium") {
+        keys << prefix + "Chromium\\NativeMessagingHosts\\" + name;
     } else if (browser == "firefox") {
         keys << prefix + "Mozilla\\NativeMessagingHosts\\" + name;
     }
@@ -157,24 +204,38 @@ QString NativeMessaging::edgeExtensionId() {
 QStringList NativeMessaging::manifestPaths() {
     QStringList paths;
 #ifdef PLATFORM_WINDOWS
-    paths << manifestTargetPath("chrome") << manifestTargetPath("edge")
-          << manifestTargetPath("firefox");
+    for (const QString& browser : chromiumFamilyBrowsers()) paths << manifestTargetPath(browser);
+    paths << manifestTargetPath("firefox");
 #elif defined(PLATFORM_MACOS)
     paths
         << QDir::homePath() + "/Library/Application Support/Google/Chrome/NativeMessagingHosts/" + hostName() + ".json"
         << QDir::homePath() + "/Library/Application Support/Microsoft Edge/NativeMessagingHosts/" + hostName() + ".json"
+        << QDir::homePath() + "/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/" + hostName() + ".json"
+        << QDir::homePath() + "/Library/Application Support/Vivaldi/NativeMessagingHosts/" + hostName() + ".json"
+        << QDir::homePath() + "/Library/Application Support/com.operasoftware.Opera/NativeMessagingHosts/" + hostName() + ".json"
+        << QDir::homePath() + "/Library/Application Support/com.operasoftware.OperaGX/NativeMessagingHosts/" + hostName() + ".json"
+        << QDir::homePath() + "/Library/Application Support/Chromium/NativeMessagingHosts/" + hostName() + ".json"
         << QDir::homePath() + "/Library/Application Support/Mozilla/NativeMessagingHosts/" + hostName() + ".json";
 #else
+    const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
     paths
-        << QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/google-chrome/NativeMessagingHosts/" + hostName() + ".json"
-        << QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/chromium/NativeMessagingHosts/" + hostName() + ".json"
-        << QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/microsoft-edge/NativeMessagingHosts/" + hostName() + ".json"
-        << QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/mozilla/native-messaging-hosts/" + hostName() + ".json";
+        << dataDir + "/google-chrome/NativeMessagingHosts/" + hostName() + ".json"
+        << dataDir + "/microsoft-edge/NativeMessagingHosts/" + hostName() + ".json"
+        << dataDir + "/BraveSoftware/Brave-Browser/NativeMessagingHosts/" + hostName() + ".json"
+        << dataDir + "/vivaldi/NativeMessagingHosts/" + hostName() + ".json"
+        << dataDir + "/opera/NativeMessagingHosts/" + hostName() + ".json"
+        << dataDir + "/opera-gx/NativeMessagingHosts/" + hostName() + ".json"
+        << dataDir + "/chromium/NativeMessagingHosts/" + hostName() + ".json"
+        << dataDir + "/mozilla/native-messaging-hosts/" + hostName() + ".json";
 #endif
     return paths;
 }
 
-QString NativeMessaging::installManifest(const QString& browser, const QStringList& extensionIds) {
+// Write one browser's manifest. Kept separate from installManifest() so a
+// Chromium-family registration can fan out to every Chromium fork without
+// recursing through the public entry point.
+static QString writeManifestForBrowser(const QString& browser,
+                                      const QStringList& extensionIds) {
     const QString target = manifestTargetPath(browser);
     if (target.isEmpty()) return QString();
 
@@ -220,19 +281,20 @@ QString NativeMessaging::installManifest(const QString& browser, const QStringLi
     }
 
     QJsonObject manifest;
-    manifest["name"] = hostName();
+    manifest["name"] = NativeMessaging::hostName();
     manifest["description"] = "Copper Download Manager native messaging host";
-    manifest["path"] = QDir::toNativeSeparators(QDir(QCoreApplication::applicationDirPath()).filePath(hostExecutableName()));
+    manifest["path"] = QDir::toNativeSeparators(QDir(QCoreApplication::applicationDirPath()).filePath(NativeMessaging::hostExecutableName()));
     manifest["type"] = "stdio";
 
     if (isFirefox) {
-        if (firefoxIds.isEmpty()) firefoxIds.append(firefoxExtensionId());
+        if (firefoxIds.isEmpty()) firefoxIds.append(NativeMessaging::firefoxExtensionId());
         QJsonArray exts;
         for (const QString& id : firefoxIds) exts.append(id);
         manifest["allowed_extensions"] = exts;
     } else {
         if (chromiumIds.isEmpty())
-            chromiumIds.append(browser == "edge" ? edgeExtensionId() : defaultChromeExtensionId());
+            chromiumIds.append(browser == "edge" ? NativeMessaging::edgeExtensionId()
+                                                 : NativeMessaging::defaultChromeExtensionId());
         QJsonArray origins;
         for (const QString& id : chromiumIds) origins.append("chrome-extension://" + id + "/");
         manifest["allowed_origins"] = origins;
@@ -260,8 +322,27 @@ QString NativeMessaging::installManifest(const QString& browser, const QStringLi
     }
 #endif
 
-    writeHostConfig();
+    NativeMessaging::writeHostConfig();
     return target;
+}
+
+QString NativeMessaging::installManifest(const QString& browser, const QStringList& extensionIds) {
+    // A Chromium-extension Origin cannot reveal which Chromium fork sent the
+    // request, so authorizing an id installs it for the whole Chromium family.
+    // That is deliberate: one registration (or one --register-native-extension
+    // call) then keeps Brave, Vivaldi, Opera, Chromium and Edge from falling
+    // back to the self-registration prompt in a different browser later.
+    if (isChromiumFamily(browser)) {
+        QString requested;
+        for (const QString& familyBrowser : chromiumFamilyBrowsers()) {
+            const QString written = writeManifestForBrowser(familyBrowser, extensionIds);
+            if (familyBrowser == browser) requested = written;
+        }
+        // Return the manifest for the browser that was actually named; the
+        // fan-out to the other forks is a side effect.
+        return requested;
+    }
+    return writeManifestForBrowser(browser, extensionIds);
 }
 
 bool NativeMessaging::writeHostConfig() {

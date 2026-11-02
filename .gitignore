@@ -28,14 +28,10 @@ installer/release/
 # Local release packaging output (Setup.exe, zip, deployed binaries)
 Release/
 
-# Duplicated release runtime folders (binaries shipped via installer/releases are kept)
-# otherwise the repo would balloon. Keep only releases/0.1.6 below.
-# (Old versions kept out)
-releases/0.1.0/
-releases/0.1.5/
-# releases/0.4.0/ is intentionally tracked (portable zip + installer +
-# SHA256SUMS + release notes); use `git add -f` for its *.zip/*.exe since
-# the blanket patterns below would otherwise skip them.
+# Duplicated release runtime folders (binaries are built by CI and shipped as
+# release assets, never committed to the repo). 1.0.0 ships a single setup exe
+# on GitHub; the tracked releases/ tree is gone.
+releases/
 
 # Installer intermediate / logs
 *.log
@@ -44,6 +40,9 @@ releases/0.1.5/
 
 # Python bytecode caches
 __pycache__/
+
+# Editor/agent scratch state
+.kilo/
 
 # Duplicated working copies of the repo (backup clones with their own .git)
 CopperBuild/

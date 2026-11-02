@@ -1,5 +1,5 @@
 #define MyAppName "Copper Download Manager"
-#define MyAppVersion "0.5.0"
+#define MyAppVersion "1.0.0"
 #define MyAppPublisher "Mohamed Subarashi"
 #define MyAppExeName "CopperDownloadManager.exe"
 
@@ -41,7 +41,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "release\0.5.0\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "release\1.0.0\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -53,10 +53,15 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 
 [Registry]
 ; The app writes the browser native-messaging host registration into HKCU at
-; runtime (Google\Chrome, Microsoft\Edge, Mozilla). Removing those keys on
+; runtime for the whole Chromium family plus Firefox. Removing those keys on
 ; uninstall keeps a later reinstall from inheriting a stale host entry.
 Root: HKCU; Subkey: "Software\Google\Chrome\NativeMessagingHosts\com.copper.dm"; ValueType: none; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Microsoft\Edge\NativeMessagingHosts\com.copper.dm"; ValueType: none; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.copper.dm"; ValueType: none; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Vivaldi\NativeMessagingHosts\com.copper.dm"; ValueType: none; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Opera Software\Opera Stable\NativeMessagingHosts\com.copper.dm"; ValueType: none; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Opera Software\Opera GX Stable\NativeMessagingHosts\com.copper.dm"; ValueType: none; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Chromium\NativeMessagingHosts\com.copper.dm"; ValueType: none; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Mozilla\NativeMessagingHosts\com.copper.dm"; ValueType: none; Flags: uninsdeletekey
 
 [UninstallDelete]

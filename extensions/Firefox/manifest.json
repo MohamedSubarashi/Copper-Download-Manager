@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_appName__",
-  "version": "0.1.4",
+  "version": "1.0.0",
   "description": "__MSG_appDescFirefox__",
   "default_locale": "en",
   "icons": {
@@ -39,6 +39,16 @@
     }
   },
   "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "copper-capture.js"
+      ],
+      "run_at": "document_start"
+    },
     {
       "matches": [
         "http://*/*",

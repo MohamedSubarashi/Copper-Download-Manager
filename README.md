@@ -7,7 +7,14 @@ A high-performance, cross-platform download manager written in C++17 with Qt6.
 - **Multi-chunk HTTP downloads** — Split files into multiple chunks for maximum speed
 - **Torrent & Magnet support** — Via aria2c integration
 - **YouTube/video downloads** — Via yt-dlp integration with format selection
-- **Browser extension** — Chrome, Firefox & Edge extensions to intercept downloads automatically ([get the extension](#browser-extensions))
+- **Browser extension** — Chrome, Edge, Brave, Vivaldi, Opera, Chromium & Firefox extensions that cancel the browser download immediately and hand it to Copper ([get the extension](#browser-extensions))
+- **Instant interception** — Link-click capture plus synchronous download cancellation, so Copper wins the race against the browser
+- **Quiet background capture** — Browser downloads stay in the background; the main window only appears when you ask for it
+- **Clipboard monitor** — Optionally add a copied http(s)/ftp/magnet link automatically
+- **Batch URL import** — Paste many links at once, one per line
+- **Search & filter** — Narrow the download list by name, URL, type or status
+- **Completion notifications** — Tray notification when a top-level download finishes
+
 - **Playlist support** — Download entire playlists with track numbering
 - **Speed limiter** — Set download/upload speed limits
 - **Resume & pause** — Pause and resume downloads at any time
@@ -24,7 +31,7 @@ A high-performance, cross-platform download manager written in C++17 with Qt6.
 
 ## Requirements
 
-- **Qt 6.5+** (validated on **Qt 6.11.2 MinGW 64-bit**) — LGPLv3
+- **Qt 6.5+** (validated on **Qt 6.12.0 MinGW 64-bit**) — LGPLv3
 - **CMake 3.16+** (validated on **4.4.3**)
 - **Ninja** build system
 - **C++17 compiler** — MinGW/GCC (validated on **GCC 13.1.0**, `x86_64-posix-seh`); also MSVC 2019+ / Clang 10+
@@ -34,7 +41,7 @@ A high-performance, cross-platform download manager written in C++17 with Qt6.
 
 | Qt version | Platform / toolchain | Validation |
 |------------|----------------------|------------|
-| 6.11.2 | Windows, MinGW 13.1 (local dev) | Full local validation: Release build, unit tests, 99-case integration suite |
+| 6.12.0 | Windows, MinGW 13.1 (local dev) | Full local validation: Release build, unit tests, integration suite |
 | 6.6.3 | Windows MinGW 13.1, Ubuntu, macOS (CI) | CI: build (Debug + Release), unit tests, CRT/startup smoke checks, packaging |
 | 6.5 – 6.10 | any supported toolchain | Expected to build (only Qt 6.5-era APIs are used); not part of the automated matrix |
 
@@ -64,11 +71,14 @@ cmake --build C:\Qt\Builds\CopperDownloadManager\rel
 > reports `FileVersion`/`ProductVersion` in Explorer and via
 > `GetFileVersionInfo`.
 
-The release build is automatically deployed to `installer/release/<version>/` (windeployqt) and the final package (Setup.exe + portable zip) is placed in `releases/<version>/`.
+The release build is automatically deployed to `installer/release/<version>/` by
+`windeployqt`, and the Inno Setup script packages that tree into a single
+`CopperDownloadManager-<version>-setup.exe`. No portable zip is produced: 1.0.0
+ships exactly one Windows setup exe locally and on GitHub.
 
 ## CI
 
-A GitHub Actions workflow (`.github/workflows/ci.yml`) builds the project in Debug and Release on Windows (Qt 6.6.3), smoke-checks that the produced executable is a GUI (non-console) application, and uploads a portable zip artifact. (CI uses the Qt version whose MinGW binaries link against the runner's preinstalled GCC; the local dev machine additionally uses Qt 6.12.0.)
+A GitHub Actions workflow (`.github/workflows/ci.yml`) builds the project in Debug and Release on Windows (Qt 6.6.3), smoke-checks that the produced executable is a GUI (non-console) application, validates the extension sources, and uploads only the Windows setup exe artifact. (CI uses the Qt version whose MinGW binaries link against the runner's preinstalled GCC; the local dev machine additionally uses Qt 6.12.0.)
 
 ## Testing
 
@@ -116,9 +126,9 @@ Copper Download Manager/
 ├── app.rc                  # Windows resource file (icon, version)
 ├── THIRD-PARTY-NOTICES.txt # License notices for all dependencies
 ├── Assets/                 # Application icons
-├── extensions/             # Browser extensions (Chrome & Firefox)
-│   ├── Copper Download Manager Chrome/
-│   └── Copper Download Manager Firefox/
+├── extensions/             # Browser extensions (Chrome-family & Firefox sources)
+│   ├── Chrome/
+│   └── Firefox/
 ├── include/
 │   ├── core/               # Core download engine headers
 │   ├── db/                 # Database manager header
@@ -145,16 +155,18 @@ Copper Download Manager app. It is free and open source.
 | Firefox | [addons.mozilla.org](https://addons.mozilla.org/en-US/firefox/addon/copper-download-manager) | **Available** |
 | Chrome | [chromewebstore.google.com](https://chromewebstore.google.com/detail/copper-download-manager/cmokehdedogdpbfhlamopeifgogaihni) | **Available** |
 | Edge | [microsoftedge.microsoft.com](https://microsoftedge.microsoft.com/addons/detail/copper-download-manager/fnganciafgifhelimkoeiiapdcdmnnlb) | **Available** |
-| Opera | — | Coming soon |
+| Brave | — | Sideload the Chrome build (Chromium-based) |
+| Vivaldi | — | Sideload the Chrome build (Chromium-based) |
+| Opera / Opera GX | — | Sideload the Chrome build (Chromium-based) |
+| Chromium | — | Sideload the Chrome build |
 
-> Opera is Chromium-based, so the Chrome build can be sideloaded in developer
-> mode until its store listing goes live.
-
-On startup the app writes each browser's native-messaging host manifest
-(`com.copper.dm`) with the extension IDs above and the current host path, so
-the extension can read the install-scoped local-API token without any manual
-setup. Registration merges with any ID already present, so a sideloaded/dev
-build keeps working alongside the store builds.
+On startup the app writes a native-messaging host manifest (`com.copper.dm`) for
+**every** Chromium-family browser (Chrome, Edge, Brave, Vivaldi, Opera, Opera GX,
+Chromium) plus Firefox, with the extension IDs above and the current host path.
+That is what lets the extension read the install-scoped local-API token without
+manual setup and stops the "authorize this extension" prompt from reappearing in
+a different Chromium browser. Registration merges with any ID already present,
+so a sideloaded/dev build keeps working alongside the store builds.
 
 ## Author
 

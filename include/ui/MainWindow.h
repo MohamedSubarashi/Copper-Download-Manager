@@ -10,6 +10,7 @@ class QListWidget;
 class QToolBar;
 class QStatusBar;
 class QLabel;
+class QLineEdit;
 class QTimer;
 class QSystemTrayIcon;
 class QMenu;
@@ -95,7 +96,10 @@ private:
     QLabel* totalSpeedLabel;
     QLabel* activeCountLabel;
     QLabel* queuedCountLabel;
+    QLineEdit* searchEdit;
     QTimer* refreshTimer;
+    QTimer* clipboardTimer;
+    QString lastClipboardText;
     QSystemTrayIcon* trayIcon;
     QMenu* trayMenu;
     // Set when the user explicitly chooses Quit (from the tray menu) so that the

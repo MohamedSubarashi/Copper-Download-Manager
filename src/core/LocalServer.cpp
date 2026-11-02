@@ -412,12 +412,15 @@ void LocalServer::handleRequest(QTcpSocket* socket, const QString& method, const
         response["success"] = true;
         response["id"] = id;
         response["message"] = "Download added successfully";
-        // Respond BEFORE emitting: argumentForwarded can open modal UI (a
-        // nested event loop) during which this client may disconnect and its
+        // Respond BEFORE emitting any UI-related signal: a slot may open a modal
+        // nested event loop, during which this client could disconnect and its
         // socket be destroyed - the reply must be written while it is alive.
         sendJsonResponse(guard, 200, response, allowedOrigin);
 
-        emit argumentForwarded("show");
+        // Do NOT raise the main window here. The browser extension injects
+        // downloads constantly and stealing focus on every one of them is both
+        // disruptive and makes batch captures unusable. The UI refreshes through
+        // downloadAdded; the user can opt into a reveal via Settings.
         emit downloadRequested(url, filename, savePath);
         return;
     }

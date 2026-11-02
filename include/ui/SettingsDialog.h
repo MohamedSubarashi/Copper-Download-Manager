@@ -50,6 +50,9 @@ private:
     QSpinBox* ytDlpFragmentsSpin;
     QSpinBox* maxRetriesSpin;
     QCheckBox* autoOpenInfoCheck;
+    QCheckBox* showWindowOnDownloadCheck;
+    QCheckBox* notifyDownloadCompleteCheck;
+    QCheckBox* clipboardMonitorCheck;
     QComboBox* seedTimeCombo;
     QComboBox* languageCombo;
     QLineEdit* userAgentEdit;

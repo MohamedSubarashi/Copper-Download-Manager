@@ -15,6 +15,8 @@
 #include <QApplication>
 #include <QStandardPaths>
 #include <QMessageBox>
+#include <QInputDialog>
+#include <QRegularExpression>
 
 AddUrlDialog::AddUrlDialog(QWidget* parent) : QDialog(parent) {
     setWindowTitle(tr("Add URL"));
@@ -83,6 +85,40 @@ AddUrlDialog::AddUrlDialog(QWidget* parent) : QDialog(parent) {
     QPushButton* pasteBtn = new QPushButton(tr("Paste"));
     pasteBtn->setFixedWidth(80);
     connect(pasteBtn, &QPushButton::clicked, this, &AddUrlDialog::onPaste);
+    QPushButton* batchBtn = new QPushButton(tr("Batch..."));
+    batchBtn->setToolTip(tr("Add several links at once (one per line)"));
+    connect(batchBtn, &QPushButton::clicked, this, [this]() {
+        bool ok = false;
+        const QString input = QInputDialog::getMultiLineText(
+            this, tr("Add Multiple URLs"),
+            tr("Paste one URL per line (http, https, ftp or magnet):"),
+            QString(), &ok);
+        if (!ok) return;
+        const QString path = pathEdit->text().trimmed();
+        int added = 0;
+        int skipped = 0;
+        const QStringList lines = input.split(QRegularExpression("[\\r\\n]+"), Qt::SkipEmptyParts);
+        for (const QString& raw : lines) {
+            const QString url = raw.trimmed();
+            if (url.isEmpty()) continue;
+            if (!(url.startsWith("http://") || url.startsWith("https://") ||
+                  url.startsWith("ftp://") || url.startsWith("magnet:?"))) {
+                skipped++;
+                continue;
+            }
+            int id = -1;
+            if (url.startsWith("magnet:?")) {
+                id = DownloadManager::instance().addDownload(url, path, "Torrent");
+            } else if (UrlDetector::isYtDlpUrl(url) || UrlDetector::isPlaylistUrl(url)) {
+                id = DownloadManager::instance().addDownload(url, path, "YtDlp", 16, "mp4");
+            } else {
+                id = DownloadManager::instance().addDownload(url, path, "HTTP");
+            }
+            if (id >= 0) added++; else skipped++;
+        }
+        statusLabel->setText(tr("Added %1 link(s), skipped %2").arg(added).arg(skipped));
+        if (added > 0) accept();
+    });
     addBtn = new QPushButton(tr("Add Download"));
     addBtn->setEnabled(false);
     addBtn->setDefault(true);
@@ -91,6 +127,7 @@ AddUrlDialog::AddUrlDialog(QWidget* parent) : QDialog(parent) {
     cancelBtn->setFixedWidth(80);
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     btnLayout->addWidget(pasteBtn);
+    btnLayout->addWidget(batchBtn);
     btnLayout->addStretch();
     btnLayout->addWidget(addBtn);
     btnLayout->addWidget(cancelBtn);

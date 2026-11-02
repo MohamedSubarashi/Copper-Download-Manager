@@ -224,6 +224,29 @@ def validate_dir(label, path, is_firefox):
             ok &= check(os.path.isfile(os.path.join(path, ref)),
                         f"referenced JS exists: {ref}")
 
+    # 1.0.0: instant click interception. The capture script must ship, load at
+    # document_start (before the browser can act on the click) and be listed in
+    # the manifest; links with a download/archive/installer extension are taken
+    # over in the capture phase.
+    capture_rel = "copper-capture.js"
+    ok &= check(capture_rel in js_refs, "instant click capture script is registered")
+    ok &= check(os.path.isfile(os.path.join(path, capture_rel)),
+                f"instant click capture script exists: {capture_rel}")
+    start_scripts = [cs for cs in (manifest.get("content_scripts") or [])
+                     if cs.get("run_at") == "document_start"
+                     and capture_rel in (cs.get("js") or [])]
+    ok &= check(bool(start_scripts),
+                "click capture runs at document_start (before browser download)")
+    if os.path.isfile(os.path.join(path, capture_rel)):
+        with open(os.path.join(path, capture_rel), encoding="utf-8") as f:
+            cap_src = f.read()
+        ok &= check("addEventListener(\"click\"" in cap_src and "true" in cap_src,
+                    "click capture listener uses the capture phase")
+        ok &= check("preventDefault" in cap_src,
+                    "click capture calls preventDefault before the browser handles the link")
+        ok &= check("interceptClick" in cap_src,
+                    "click capture hands the URL to the background (interceptClick)")
+
     # The background must fetch the API token from the app through the native
     # messaging host (action "getToken"), then route downloads through the
     # app's local HTTP API (http://127.0.0.1:24680/api/download) - the normal
@@ -256,6 +279,13 @@ def validate_dir(label, path, is_firefox):
                     "background opens the bundled status/install page")
         ok &= check("downloads.onCreated" in bg_src,
                     "background auto-captures normal browser downloads (downloads.onCreated)")
+        # Fast path: cancel must happen synchronously in the listener, before the
+        # async storage/filter/token work that used to let the browser win.
+        on_created = bg_src[bg_src.index("downloads.onCreated"):]
+        cancel_at = on_created.find("downloads.cancel")
+        async_at = on_created.find("getCurrentEnabledState")
+        ok &= check(cancel_at != -1 and (async_at == -1 or cancel_at < async_at),
+                    "background cancels the browser download before any async work")
         ok &= check("api/download-filters" in bg_src,
                     "background reads the include/exclude filter config via /api/download-filters")
         ok &= check("chrome.downloads.cancel" in bg_src or "downloads.cancel" in bg_src,
